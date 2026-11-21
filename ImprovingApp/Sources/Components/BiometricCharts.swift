@@ -64,7 +64,7 @@ struct HealthMetricBaselineChart: View {
                             let pt = CGPoint(x: CGFloat(idx) * stepX, y: yFor(v))
                             if idx == 0 { linePath.move(to: pt) } else { linePath.addLine(to: pt) }
                         }
-                        ctx.stroke(linePath, with: .color(accentColor), style: StrokeStyle(lineWidth: 2.3, lineCap: .round, join: .round))
+                        ctx.stroke(linePath, with: .color(accentColor), style: StrokeStyle(lineWidth: 2.3, lineCap: .round, lineJoin: .round))
 
                         // Nodes
                         for (idx, v) in safePoints.enumerated() {
