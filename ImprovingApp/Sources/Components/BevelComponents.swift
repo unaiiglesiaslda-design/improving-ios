@@ -252,9 +252,9 @@ struct FloatingPillBottomBar: View {
     let visibleTabs: Set<MainTab>
     let isQuickMenuOpen: Bool
     let isCollapsed: Bool
-    let onSelectTab: (MainTab) -> Unit
-    let onToggleQuickMenu: () -> Unit
-    let onExpand: () -> Unit
+    let onSelectTab: (MainTab) -> Void
+    let onToggleQuickMenu: () -> Void
+    let onExpand: () -> Void
 
     private var effectiveCollapsed: Bool { isCollapsed && !isQuickMenuOpen }
 
