@@ -1,0 +1,9 @@
+.DS_Store
+*.xcuserdatad
+DerivedData/
+.build/
+.swiftpm/
+build/
+Improving.xcodeproj/
+*.ipa
+*.dSYM.zip
