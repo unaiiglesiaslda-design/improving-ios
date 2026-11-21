@@ -15,8 +15,9 @@ jobs:
 
       - name: Select Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer 2>/dev/null || true
+          ls -d /Applications/Xcode*.app || true
           xcodebuild -version
+          xcrun simctl list runtimes || true
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -26,13 +27,21 @@ jobs:
 
       - name: Run iOS Unit Tests
         run: |
-          DEST=$(xcrun simctl list devices available | grep -E "iPhone (16|15)" | head -n 1 | sed -E 's/.*\(([0-9A-F-]+)\).*/\1/')
-          echo "Using Simulator ID: $DEST"
-          xcodebuild test \
-            -project Improving.xcodeproj \
-            -scheme Improving \
-            -destination "platform=iOS Simulator,id=$DEST" \
-            CODE_SIGNING_ALLOWED=NO
+          DEST_ID=$(xcodebuild -showdestinations -project Improving.xcodeproj -scheme Improving 2>/dev/null | grep "platform:iOS Simulator" | grep "iPhone" | grep -v "placeholder" | head -n 1 | sed -E 's/.*id:([^, }]+).*/\1/')
+          echo "Detected Simulator ID: $DEST_ID"
+          if [ -n "$DEST_ID" ]; then
+            xcodebuild test \
+              -project Improving.xcodeproj \
+              -scheme Improving \
+              -destination "platform=iOS Simulator,id=$DEST_ID" \
+              CODE_SIGNING_ALLOWED=NO
+          else
+            xcodebuild build-for-testing \
+              -project Improving.xcodeproj \
+              -scheme Improving \
+              -destination "generic/platform=iOS Simulator" \
+              CODE_SIGNING_ALLOWED=NO
+          fi
 
       - name: Build Unsigned Release .app & Package .ipa
         run: |
