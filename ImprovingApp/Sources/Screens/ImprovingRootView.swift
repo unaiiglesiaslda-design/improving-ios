@@ -88,7 +88,7 @@ struct ImprovingRootView: View {
                         .zIndex(15)
                     }
 
-                    // Persistent Bottom Bar (always visible EXCEPT when talking to AI in AskBevelScreen)
+                    // Persistent Liquid-Glass Bottom Bar (always visible EXCEPT when talking to AI in AskBevelScreen)
                     if currentOverlay != .askBevel {
                         FloatingPillBottomBar(
                             selectedTab: selectedTab,
@@ -102,6 +102,10 @@ struct ImprovingRootView: View {
                             onToggleQuickMenu: {
                                 isBottomBarCollapsed = false
                                 withAnimation { quickMenuOpen.toggle() }
+                            },
+                            onOpenAskBevel: {
+                                store.startNewCleanChat()
+                                push(.askBevel)
                             },
                             onExpand: {
                                 isBottomBarCollapsed = false
@@ -153,12 +157,15 @@ struct ImprovingRootView: View {
                 store: store,
                 onBack: { pop() },
                 onOpenSleepNeed: { push(.sleepNeedDetail) },
-                onOpenTrend: { _ in push(.healthMetricDetail) }
+                onOpenTrend: { _ in
+                    store.selectedHealthMetric = .sleepDuration
+                    push(.healthMetricDetail)
+                }
             )
         case .sleepNeedDetail:
             SleepNeedDetailScreen(store: store, onBack: { pop() })
         case .estres:
-            EstresScreen(store: store, onBack: { pop() })
+            EstresScreen(store: store, onBack: { pop() }, onOpenTrend: { _ in push(.healthMetricDetail) })
         case .energia:
             EnergiaScreen(store: store, onBack: { pop() })
         case .nutricion:
@@ -204,7 +211,7 @@ struct ImprovingRootView: View {
     }
 }
 
-// MARK: - Launch Motion Graphic Overlay (1:1 Android App Icon & Startup Animation)
+// MARK: - Launch Motion Graphic Overlay
 
 private struct LaunchMotionGraphicOverlay: View {
     let onFinished: () -> Void
@@ -222,7 +229,7 @@ private struct LaunchMotionGraphicOverlay: View {
                     Circle()
                         .trim(from: 0, to: 0.72 * sweepProgress)
                         .stroke(
-                            LinearGradient(colors: [BevelColors.emeraldStart, BevelColors.emeraldEnd], startPoint: .topLeading, endPoint: .bottomTrailing),
+                            LinearGradient(colors: [BevelColors.limeStart, BevelColors.greenPrimary], startPoint: .topLeading, endPoint: .bottomTrailing),
                             style: StrokeStyle(lineWidth: 10, lineCap: .round)
                         )
                         .rotationEffect(.degrees(-90))
@@ -239,14 +246,14 @@ private struct LaunchMotionGraphicOverlay: View {
         }
         .opacity(opacity)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.75)) {
+            withAnimation(.easeOut(duration: 0.72)) {
                 sweepProgress = 1.0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
-                withAnimation(.easeIn(duration: 0.28)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.90) {
+                withAnimation(.easeIn(duration: 0.25)) {
                     opacity = 0.0
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
                     onFinished()
                 }
             }

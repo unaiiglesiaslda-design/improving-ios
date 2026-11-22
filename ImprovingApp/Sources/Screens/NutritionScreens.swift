@@ -6,29 +6,23 @@ struct NutricionScreen: View {
     let onOpenNutrient: (String) -> Void
 
     var body: some View {
-        let meals = store.mealsByDate[store.selectedDateIso] ?? []
-        let totalKcal = meals.reduce(0) { $0 + $1.kcal }
-        let totalProt = meals.reduce(0) { $0 + $1.proteinG }
-        let totalCarbs = meals.reduce(0) { $0 + $1.carbsG }
-        let totalFat = meals.reduce(0) { $0 + $1.fatG }
+        let meals = store.mealsToday
         let glasses = store.hydrationGlassesByDate[store.selectedDateIso] ?? 8
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
-        let avgQuality = meals.isEmpty ? 86 : meals.reduce(0) { $0 + $1.qualityScore } / meals.count
 
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                DetailSheetHeader(title: "Nutrición", onBack: onBack)
+                DetailSheetHeader(title: "Nutrición", onBack: onBack, rightSystemIcon: "gearshape.fill")
 
-                // 1. Hero Nutrition Quality & Macros Card
-                BevelCard {
+                BevelCard(cornerRadius: 22) {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("ENERGÍA INGERIDA HOY")
                                     .font(ImprovingFont.microLabel(11))
-                                    .foregroundColor(BevelColors.textSecondary)
+                                    .foregroundColor(BevelColors.textMuted)
                                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text("\(totalKcal)")
+                                    Text("\(store.totalCaloriesToday)")
                                         .font(ImprovingFont.displayLarge(32))
                                         .monospacedDigit()
                                         .foregroundColor(BevelColors.textPrimary)
@@ -38,28 +32,28 @@ struct NutricionScreen: View {
                                 }
                             }
                             Spacer()
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("Calidad \(avgQuality)")
-                                    .font(ImprovingFont.cardTitle(14))
-                                    .foregroundColor(BevelColors.emeraldEnd)
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("Calidad \(store.foodQualityScore)")
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .foregroundColor(BevelColors.greenPrimary)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 6)
                                     .background(Capsule().fill(BevelColors.greenSoftBg))
-                                Text("CGM 94 mg/dL")
+                                Text("CGM \(store.cgmMgDl) mg/dL")
                                     .font(ImprovingFont.caption(11.5))
                                     .foregroundColor(BevelColors.textSecondary)
                             }
                         }
 
                         HStack(spacing: 10) {
-                            Button { onOpenNutrient("Proteína") } label: {
-                                macroPill("Proteína", "\(totalProt)g", target: "\(norms.proteinGoalG)g", color: BevelColors.emeraldEnd)
+                            Button { onOpenNutrient("Calcio") } label: {
+                                macroPill("Proteína", "\(store.totalProteinToday)g", target: "\(norms.proteinGoalG)g", color: BevelColors.strengthPink)
                             }
-                            Button { onOpenNutrient("Carbohidratos") } label: {
-                                macroPill("Carbos", "\(totalCarbs)g", target: "210g", color: BevelColors.skyBlue)
+                            Button { onOpenNutrient("Cafeína") } label: {
+                                macroPill("Carbos", "\(store.totalCarbsToday)g", target: "210g", color: BevelColors.amberStart)
                             }
-                            Button { onOpenNutrient("Grasas") } label: {
-                                macroPill("Grasas", "\(totalFat)g", target: "70g", color: BevelColors.amberStart)
+                            Button { onOpenNutrient("Hidratación") } label: {
+                                macroPill("Grasas", "\(store.totalFatToday)g", target: "70g", color: BevelColors.skyBlue)
                             }
                         }
 
@@ -73,7 +67,7 @@ struct NutricionScreen: View {
                                     .foregroundColor(.white)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 11)
-                                    .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.emeraldEnd))
+                                    .background(Capsule().fill(BevelColors.emeraldEnd))
                             }
 
                             Button { store.addHydrationGlass() } label: {
@@ -83,7 +77,7 @@ struct NutricionScreen: View {
                                     .foregroundColor(BevelColors.skyBlue)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 11)
-                                    .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.skySoftBg))
+                                    .background(Capsule().fill(BevelColors.skySoftBg))
                             }
                         }
                     }
@@ -91,36 +85,33 @@ struct NutricionScreen: View {
                 }
                 .padding(.horizontal, 16)
 
-                // 2. Registro de comidas de hoy
-                Text("Comidas de hoy (\(meals.count))")
+                Text("Entradas de hoy (\(meals.count))")
                     .font(ImprovingFont.sectionTitle(18))
                     .foregroundColor(BevelColors.textPrimary)
                     .padding(.horizontal, 16)
 
                 ForEach(Array(meals.enumerated()), id: \.element.id) { idx, meal in
-                    Button { onOpenNutrient("Proteína") } label: {
+                    Button { onOpenNutrient("Calcio") } label: {
                         BevelCard(cornerRadius: 18) {
                             HStack(spacing: 12) {
-                                Text(["🥣", "🐟", "🥗", "🥑"][idx % 4])
+                                Text(["🥣", "🐟", "🥗", "🍪"][idx % 4])
                                     .font(.system(size: 20))
                                     .frame(width: 44, height: 44)
-                                    .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.greenSoftBg))
-                                VStack(alignment: .leading, spacing: 2) {
+                                    .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(meal.timeLabel).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textMuted)
                                     Text(meal.title)
                                         .font(ImprovingFont.cardTitle(14.5))
                                         .foregroundColor(BevelColors.textPrimary)
                                         .lineLimit(1)
-                                    Text("\(meal.timeLabel) · \(meal.kcal) kcal · \(meal.proteinG)g P · \(meal.carbsG)g C · \(meal.fatG)g G")
+                                    Text("🍎 \(meal.kcal) kcal   🧪 \(meal.fatG)   🌾 \(meal.carbsG)   🍗 \(meal.proteinG)")
                                         .font(ImprovingFont.caption(11.5))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
                                 Spacer()
-                                Text("\(meal.qualityScore)")
-                                    .font(ImprovingFont.caption(12))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(BevelColors.emeraldEnd)
-                                    .frame(width: 32, height: 32)
-                                    .background(Circle().fill(BevelColors.greenSoftBg))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(BevelColors.textMuted)
                             }
                             .padding(14)
                         }
@@ -128,7 +119,7 @@ struct NutricionScreen: View {
                     .padding(.horizontal, 16)
                 }
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
     }
@@ -141,93 +132,213 @@ struct NutricionScreen: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.surfaceOverlay))
+        .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.cardSubtle))
     }
 }
+
+// MARK: - Exact Nutrient Detail Sheet (Literal Match to Screenshots 41, 43, 44, 45)
 
 struct NutrientDetailScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
 
+    @State private var extraAmount: Double = 0
+
     var body: some View {
-        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
-        let title = store.selectedNutrientKey.isEmpty ? "Proteína" : store.selectedNutrientKey
-        let pts: [Double] = [118, 124, 132, 128, 140, 136, 126]
+        let key = store.selectedNutrientKey.isEmpty ? "Cafeína" : store.selectedNutrientKey
+        let isCaffeine = key.localizedCaseInsensitiveContains("cafe")
+        let isHydration = key.localizedCaseInsensitiveContains("hidra")
+        let isAlcohol = key.localizedCaseInsensitiveContains("alco")
+
+        let quickIncrement: Double = isHydration ? 250.0 : (isAlcohol ? 1.0 : (isCaffeine ? 50.0 : 100.0))
+        let quickButtonTitle: String = isHydration
+            ? "Añadir 250,0 ml"
+            : (isAlcohol ? "+ Añadir 1 bebidas" : (isCaffeine ? "+ Añadir 50mg" : "+ Añadir 100mg"))
+
+        let baseVal: Double = isHydration
+            ? Double(store.hydrationGlassesByDate[store.selectedDateIso] ?? 8) * 250.0
+            : (isCaffeine ? 3.1 : (isAlcohol ? 0.0 : 464.9))
+        let totalVal = baseVal + extraAmount
 
         ZStack(alignment: .bottom) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    DetailSheetHeader(title: title, onBack: onBack)
+                    DetailSheetHeader(title: key, onBack: onBack, rightSystemIcon: "gearshape.fill")
 
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .bottom) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("126 g")
-                                        .font(ImprovingFont.displayLarge(31))
-                                        .monospacedDigit()
-                                        .foregroundColor(BevelColors.textPrimary)
-                                    Text(store.dateLabel)
-                                        .font(ImprovingFont.caption(12))
+                    // Cafeína Semi-Circle Arc Gauge Card (Screenshot 43)
+                    if isCaffeine {
+                        BevelCard(cornerRadius: 22) {
+                            VStack(spacing: 6) {
+                                HStack {
+                                    Text(String(format: "%.1f/400mg", locale: Locale(identifier: "es_ES"), totalVal))
+                                        .font(ImprovingFont.caption(13))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                    Spacer()
+                                    Text("\(min(Int((totalVal / 400.0 * 100).rounded()), 100))%")
+                                        .font(ImprovingFont.caption(13))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("Objetivo óptimo")
-                                        .font(ImprovingFont.caption(12))
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(BevelColors.emeraldEnd)
-                                    Text("\(norms.proteinGoalG - 15) – \(norms.proteinGoalG + 15) g")
-                                        .font(ImprovingFont.caption(12))
-                                        .foregroundColor(BevelColors.textSecondary)
+
+                                ZStack {
+                                    Canvas { ctx, sz in
+                                        let center = CGPoint(x: sz.width / 2, y: sz.height * 0.78)
+                                        let r = min(sz.width * 0.36, sz.height * 0.72)
+                                        var track = Path()
+                                        track.addArc(center: center, radius: r, startAngle: .degrees(165), endAngle: .degrees(375), clockwise: false)
+                                        ctx.stroke(track, with: .color(Color.white.opacity(0.08)), style: StrokeStyle(lineWidth: 14, lineCap: .round))
+
+                                        let frac = min(max(totalVal / 400.0, 0.02), 1.0)
+                                        let endDeg = 165.0 + 210.0 * frac
+                                        var prog = Path()
+                                        prog.addArc(center: center, radius: r, startAngle: .degrees(165), endAngle: .degrees(endDeg), clockwise: false)
+                                        ctx.stroke(prog, with: .color(BevelColors.limeStart), style: StrokeStyle(lineWidth: 14, lineCap: .round))
+
+                                        let rad = endDeg * .pi / 180.0
+                                        let pt = CGPoint(x: center.x + r * cos(rad), y: center.y + r * sin(rad))
+                                        ctx.fill(Path(ellipseIn: CGRect(x: pt.x - 8, y: pt.y - 8, width: 16, height: 16)), with: .color(.white))
+                                        ctx.stroke(Path(ellipseIn: CGRect(x: pt.x - 8, y: pt.y - 8, width: 16, height: 16)), with: .color(BevelColors.greenPrimary), lineWidth: 3)
+                                    }
+                                    .frame(height: 150)
+
+                                    VStack(spacing: 2) {
+                                        Text(String(format: "%.1fmg", locale: Locale(identifier: "es_ES"), max(400.0 - totalVal, 0)))
+                                            .font(ImprovingFont.displayLarge(28))
+                                            .monospacedDigit()
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("faltan")
+                                            .font(ImprovingFont.caption(13))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                    }
+                                    .offset(y: 12)
                                 }
+
+                                HStack {
+                                    Text("0").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
+                                    Spacer()
+                                    Text("400").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
+                                }
+                                .padding(.horizontal, 44)
                             }
-
-                            HealthMetricBaselineChart(
-                                points: pts,
-                                dates: ["15 nov", "16 nov", "17 nov", "18 nov", "19 nov", "20 nov", "Hoy"],
-                                bandLow: Double(norms.proteinGoalG - 15),
-                                bandHigh: Double(norms.proteinGoalG + 15),
-                                averageText: "Prom. 129 g",
-                                accentColor: BevelColors.emeraldEnd,
-                                valueFormatter: { v in "\(Int(v)) g" }
-                            )
+                            .padding(16)
                         }
-                        .padding(16)
+                        .padding(.horizontal, 16)
+                    }
+
+                    // Entradas de hoy Header (Screenshots 41, 43, 44, 45)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Entradas de hoy")
+                                .font(ImprovingFont.sectionTitle(17))
+                                .foregroundColor(BevelColors.textPrimary)
+                            Spacer()
+                            if isHydration {
+                                HStack(spacing: 8) {
+                                    Text(String(format: "%.1f/2500 ml", locale: Locale(identifier: "es_ES"), totalVal))
+                                        .font(ImprovingFont.caption(13.5))
+                                        .monospacedDigit()
+                                        .foregroundColor(BevelColors.textSecondary)
+                                    ZStack {
+                                        Circle().stroke(Color.white.opacity(0.1), lineWidth: 3).frame(width: 20, height: 20)
+                                        Circle()
+                                            .trim(from: 0, to: min(totalVal / 2500.0, 1.0))
+                                            .stroke(BevelColors.skyBlue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                            .rotationEffect(.degrees(-90))
+                                            .frame(width: 20, height: 20)
+                                    }
+                                }
+                            } else if isAlcohol {
+                                Text("\(Int(totalVal)) bebidas (\(Int(totalVal * 14))g)")
+                                    .font(ImprovingFont.caption(13.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            } else {
+                                Text(String(format: "%.1fmg", locale: Locale(identifier: "es_ES"), totalVal))
+                                    .font(ImprovingFont.caption(13.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        if !isHydration {
+                            Text("Detectado por nutrición y registro manual.")
+                                .font(ImprovingFont.caption(13))
+                                .foregroundColor(BevelColors.textSecondary)
+                        }
                     }
                     .padding(.horizontal, 16)
 
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("OBJETIVO DIARIO PERSONALIZADO")
-                                .font(ImprovingFont.microLabel(11))
-                                .foregroundColor(BevelColors.emeraldEnd)
-                            Text("Seguimiento directo vinculado a tu masa corporal (\(Int(store.userProfile.weightKg)) kg) y síntesis proteica post-esfuerzo.")
-                                .font(ImprovingFont.body(13.5))
-                                .foregroundColor(BevelColors.textPrimary)
+                    // Linked Food / Hydration Rows
+                    VStack(spacing: 10) {
+                        if isHydration {
+                            nutrientEntryRow(emoji: "💧", time: "08:59", title: "Hidratación", meta: nil, amount: "268,7 ml")
+                            nutrientEntryRow(emoji: "💧", time: "13:20", title: "Hidratación", meta: nil, amount: "500,0 ml")
+                        } else if isAlcohol {
+                            nutrientEntryRow(emoji: "🍪", time: "08:53", title: "Galletas de avena con chispas", meta: "🍎 134 kcal", amount: "+0 bebidas (0g)")
+                        } else if isCaffeine {
+                            nutrientEntryRow(emoji: "🍪", time: "08:53", title: "Galletas de avena con c...", meta: "🍎 134 kcal  🧪 5  🌾 21  🍗 2", amount: "+3,1mg")
+                        } else {
+                            nutrientEntryRow(emoji: "🥛", time: "08:59", title: "Leche con chocolate", meta: "🍎 227 kcal", amount: "+444,6mg")
+                            nutrientEntryRow(emoji: "🍪", time: "08:53", title: "Galletas de avena con...", meta: "🍎 134 kcal  🧪 5  🌾 21  🍗 2", amount: "+20,3mg")
                         }
-                        .padding(16)
                     }
                     .padding(.horizontal, 16)
                 }
-                .padding(.bottom, 180)
+                .padding(.bottom, 185)
             }
 
-            HStack(spacing: 10) {
+            // Dual Bottom Action Pills (Screenshots 41, 43, 44, 45)
+            HStack(spacing: 12) {
                 Button {
-                    store.addQuickMeal(title: "Batido Whey Isolate", kcal: 160, protein: 32, carbs: 4, fat: 2)
+                    if isHydration { store.addHydrationGlass() } else { extraAmount += quickIncrement }
                 } label: {
-                    Text("+ Añadir registro")
-                        .font(ImprovingFont.cardTitle(13.5))
+                    Text(quickButtonTitle)
+                        .font(ImprovingFont.cardTitle(14.5))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Capsule().fill(BevelColors.emeraldEnd))
+                        .padding(.vertical, 14)
+                        .background(Capsule().fill(Color(hex: 0x6A6E7A)))
+                }
+
+                Button {
+                    if isHydration { store.addHydrationGlass() } else { extraAmount += quickIncrement / 2.0 }
+                } label: {
+                    Text(isHydration ? "Añadir personal" : "+ Añadir personal")
+                        .font(ImprovingFont.cardTitle(14.5))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Capsule().fill(BevelColors.cardHeaderStrip))
+                        .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 92)
+            .padding(.bottom, 98)
         }
-        .background(BevelColors.canvas)
+        .background(BevelColors.sheetHeaderBg)
+    }
+
+    private func nutrientEntryRow(emoji: String, time: String, title: String, meta: String?, amount: String) -> some View {
+        BevelCard(cornerRadius: 18) {
+            HStack(spacing: 12) {
+                Text(emoji)
+                    .font(.system(size: 20))
+                    .frame(width: 42, height: 42)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(time).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textMuted)
+                    Text(title).font(ImprovingFont.cardTitle(14.5)).foregroundColor(BevelColors.textPrimary).lineLimit(1)
+                    if let m = meta {
+                        Text(m).font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textSecondary)
+                    }
+                }
+                Spacer()
+                Text(amount)
+                    .font(ImprovingFont.cardTitle(14))
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textPrimary)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 12))
+                    .foregroundColor(BevelColors.textMuted)
+            }
+            .padding(14)
+        }
     }
 }

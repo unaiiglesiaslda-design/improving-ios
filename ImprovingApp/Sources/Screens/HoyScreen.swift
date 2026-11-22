@@ -12,7 +12,7 @@ struct HoyScreen: View {
         let rhrEval = WhoopPhysiologyEngine.evaluateVital(value: store.restingHrBpm, bandLow: norms.rhrLowBpm, bandHigh: norms.rhrHighBpm, lowerIsBetter: true, hasData: avail.hasRestingHrData)
         let hrvEval = WhoopPhysiologyEngine.evaluateVital(value: store.hrvMs, bandLow: norms.hrvLowMs, bandHigh: norms.hrvHighMs, higherIsBetter: true, hasData: avail.hasHrvData)
         let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: Double(store.spo2Percent), bandLow: 95.0, bandHigh: 100.0, higherIsBetter: true, hasData: avail.hasSpo2Data)
-        let tempAbs = 35.9 + store.wristTempDeltaC
+        let tempAbs = 35.8 + store.wristTempDeltaC
         let tempEval = WhoopPhysiologyEngine.evaluateVital(value: tempAbs, bandLow: 35.5, bandHigh: 36.6, hasData: avail.hasTempData)
         let sleepHours = Double(store.currentDaySummary?.asleepMinutes ?? 478) / 60.0
         let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: norms.sleepLowHours, bandHigh: norms.sleepHighHours, higherIsBetter: true, hasData: avail.hasSleepData)
@@ -22,101 +22,59 @@ struct HoyScreen: View {
         let stressMin = stressPts.map { Int($0.rounded()) }.min() ?? 2
         let stressAvg = stressPts.isEmpty ? 35 : Int((stressPts.reduce(0, +) / Double(stressPts.count)).rounded())
 
+        let initials = store.userProfile.userName.isEmpty
+            ? "UI"
+            : String(store.userProfile.userName.prefix(2)).uppercased()
+
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                // 1. Top Bar: Date Navigation + Pearl Orb + Profile Avatar
+                // 1. Exact Top Bar from Screenshots 01 & 15: [Calendar]   Hoy, 21 nov ⌄   [Share | UI]
                 HStack {
-                    HStack(spacing: 4) {
-                        Button { store.shiftDay(1) } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 15, weight: .semibold))
+                    Button { store.shiftDay(1) } label: {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(BevelColors.glassChromeFill))
+                            .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        if store.dayOffset > 0 { store.shiftDay(-1) }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(store.dateLabel)
+                                .font(ImprovingFont.sectionTitle(17.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(BevelColors.textSecondary)
-                                .frame(width: 28, height: 28)
-                        }
-                        Button {
-                            if store.dayOffset > 0 { store.shiftDay(-1) }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(store.dateLabel)
-                                    .font(ImprovingFont.sectionTitle(19))
-                                    .foregroundColor(BevelColors.textPrimary)
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(BevelColors.textSecondary)
-                            }
-                        }
-                        if store.dayOffset > 0 {
-                            Button { store.shiftDay(-1) } label: {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(BevelColors.textSecondary)
-                                    .frame(width: 28, height: 28)
-                            }
                         }
                     }
 
                     Spacer()
 
                     HStack(spacing: 10) {
-                        Button {
-                            store.startNewCleanChat()
-                            onNavigate(.askBevel)
-                        } label: {
-                            IridescentPearlOrb(size: 36)
-                        }
-
                         Button { onNavigate(.dispositivos) } label: {
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(BevelColors.isDarkMode ? Color(hex: 0x93C5FD) : Color(hex: 0x1E3A8A))
-                                .frame(width: 36, height: 36)
-                                .background(Circle().fill(BevelColors.isDarkMode ? Color(hex: 0x1E293B) : Color(hex: 0xDBEAFE)))
-                                .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 1))
-                        }
-                    }
-                }
-
-                // 2. Status Pills Row
-                HStack(spacing: 10) {
-                    Button { onNavigate(.dispositivos) } label: {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(BevelColors.greenPrimary)
-                                .frame(width: 7, height: 7)
-                            Text(
-                                store.whoopConnected
-                                    ? "Activo · WHOOP 5.0 · \(store.whoopBatteryPct ?? 86)%"
-                                    : (store.healthKitAuthorized ? "Activo · Apple Health" : "Activo · WHOOP 5.0 · 86%")
-                            )
-                            .font(ImprovingFont.caption(12))
-                            .fontWeight(.medium)
-                            .foregroundColor(BevelColors.textPrimary)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(BevelColors.textSecondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(BevelColors.card))
-                        .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
-                    }
-
-                    Button { onSelectHealthMetric(.restingHeartRate) } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "heart.fill")
-                                .font(.system(size: 11))
-                                .foregroundColor(BevelColors.coralHigh)
-                            Text("\(store.liveHrBpm > 0 ? store.liveHrBpm : 68) bpm")
-                                .font(ImprovingFont.caption(12))
-                                .fontWeight(.semibold)
-                                .monospacedDigit()
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 15, weight: .medium))
                                 .foregroundColor(BevelColors.textPrimary)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(BevelColors.card))
-                        .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                        Button { onNavigate(.dispositivos) } label: {
+                            Text(initials)
+                                .font(ImprovingFont.caption(12))
+                                .fontWeight(.bold)
+                                .foregroundColor(BevelColors.skyBlue)
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(BevelColors.skySoftBg))
+                        }
                     }
+                    .padding(.horizontal, 11)
+                    .frame(height: 40)
+                    .background(Capsule().fill(BevelColors.glassChromeFill))
+                    .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                 }
 
                 // Setup Banner ONLY when zero recorded data exists anywhere
@@ -133,7 +91,7 @@ struct HoyScreen: View {
                                     Text("Configura tu perfil y dispositivo")
                                         .font(ImprovingFont.cardTitle(14))
                                         .foregroundColor(BevelColors.textPrimary)
-                                    Text("Añade tu nombre, edad, peso, altura y vincula tu reloj")
+                                    Text("Conecta Apple Health, importa exportar.zip o vincula WHOOP")
                                         .font(ImprovingFont.caption(11.5))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
@@ -148,9 +106,9 @@ struct HoyScreen: View {
                     }
                 }
 
-                // 3. Hero Card: 3 Rings with Vertical Dividers + Coaching Block
-                BevelCard {
-                    VStack(spacing: 16) {
+                // 2. Hero Card: 3 Recessed Rings + Vertical Dividers + Coaching (Screenshot 01)
+                BevelCard(cornerRadius: 24) {
+                    VStack(spacing: 0) {
                         HStack(alignment: .top, spacing: 0) {
                             Button { onNavigate(.esfuerzo) } label: {
                                 BevelRecessedRingGauge(
@@ -158,10 +116,8 @@ struct HoyScreen: View {
                                     centerText: "\(store.strainPercent)%",
                                     label: "Esfuerzo",
                                     kind: .strain,
-                                    size: 88,
+                                    size: 92,
                                     strokeWidth: 9.5,
-                                    subLabel: "Óptimo: \(store.effortTargetRangeText)",
-                                    centerSubtitle: store.strainStatusText,
                                     targetRange: store.optimalEffortRange,
                                     hasData: avail.hasStrainData
                                 )
@@ -179,9 +135,8 @@ struct HoyScreen: View {
                                     centerText: "\(store.recoveryPercent)%",
                                     label: "Recuperación",
                                     kind: .recovery,
-                                    size: 88,
+                                    size: 92,
                                     strokeWidth: 9.5,
-                                    centerSubtitle: store.recoveryStatusText,
                                     hasData: avail.hasRecoveryData
                                 )
                             }
@@ -198,98 +153,95 @@ struct HoyScreen: View {
                                     centerText: "\(store.sleepPercent)%",
                                     label: "Sueño",
                                     kind: .sleep,
-                                    size: 88,
+                                    size: 92,
                                     strokeWidth: 9.5,
-                                    subLabel: store.sleepDurationText,
-                                    centerSubtitle: store.sleepStatusText,
                                     hasData: avail.hasSleepData
                                 )
                             }
                             .frame(maxWidth: .infinity)
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 18)
 
                         Divider().background(BevelColors.divider)
 
-                        Button {
-                            store.startNewCleanChat()
-                            onNavigate(.askBevel)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 6) {
-                                    Text("✨")
-                                        .font(.system(size: 12))
-                                    Text("COACHING")
-                                        .font(ImprovingFont.microLabel(11))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
-                                Text(store.activeCoachingSummary)
-                                    .font(ImprovingFont.body(13))
-                                    .foregroundColor(BevelColors.textPrimary)
-                                    .multilineTextAlignment(.leading)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("COACHING")
+                                .font(ImprovingFont.microLabel(11))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(store.activeCoachingSummary)
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(BevelColors.cardSubtle.opacity(0.65))
                     }
-                    .padding(18)
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }
 
-                // 4. Estrés y Energía Section
+                // 3. Estrés y Energía Section (Screenshot 01)
                 Text("Estrés y Energía")
-                    .font(ImprovingFont.sectionTitle(18))
+                    .font(ImprovingFont.sectionTitle(18.5))
                     .foregroundColor(BevelColors.textPrimary)
 
-                // Stress Card with Max/Min/Avg + Radial Dial
                 Button { onNavigate(.estres) } label: {
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Estrés de hoy")
-                                        .font(ImprovingFont.cardTitle(16))
-                                        .foregroundColor(BevelColors.textPrimary)
+                    BevelCard(cornerRadius: 22) {
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 14) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 7) {
+                                        Circle()
+                                            .fill(BevelColors.greenPrimary)
+                                            .frame(width: 8, height: 8)
+                                        Text("Estrés de hoy")
+                                            .font(ImprovingFont.cardTitle(15.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                    }
                                     Text("Última actualización a las 14:32")
                                         .font(ImprovingFont.caption(12))
-                                        .foregroundColor(BevelColors.textSecondary)
+                                        .foregroundColor(BevelColors.textMuted)
                                 }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(BevelColors.textMuted)
-                            }
 
-                            HStack(alignment: .center) {
                                 HStack(spacing: 14) {
-                                    stressStatColumn(val: "\(stressMax)", label: "Máximo", color: BevelColors.amberStart)
+                                    stressStatColumn(val: "\(stressMax)", label: "Máximo", color: BevelColors.coralHigh)
                                     Rectangle().fill(BevelColors.divider).frame(width: 1, height: 34)
-                                    stressStatColumn(val: "\(stressMin)", label: "Mínimo", color: BevelColors.emeraldEnd)
+                                    stressStatColumn(val: "\(stressMin)", label: "Mínimo", color: BevelColors.tealLow)
                                     Rectangle().fill(BevelColors.divider).frame(width: 1, height: 34)
-                                    stressStatColumn(val: "\(stressAvg)", label: "Media", color: BevelColors.emeraldEnd)
+                                    stressStatColumn(val: "\(stressAvg)", label: "Media", color: BevelColors.tealLow)
                                 }
-                                Spacer()
-                                StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 108, isHeroGauge: false, hasData: avail.hasStressData)
+                            }
+                            Spacer()
+                            ZStack(alignment: .topTrailing) {
+                                StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 96, isHeroGauge: false, hasData: avail.hasStressData)
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(BevelColors.textMuted)
+                                    .offset(x: 4, y: -6)
                             }
                         }
-                        .padding(18)
+                        .padding(16)
                     }
                 }
 
-                // Energy Bank Card with 34 Vertical Capsules
+                // 34-bar green battery pill (Screenshot 01)
                 EnergyBankBatteryBar(percent: store.energyPercent, hasData: avail.hasEnergyData, onClick: { onNavigate(.energia) })
 
-                // 5. Monitor de Salud (2x3 Grid with Vertical Thermometer Pills)
+                // 4. Monitor de salud (Exact 2x3 Grid from Screenshot 15)
                 HStack {
                     Text("Monitor de salud")
-                        .font(ImprovingFont.sectionTitle(18))
+                        .font(ImprovingFont.sectionTitle(18.5))
                         .foregroundColor(BevelColors.textPrimary)
                     Spacer()
-                    Text("Base 90 días")
-                        .font(ImprovingFont.caption(12))
+                    Button("Editar >") { onNavigate(.dispositivos) }
+                        .font(ImprovingFont.caption(13))
                         .foregroundColor(BevelColors.textSecondary)
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                     HealthMonitorRangeCard(
-                        title: "Frecuencia respiratoria",
+                        title: "FR",
                         value: avail.hasRespData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.respRateRpm) : "--",
                         unit: "rpm",
                         systemIcon: "lungs.fill",
@@ -314,14 +266,14 @@ struct HoyScreen: View {
                     )
                     HealthMonitorRangeCard(
                         title: "SpO₂",
-                        value: avail.hasSpo2Data ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), Double(store.spo2Percent) + 0.2) : "--",
+                        value: avail.hasSpo2Data ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.spo2DisplayDouble) : "--",
                         unit: "%",
                         systemIcon: "drop.fill",
                         evaluation: spo2Eval,
                         onClick: { onSelectHealthMetric(.oxygenSaturation) }
                     )
                     HealthMonitorRangeCard(
-                        title: "Temp. muñeca",
+                        title: "Temp.",
                         value: avail.hasTempData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), tempAbs) : "--",
                         unit: "°C",
                         systemIcon: "thermometer.medium",
@@ -330,96 +282,121 @@ struct HoyScreen: View {
                     )
                     HealthMonitorRangeCard(
                         title: "Sueño",
-                        value: store.sleepDurationText.replacingOccurrences(of: " min", with: "m").replacingOccurrences(of: " h ", with: "h "),
+                        value: store.sleepDurationText,
                         unit: "",
-                        systemIcon: "moon.fill",
+                        systemIcon: "bed.double.fill",
                         evaluation: sleepEval,
                         onClick: { onSelectHealthMetric(.sleepDuration) }
                     )
                 }
 
-                // Monitor de Salud Summary Banner
-                BevelCard(cornerRadius: 16) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(BevelColors.emeraldEnd)
-                            .frame(width: 26, height: 26)
-                            .background(Circle().fill(BevelColors.greenSoftBg))
-                        Text("Nivel óptimo hoy: FCR mejoran tu línea base.")
-                            .font(ImprovingFont.body(13))
-                            .fontWeight(.medium)
-                            .foregroundColor(BevelColors.textPrimary)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                // "Todas las métricas dentro del rango normal" status bar (Screenshot 01)
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundColor(BevelColors.greenPrimary)
+                    Text("Todas las métricas están dentro del rango normal.")
+                        .font(ImprovingFont.body(13))
+                        .foregroundColor(BevelColors.greenPrimary)
+                    Spacer()
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(BevelColors.greenSoftBg))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(BevelColors.greenSoftBorder.opacity(0.6), lineWidth: 0.8))
 
-                // 6. Actividad y Nutrición
-                Text("Actividad y Nutrición")
-                    .font(ImprovingFont.sectionTitle(18))
+                // 5. Carga cardíaca Preview Card (Bottom of Screenshot 15)
+                Text("Carga cardíaca")
+                    .font(ImprovingFont.sectionTitle(18.5))
                     .foregroundColor(BevelColors.textPrimary)
 
-                BevelCard {
+                Button { onNavigate(.trainingLoad) } label: {
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "figure.run")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(BevelColors.textMuted)
+                                    Text("Carga cardíaca")
+                                        .font(ImprovingFont.caption(13.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(BevelColors.textMuted)
+                            }
+                            HStack(alignment: .bottom) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("37")
+                                        .font(ImprovingFont.metricHero(26))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Manteniéndose · Óptimo 32–42")
+                                        .font(ImprovingFont.caption(12))
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                }
+                                Spacer()
+                                TrendSparklineWithBand(points: [28, 30, 32, 31, 35, 34, 37], bandLow: 30, bandHigh: 42, lineColor: BevelColors.periwinkleStart, showBand: true, showGlowDot: true)
+                                    .frame(width: 120, height: 48)
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+
+                // 6. Nutrición y Actividad
+                Text("Nutrición y Actividad")
+                    .font(ImprovingFont.sectionTitle(18.5))
+                    .foregroundColor(BevelColors.textPrimary)
+
+                BevelCard(cornerRadius: 20) {
                     VStack(spacing: 14) {
                         if let w = store.workoutsToday.first {
                             Button { onNavigate(.esfuerzo) } label: {
                                 HStack(spacing: 12) {
-                                    Text("🏃")
-                                        .font(.system(size: 20))
-                                        .frame(width: 44, height: 44)
-                                        .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.amberSoftBg))
+                                    Image(systemName: "figure.run")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundColor(BevelColors.orangeEnd)
+                                        .frame(width: 42, height: 42)
+                                        .background(Circle().fill(BevelColors.amberSoftBg))
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(w.title)
                                             .font(ImprovingFont.cardTitle(14.5))
                                             .foregroundColor(BevelColors.textPrimary)
-                                        Text("\(w.timeRange) · \(w.kcal) kcal · \(w.avgHrBpm) bpm media")
-                                            .font(ImprovingFont.caption(11.5))
+                                        Text("\(w.timeRange) · \(w.kcal) kcal · \(w.avgHrBpm) ppm")
+                                            .font(ImprovingFont.caption(12))
                                             .foregroundColor(BevelColors.textSecondary)
                                     }
                                     Spacer()
                                     Text("\(w.strainPct)%")
-                                        .font(ImprovingFont.caption(12))
+                                        .font(ImprovingFont.caption(12.5))
                                         .fontWeight(.bold)
-                                        .monospacedDigit()
                                         .foregroundColor(BevelColors.orangeEnd)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(Capsule().fill(BevelColors.amberSoftBg))
                                 }
                             }
                         }
 
                         Divider().background(BevelColors.divider)
 
-                        let meals = store.mealsByDate[store.selectedDateIso] ?? []
-                        let totalKcal = meals.reduce(0) { $0 + $1.kcal }
-                        let totalProt = meals.reduce(0) { $0 + $1.proteinG }
-                        let avgScore = meals.isEmpty ? 86 : meals.reduce(0) { $0 + $1.qualityScore } / meals.count
-
                         Button { onNavigate(.nutricion) } label: {
                             HStack(spacing: 12) {
                                 Text("🥑")
-                                    .font(.system(size: 20))
-                                    .frame(width: 44, height: 44)
-                                    .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.greenSoftBg))
+                                    .font(.system(size: 18))
+                                    .frame(width: 42, height: 42)
+                                    .background(Circle().fill(BevelColors.greenSoftBg))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Nutrición · \(meals.count) Comidas")
+                                    Text("Nutrición · \(store.mealsToday.count) comidas")
                                         .font(ImprovingFont.cardTitle(14.5))
                                         .foregroundColor(BevelColors.textPrimary)
-                                    Text("\(totalKcal) kcal · \(totalProt)g Prot · CGM 94 mg/dL")
-                                        .font(ImprovingFont.caption(11.5))
+                                    Text("\(store.totalCaloriesToday) kcal · \(store.totalProteinToday)g Prot · Calidad \(store.foodQualityScore)")
+                                        .font(ImprovingFont.caption(12))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
                                 Spacer()
-                                Text("Calidad \(avgScore)")
-                                    .font(ImprovingFont.caption(12))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(BevelColors.emeraldEnd)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(Capsule().fill(BevelColors.greenSoftBg))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(BevelColors.textMuted)
                             }
                         }
                     }
@@ -427,8 +404,8 @@ struct HoyScreen: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 120)
+            .padding(.top, 8)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
     }

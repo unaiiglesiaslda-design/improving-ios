@@ -317,10 +317,12 @@ struct DataAvailabilitySnapshot: Equatable {
 }
 
 enum CardioMetricRoute: String, CaseIterable, Identifiable {
-    case activitiesDuration = "Actividades y duración"
-    case cardioLoad = "Carga cardiovascular"
-    case vo2Max = "VO₂ máx"
-    case hrRecovery = "Recuperación de FC"
+    case activitiesDuration = "Duración de actividades"
+    case activitiesEnergy = "Energía en actividades"
+    case vo2Max = "VO₂ máx."
+    case hrRecovery = "Recuperación de frecuencia cardíaca"
+    case cardioFocus = "Foco cardiovascular"
+    case hrZones = "Zonas de frecuencia cardíaca"
 
     var id: String { rawValue }
 }

@@ -28,7 +28,7 @@ extension Color {
     }
 }
 
-// MARK: - BevelColors (1:1 Parity with Android Dark Blue-Grey + Pure Black Canvas)
+// MARK: - BevelColors (Exact iOS Liquid-Glass Dark Graphite + Light Mode Support)
 
 final class ThemeSettings: ObservableObject {
     static let shared = ThemeSettings()
@@ -41,54 +41,62 @@ enum BevelColors {
         set { ThemeSettings.shared.isDarkMode = newValue }
     }
 
-    static var canvas: Color { isDarkMode ? Color(hex: 0x000000) : Color(hex: 0xF2F4F7) }
-    static var card: Color { isDarkMode ? Color(hex: 0x1A2230) : Color(hex: 0xFFFFFF) }
-    static var cardSubtle: Color { isDarkMode ? Color(hex: 0x222C3E) : Color(hex: 0xF8FAFC) }
-    static var cardBorder: Color { isDarkMode ? Color(hex: 0x94A3B8, alpha: 0.14) : Color(hex: 0x0F172A, alpha: 0.06) }
-    static var divider: Color { isDarkMode ? Color(hex: 0x2A3548) : Color(hex: 0xEAECEF) }
-    static var trackGroove: Color { isDarkMode ? Color(hex: 0x283347) : Color(hex: 0xE7EBF0) }
-    static var trackInnerShadow: Color { isDarkMode ? Color(hex: 0x1E2738) : Color(hex: 0xD9DFE7) }
+    // Core Surfaces (Matched pixel-for-pixel to iOS screenshots 01–75)
+    static var canvas: Color { isDarkMode ? Color(hex: 0x141518) : Color(hex: 0xF2F4F7) }
+    static var sheetHeaderBg: Color { isDarkMode ? Color(hex: 0x1E2026) : Color(hex: 0xFFFFFF) }
+    static var card: Color { isDarkMode ? Color(hex: 0x22242A) : Color(hex: 0xFFFFFF) }
+    static var cardHeaderStrip: Color { isDarkMode ? Color(hex: 0x2B2E36) : Color(hex: 0xF1F5F9) }
+    static var cardSubtle: Color { isDarkMode ? Color(hex: 0x1B1D22) : Color(hex: 0xF8FAFC) }
+    static var surfaceOverlay: Color { cardSubtle }
+    static var cardBorder: Color { isDarkMode ? Color.white.opacity(0.085) : Color(hex: 0x0F172A, alpha: 0.06) }
+    static var glassChromeFill: Color { isDarkMode ? Color(hex: 0x262932, alpha: 0.86) : Color.white.opacity(0.92) }
+    static var glassChromeBorder: Color { isDarkMode ? Color.white.opacity(0.16) : Color(hex: 0x0F172A, alpha: 0.08) }
+    static var divider: Color { isDarkMode ? Color.white.opacity(0.07) : Color(hex: 0xEAECEF) }
+    static var trackGroove: Color { isDarkMode ? Color(hex: 0x2E313A) : Color(hex: 0xE7EBF0) }
+    static var trackInnerShadow: Color { isDarkMode ? Color(hex: 0x1A1C21) : Color(hex: 0xD9DFE7) }
 
-    static var textPrimary: Color { isDarkMode ? Color(hex: 0xE6EBF2) : Color(hex: 0x111827) }
-    static var textSecondary: Color { isDarkMode ? Color(hex: 0x9AA7BC) : Color(hex: 0x6B7280) }
-    static var textMuted: Color { isDarkMode ? Color(hex: 0x6E7D95) : Color(hex: 0x9CA3AF) }
+    // Typography
+    static var textPrimary: Color { isDarkMode ? Color(hex: 0xF3F4F6) : Color(hex: 0x111827) }
+    static var textSecondary: Color { isDarkMode ? Color(hex: 0x9094A0) : Color(hex: 0x6B7280) }
+    static var textMuted: Color { isDarkMode ? Color(hex: 0x636773) : Color(hex: 0x9CA3AF) }
 
     // Recovery & Energy
-    static let limeStart = Color(hex: 0xA3E635)
+    static let limeStart = Color(hex: 0xC6F23B)
     static let emeraldStart = Color(hex: 0x4ADE80)
-    static let emeraldEnd = Color(hex: 0x16A34A)
-    static let greenPrimary = Color(hex: 0x22C55E)
-    static var greenSoftBg: Color { isDarkMode ? Color(hex: 0x102A22) : Color(hex: 0xECFDF5) }
-    static var greenSoftBorder: Color { isDarkMode ? Color(hex: 0x1D4D3C) : Color(hex: 0xA7F3D0) }
-    static var surfaceOverlay: Color { cardSubtle }
+    static let emeraldEnd = Color(hex: 0x22C55E)
+    static let greenPrimary = Color(hex: 0x3BD671)
+    static let bioTeal = Color(hex: 0x38D4B0)
+    static var greenSoftBg: Color { isDarkMode ? Color(hex: 0x1C2E27) : Color(hex: 0xECFDF5) }
+    static var greenSoftBorder: Color { isDarkMode ? Color(hex: 0x2B4C3E) : Color(hex: 0xA7F3D0) }
 
     // Strain / Effort
-    static let amberStart = Color(hex: 0xFBBF24)
-    static let orangeEnd = Color(hex: 0xF97316)
-    static var orangeSoftBg: Color { isDarkMode ? Color(hex: 0x2B1F14) : Color(hex: 0xFFF7ED) }
+    static let amberStart = Color(hex: 0xF5B942)
+    static let orangeEnd = Color(hex: 0xEC7D42)
+    static var orangeSoftBg: Color { isDarkMode ? Color(hex: 0x33241B) : Color(hex: 0xFFF7ED) }
     static var amberSoftBg: Color { orangeSoftBg }
-    static var strainHatchBg: Color { isDarkMode ? Color(hex: 0x2B2219) : Color(hex: 0xEADBC8) }
-    static var strainHatchLine: Color { isDarkMode ? Color(hex: 0x5C4936) : Color(hex: 0xC8B29A) }
+    static var strainHatchBg: Color { isDarkMode ? Color(hex: 0x423528) : Color(hex: 0xEADBC8) }
+    static var strainHatchLine: Color { isDarkMode ? Color(hex: 0x997954) : Color(hex: 0xC8B29A) }
 
     // Sleep
-    static let periwinkleStart = Color(hex: 0x818CF8)
-    static let indigoEnd = Color(hex: 0x4F46E5)
-    static var indigoSoftBg: Color { isDarkMode ? Color(hex: 0x1B1F36) : Color(hex: 0xEEF2FF) }
+    static let periwinkleStart = Color(hex: 0xA5B8FC)
+    static let indigoEnd = Color(hex: 0x6C7AE0)
+    static var indigoSoftBg: Color { isDarkMode ? Color(hex: 0x232740) : Color(hex: 0xEEF2FF) }
 
     // Stress & Alerts
-    static let tealLow = Color(hex: 0x2DD4BF)
-    static let coralHigh = Color(hex: 0xE07A5F)
-    static var coralSoftBg: Color { isDarkMode ? Color(hex: 0x331B1A) : Color(hex: 0xFEF2F2) }
+    static let tealLow = Color(hex: 0x56D5C6)
+    static let coralHigh = Color(hex: 0xDE6B48)
+    static var coralSoftBg: Color { isDarkMode ? Color(hex: 0x38201E) : Color(hex: 0xFEF2F2) }
     static let redAlert = Color(hex: 0xDC2626)
 
     // Biology & Cardio
-    static let skyBlue = Color(hex: 0x0EA5E9)
-    static let cyanBright = Color(hex: 0x06B6D4)
-    static var skySoftBg: Color { isDarkMode ? Color(hex: 0x112538) : Color(hex: 0xF0F9FF) }
+    static let skyBlue = Color(hex: 0x4DA6FF)
+    static let cyanBright = Color(hex: 0x49D5F2)
+    static let strengthPink = Color(hex: 0xEE6D88)
+    static var skySoftBg: Color { isDarkMode ? Color(hex: 0x1A293B) : Color(hex: 0xF0F9FF) }
 
     // Floating Chrome
-    static var floatingDarkButton: Color { isDarkMode ? Color(hex: 0x2A364C) : Color(hex: 0x181C24) }
-    static var journalNeutralBg: Color { isDarkMode ? Color(hex: 0x303D54) : Color(hex: 0xFFFFFF) }
+    static var floatingDarkButton: Color { isDarkMode ? Color(hex: 0x3C404D) : Color(hex: 0x181C24) }
+    static var journalNeutralBg: Color { isDarkMode ? Color(hex: 0x343844) : Color(hex: 0xFFFFFF) }
 }
 
 // MARK: - Modern Clean Typography (Plus Jakarta Sans)
@@ -115,10 +123,10 @@ enum ImprovingFont {
     static func caption(_ size: CGFloat = 12) -> Font { custom(.medium, size: size) }
 }
 
-// MARK: - Reusable Card Surface
+// MARK: - Reusable Liquid Glass Card Surface
 
 struct BevelCard<Content: View>: View {
-    var cornerRadius: CGFloat = 22
+    var cornerRadius: CGFloat = 20
     var backgroundColor: Color? = nil
     var borderColor: Color? = nil
     @ViewBuilder let content: () -> Content
@@ -131,7 +139,17 @@ struct BevelCard<Content: View>: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(borderColor ?? BevelColors.cardBorder, lineWidth: 0.9)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                borderColor ?? (BevelColors.isDarkMode ? Color.white.opacity(0.12) : BevelColors.cardBorder),
+                                borderColor ?? (BevelColors.isDarkMode ? Color.white.opacity(0.03) : BevelColors.cardBorder)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.9
+                    )
             )
     }
 }

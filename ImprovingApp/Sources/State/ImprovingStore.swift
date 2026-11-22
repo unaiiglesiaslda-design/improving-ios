@@ -284,7 +284,7 @@ final class ImprovingStore: ObservableObject {
         return "Toca encarrilar la noche hacia el descanso. Cierras el día con un \(strainPercent)% de esfuerzo y tu cuerpo necesita dormir \(needMin / 60) h \(String(format: "%02d", needMin % 60)) min para dejar a cero los \(debt) minutos de deuda acumulada, así que suelta pantallas ya y busca tu cama pensando en despertar fresco a las 07:40."
     }
 
-    // MARK: - Trend Lists for Esfuerzo, Recuperación & Sueño
+    // MARK: - Exact Trend Lists Matching Screenshots 02, 04-05, 08-09 & 12
 
     var effortTrends: [EffortTrendItem] {
         let recent = recentSeries(days: 14)
@@ -294,12 +294,12 @@ final class ImprovingStore: ObservableObject {
                 title: "Puntuación del Esfuerzo",
                 valueText: "\(strainPercent)",
                 unitText: "%",
-                statusText: "Rango normal",
-                statusTone: .normal,
+                statusText: strainPercent < 40 ? "Debajo de lo normal" : "Rango normal",
+                statusTone: strainPercent < 40 ? .below : .normal,
                 points: recent.map { Double($0.strainPct ?? 72) },
-                bandLow: 58,
+                bandLow: 52,
                 bandHigh: 84,
-                lineColorHex: 0xF97316,
+                lineColorHex: 0xF5B942,
                 detailNote: "Evolución de tu esfuerzo cardiovascular y muscular diario."
             ),
             EffortTrendItem(
@@ -307,13 +307,52 @@ final class ImprovingStore: ObservableObject {
                 title: "Duración del ejercicio",
                 valueText: "\(workoutsToday.first?.durationMin ?? 86)",
                 unitText: "min",
-                statusText: "Por encima de tu media",
-                statusTone: .above,
+                statusText: "Rango normal",
+                statusTone: .normal,
                 points: recent.map { Double($0.workouts.first?.durationMin ?? 55) },
-                bandLow: 40,
-                bandHigh: 75,
-                lineColorHex: 0xFB923C,
+                bandLow: 30,
+                bandHigh: 85,
+                lineColorHex: 0xEC7D42,
                 detailNote: "Minutos activos acumulados en tus sesiones."
+            ),
+            EffortTrendItem(
+                id: "t_day_hr",
+                title: "FC diurna",
+                valueText: "\(liveHrBpm > 0 ? liveHrBpm : 64)",
+                unitText: "ppm",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double($0.liveHrBpm ?? 64) },
+                bandLow: 58,
+                bandHigh: 74,
+                lineColorHex: 0xEC7D42,
+                detailNote: "Frecuencia cardíaca media durante tus horas de vigilia."
+            ),
+            EffortTrendItem(
+                id: "t_kcal",
+                title: "Energía total",
+                valueText: "\(max(currentDaySummary?.activeKcal ?? 999, 537) + 1890)",
+                unitText: "kcal",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double(($0.activeKcal ?? 650) + 1850) },
+                bandLow: 2200,
+                bandHigh: 2950,
+                lineColorHex: 0xEC7D42,
+                detailNote: "Suma de metabolismo basal y energía activa."
+            ),
+            EffortTrendItem(
+                id: "t_steps",
+                title: "Número de pasos",
+                valueText: "\(stepsCount)",
+                unitText: "",
+                statusText: stepsCount >= 8000 ? "Rango normal" : "Debajo de lo normal",
+                statusTone: stepsCount >= 8000 ? .normal : .below,
+                points: recent.map { Double($0.stepsCount ?? 8500) },
+                bandLow: 7000,
+                bandHigh: 13000,
+                lineColorHex: 0xEC7D42,
+                detailNote: "Pasos acumulados diariamente."
             ),
             EffortTrendItem(
                 id: "t_perf",
@@ -321,11 +360,11 @@ final class ImprovingStore: ObservableObject {
                 valueText: "+6",
                 unitText: "%",
                 statusText: "Dentro del objetivo",
-                statusTone: .normal,
-                points: recent.map { Double($0.strainPct ?? 74) },
-                bandLow: 60,
-                bandHigh: 84,
-                lineColorHex: 0x0EA5E9,
+                statusTone: .above,
+                points: recent.map { Double($0.strainPct ?? 74) - 68.0 },
+                bandLow: -10,
+                bandHigh: 15,
+                lineColorHex: 0x7FA8F8,
                 detailNote: "Alineación frente a tu zona óptima según recuperación."
             )
         ]
@@ -336,15 +375,15 @@ final class ImprovingStore: ObservableObject {
         return [
             EffortTrendItem(
                 id: "r_rec",
-                title: "Recuperación diaria",
+                title: "Puntuación de Recuperación",
                 valueText: "\(recoveryPercent)",
                 unitText: "%",
-                statusText: "Verde · Óptima",
+                statusText: "Rango normal",
                 statusTone: .normal,
                 points: recent.map { Double($0.recoveryPct ?? 76) },
                 bandLow: 60,
                 bandHigh: 92,
-                lineColorHex: 0x16A34A,
+                lineColorHex: 0x3BD671,
                 detailNote: "Capacidad de tu sistema nervioso autónomo para asimilar carga."
             ),
             EffortTrendItem(
@@ -355,55 +394,232 @@ final class ImprovingStore: ObservableObject {
                 statusText: "Rango normal",
                 statusTone: .normal,
                 points: recent.map { $0.hrvMs ?? 74.0 },
-                bandLow: 68.6,
-                bandHigh: 107.4,
-                lineColorHex: 0x22C55E,
-                detailNote: "Variabilidad de la frecuencia cardíaca consolidada en sueño profundo."
+                bandLow: 62.0,
+                bandHigh: 83.5,
+                lineColorHex: 0x3BD671,
+                detailNote: "Variabilidad de la frecuencia cardíaca consolidada durante el sueño."
             ),
             EffortTrendItem(
                 id: "r_rhr",
                 title: "FC en reposo",
                 valueText: String(format: "%.1f", locale: Locale(identifier: "es_ES"), restingHrBpm),
                 unitText: "ppm",
-                statusText: "Óptimo",
+                statusText: "Rango normal",
                 statusTone: .normal,
                 points: recent.map { $0.restingHrBpm ?? 49.0 },
-                bandLow: 46,
-                bandHigh: 56,
-                lineColorHex: 0x0EA5E9,
+                bandLow: 45.8,
+                bandHigh: 51.2,
+                lineColorHex: 0x3BD671,
                 detailNote: "Frecuencia cardíaca mínima sostenida durante el descanso nocturno."
+            ),
+            EffortTrendItem(
+                id: "r_resp",
+                title: "Frecuencia respiratoria",
+                valueText: String(format: "%.1f", locale: Locale(identifier: "es_ES"), respRateRpm),
+                unitText: "rpm",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { $0.respRateRpm ?? 15.2 },
+                bandLow: 14.9,
+                bandHigh: 15.6,
+                lineColorHex: 0x3BD671,
+                detailNote: "Respiraciones por minuto registradas durante el sueño."
+            ),
+            EffortTrendItem(
+                id: "r_spo2",
+                title: "Saturación de oxígeno",
+                valueText: String(format: "%.1f", locale: Locale(identifier: "es_ES"), spo2DisplayDouble),
+                unitText: "%",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double($0.spo2Percent ?? 96) + 0.2 },
+                bandLow: 95.8,
+                bandHigh: 96.6,
+                lineColorHex: 0x3BD671,
+                detailNote: "Porcentaje de saturación capilar periférica de oxígeno."
+            ),
+            EffortTrendItem(
+                id: "r_temp",
+                title: "Temperatura de la muñeca",
+                valueText: String(format: "%.1f", locale: Locale(identifier: "es_ES"), wristTempAbsoluteC),
+                unitText: "°C",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { 35.8 + ($0.wristTempDeltaC ?? 0.0) },
+                bandLow: 35.6,
+                bandHigh: 35.9,
+                lineColorHex: 0x3BD671,
+                detailNote: "Temperatura media de la piel durante la noche anterior."
             )
         ]
     }
 
     var sleepTrends: [EffortTrendItem] {
         let recent = recentSeries(days: 14)
+        let deepMin = currentDaySummary?.deepMinutes ?? 102
+        let remMin = currentDaySummary?.remMinutes ?? 118
         return [
             EffortTrendItem(
                 id: "s_score",
-                title: "Calidad del sueño",
+                title: "Puntuación del Sueño",
                 valueText: "\(sleepPercent)",
                 unitText: "%",
-                statusText: "Óptimo",
+                statusText: "Rango normal",
                 statusTone: .normal,
                 points: recent.map { Double($0.sleepPct ?? 88) },
                 bandLow: 78,
                 bandHigh: 96,
-                lineColorHex: 0x6366F1,
+                lineColorHex: 0xA78BFA,
                 detailNote: "Puntuación combinada de duración, eficiencia y fases reparadoras."
             ),
             EffortTrendItem(
                 id: "s_dur",
-                title: "Tiempo dormido",
+                title: "Duración del sueño",
                 valueText: sleepDurationText,
                 unitText: "",
                 statusText: "Rango normal",
                 statusTone: .normal,
                 points: recent.map { Double($0.asleepMinutes ?? 455) / 60.0 },
-                bandLow: 7.0,
-                bandHigh: 8.8,
-                lineColorHex: 0x818CF8,
+                bandLow: 6.5,
+                bandHigh: 8.9,
+                lineColorHex: 0x93A8F8,
                 detailNote: "Horas netas de sueño excluyendo despertares nocturnos."
+            ),
+            EffortTrendItem(
+                id: "s_rem",
+                title: "Sueño MOR",
+                valueText: "\(remMin / 60) h \(remMin % 60) min",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double($0.remMinutes ?? 95) },
+                bandLow: 70,
+                bandHigh: 130,
+                lineColorHex: 0x93A8F8,
+                detailNote: "Tiempo en fase de movimiento ocular rápido (REM)."
+            ),
+            EffortTrendItem(
+                id: "s_deep",
+                title: "Sueño profundo",
+                valueText: "\(deepMin / 60) h \(deepMin % 60) min",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double($0.deepMinutes ?? 85) },
+                bandLow: 60,
+                bandHigh: 115,
+                lineColorHex: 0x93A8F8,
+                detailNote: "Sueño de ondas lentas restaurador."
+            ),
+            EffortTrendItem(
+                id: "s_dip",
+                title: "Disminución de la FC",
+                valueText: "14",
+                unitText: "%",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: [11, 13, 12, 15, 14, 13, 14],
+                bandLow: 10,
+                bandHigh: 18,
+                lineColorHex: 0x93A8F8,
+                detailNote: "Descenso de la frecuencia cardíaca nocturna respecto al día."
+            ),
+            EffortTrendItem(
+                id: "s_bal",
+                title: "Balance de sueño",
+                valueText: "3 h 55 min",
+                unitText: "",
+                statusText: "Exceso",
+                statusTone: .normal,
+                points: [0.5, 2.2, 1.8, 0.2, -0.8, 1.4, 3.9],
+                bandLow: -1.0,
+                bandHigh: 3.0,
+                lineColorHex: 0x3BD671,
+                detailNote: "Superávit o deuda acumulada de descanso."
+            ),
+            EffortTrendItem(
+                id: "s_bed",
+                title: "Hora de dormir",
+                valueText: "23:12",
+                unitText: "",
+                statusText: "Antes de lo normal",
+                statusTone: .below,
+                points: [23.8, 24.1, 23.6, 23.9, 23.4, 23.2, 23.2],
+                bandLow: 23.0,
+                bandHigh: 24.3,
+                lineColorHex: 0x93A8F8,
+                detailNote: "Consistencia en la hora de inicio del sueño."
+            ),
+            EffortTrendItem(
+                id: "s_wake",
+                title: "Hora de despertar",
+                valueText: "7:38",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: [7.8, 7.6, 7.7, 7.5, 7.8, 7.6, 7.6],
+                bandLow: 7.0,
+                bandHigh: 8.2,
+                lineColorHex: 0x93A8F8,
+                detailNote: "Hora de despertar detectada por tus sensores."
+            ),
+            EffortTrendItem(
+                id: "s_lat",
+                title: "Tiempo que tardas en dormirte",
+                valueText: "14 min",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: [18, 15, 20, 14, 16, 13, 14],
+                bandLow: 8,
+                bandHigh: 24,
+                lineColorHex: 0x93A8F8,
+                detailNote: "Latencia desde que te acuestas hasta conciliar el sueño."
+            )
+        ]
+    }
+
+    var stressTrends: [EffortTrendItem] {
+        let recent = recentSeries(days: 14)
+        return [
+            EffortTrendItem(
+                id: "st_score",
+                title: "Puntuación del Estrés",
+                valueText: "\(stressScore)",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double($0.stressScore ?? 28) },
+                bandLow: 15,
+                bandHigh: 45,
+                lineColorHex: 0x56D5C6,
+                detailNote: "Nivel medio diario de estrés fisiológico."
+            ),
+            EffortTrendItem(
+                id: "st_nonact",
+                title: "Estrés no relacionado con la actividad",
+                valueText: "\(max(stressScore - 3, 12))",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: recent.map { Double(max(($0.stressScore ?? 28) - 4, 10)) },
+                bandLow: 12,
+                bandHigh: 40,
+                lineColorHex: 0x56D5C6,
+                detailNote: "Estrés cognitivo o autónomo fuera de tus entrenamientos."
+            ),
+            EffortTrendItem(
+                id: "st_sleep",
+                title: "Estrés del sueño",
+                valueText: "6",
+                unitText: "",
+                statusText: "Rango normal",
+                statusTone: .normal,
+                points: [5, 8, 6, 14, 7, 5, 6],
+                bandLow: 2,
+                bandHigh: 15,
+                lineColorHex: 0x56D5C6,
+                detailNote: "Activación simpática durante la noche."
             )
         ]
     }

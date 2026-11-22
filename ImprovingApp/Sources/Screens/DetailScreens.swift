@@ -1,31 +1,50 @@
 import SwiftUI
 
-// MARK: - Top Detail Modal Bar Helper
+// MARK: - Top Detail Modal Sheet Header (Screenshots 16–33, 50–68)
 
 struct DetailSheetHeader: View {
     let title: String
     let onBack: () -> Void
+    var rightSystemIcon: String? = nil
+    var onRightAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onBack) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(BevelColors.textPrimary)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(BevelColors.trackGroove))
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(BevelColors.glassChromeFill))
+                    .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
             }
-            Text(title)
-                .font(ImprovingFont.sectionTitle(18))
-                .foregroundColor(BevelColors.textPrimary)
             Spacer()
+            Text(title)
+                .font(ImprovingFont.sectionTitle(16.5))
+                .foregroundColor(BevelColors.textPrimary)
+                .lineLimit(1)
+            Spacer()
+            if let icon = rightSystemIcon {
+                Button {
+                    onRightAction?()
+                } label: {
+                    Image(systemName: icon)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(BevelColors.glassChromeFill))
+                        .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                }
+            } else {
+                Spacer().frame(width: 38)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
 }
 
-// MARK: - 1. Esfuerzo Detail Screen (1:1 Android Port)
+// MARK: - 1. Esfuerzo Detail Screen (Literal Match to Screenshot 02)
 
 struct EsfuerzoScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -35,10 +54,11 @@ struct EsfuerzoScreen: View {
     var body: some View {
         let avail = store.dataAvailability
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 AtmosphericHeroHeader(
                     title: "Esfuerzo",
                     subtitle: store.dateLabel,
+                    style: .strain,
                     onBack: onBack
                 ) {
                     BevelRecessedRingGauge(
@@ -46,9 +66,9 @@ struct EsfuerzoScreen: View {
                         centerText: "\(store.strainPercent)%",
                         label: "",
                         kind: .strain,
-                        size: 162,
-                        strokeWidth: 15,
-                        subLabel: "Rango de esfuerzo óptimo \(store.effortTargetRangeText)",
+                        size: 170,
+                        strokeWidth: 16,
+                        subLabel: "Objetivo: \(store.effortTargetRangeText)",
                         centerSubtitle: store.strainStatusText,
                         targetRange: store.optimalEffortRange,
                         hasData: avail.hasStrainData
@@ -56,107 +76,94 @@ struct EsfuerzoScreen: View {
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    // Sub-scorecards: Strain 0-21 | Tiempo activo | Energía total
-                    BevelCard {
-                        HStack {
-                            statCol(value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.strain21), label: "Strain (0-21)")
-                            Rectangle().fill(BevelColors.divider).frame(width: 1, height: 34)
-                            statCol(value: "01:26:00", label: "Tiempo activo")
-                            Rectangle().fill(BevelColors.divider).frame(width: 1, height: 34)
-                            statCol(value: "2.890 cal", label: "Energía total")
-                        }
-                        .padding(16)
+                    HStack(spacing: 12) {
+                        HeaderedMetricCard(icon: "flame.fill", title: "Strain (0–21)", value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.strain21))
+                        HeaderedMetricCard(icon: "clock.fill", title: "Tiempo activo", value: "1 h 26 min")
                     }
 
-                    // Coaching Insight Card
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 6) {
-                                Text("✨").font(.system(size: 13))
-                                Text("Superando tus límites hoy")
-                                    .font(ImprovingFont.cardTitle(14.5))
+                    // Coaching Card with expand icon (⤢)
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("🔥 Ritmo cardiovascular óptimo")
+                                    .font(ImprovingFont.cardTitle(15))
                                     .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(BevelColors.textMuted)
                             }
                             Text(store.activeCoachingSummary)
-                                .font(ImprovingFont.body(13))
+                                .font(ImprovingFont.body(13.5))
                                 .foregroundColor(BevelColors.textSecondary)
                         }
                         .padding(16)
                     }
 
-                    // Línea de tiempo
-                    HStack {
-                        Text("Línea de tiempo")
-                            .font(ImprovingFont.sectionTitle(17))
+                    // Cronología del esfuerzo
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Cronología del esfuerzo")
+                            .font(ImprovingFont.sectionTitle(18))
                             .foregroundColor(BevelColors.textPrimary)
-                        Spacer()
-                        Text("Hoy").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textSecondary)
+                        Text("\(store.workoutsToday.count) evento(s)")
+                            .font(ImprovingFont.caption(12.5))
+                            .foregroundColor(BevelColors.textMuted)
                     }
 
-                    ForEach(store.workoutsToday) { w in
-                        BevelCard(cornerRadius: 20) {
-                            HStack(spacing: 12) {
-                                Text("🏃")
-                                    .font(.system(size: 18))
-                                    .frame(width: 44, height: 44)
-                                    .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.amberSoftBg))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(w.title)
-                                        .font(ImprovingFont.cardTitle(14.5))
-                                        .foregroundColor(BevelColors.textPrimary)
-                                    Text("\(w.timeRange) · \(w.durationMin) min · \(w.kcal) kcal · \(w.avgHrBpm) bpm")
-                                        .font(ImprovingFont.caption(11.5))
-                                        .foregroundColor(BevelColors.textSecondary)
+                    BevelCard(cornerRadius: 20) {
+                        VStack(spacing: 14) {
+                            ForEach(store.workoutsToday) { w in
+                                HStack(spacing: 12) {
+                                    Image(systemName: "figure.run")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundColor(BevelColors.amberStart)
+                                        .frame(width: 40, height: 40)
+                                        .background(Circle().fill(BevelColors.amberSoftBg))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(w.timeRange).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textMuted)
+                                        Text(w.title).font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                        Text("○ \(w.strainPct)%   🔥 \(w.kcal) kcal   ♡ \(w.avgHrBpm) ppm")
+                                            .font(ImprovingFont.caption(12))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.right").font(.system(size: 12)).foregroundColor(BevelColors.textMuted)
                                 }
-                                Spacer()
-                                Text("\(w.strainPct)%")
-                                    .font(ImprovingFont.caption(12))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(BevelColors.orangeEnd)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(Capsule().fill(BevelColors.amberSoftBg))
                             }
-                            .padding(14)
+                            Text("Ver cronología")
+                                .font(ImprovingFont.cardTitle(14))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Capsule().fill(BevelColors.cardHeaderStrip))
                         }
+                        .padding(16)
                     }
 
-                    // Tendencias
+                    // All 6 Exact Tendencias Cards from Screenshot 02
                     Text("Tendencias")
-                        .font(ImprovingFont.sectionTitle(17))
+                        .font(ImprovingFont.sectionTitle(18))
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.top, 4)
 
-                    ForEach(store.effortTrends) { item in
+                    let effortIcons = ["gauge.with.dots.needle.67percent", "timer", "heart.fill", "flame.fill", "shoeprints.fill", "target"]
+                    ForEach(Array(store.effortTrends.enumerated()), id: \.element.id) { idx, item in
                         BevelTrendLightCard(
                             trend: item,
-                            systemIcon: "flame.fill",
+                            systemIcon: effortIcons[idx % effortIcons.count],
                             onClick: { onOpenTrend(item) }
                         )
                     }
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
     }
-
-    private func statCol(value: String, label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(ImprovingFont.cardTitle(16))
-                .monospacedDigit()
-                .foregroundColor(BevelColors.textPrimary)
-            Text(label)
-                .font(ImprovingFont.caption(11.5))
-                .foregroundColor(BevelColors.textSecondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
 }
 
-// MARK: - 2. Recuperación Detail Screen (1:1 Android Port)
+// MARK: - 2. Recuperación Detail Screen (Literal Match to Screenshots 03, 04, 05)
 
 struct RecuperacionScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -167,10 +174,11 @@ struct RecuperacionScreen: View {
     var body: some View {
         let avail = store.dataAvailability
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 AtmosphericHeroHeader(
                     title: "Recuperación",
                     subtitle: store.dateLabel,
+                    style: .recovery,
                     onBack: onBack
                 ) {
                     BevelRecessedRingGauge(
@@ -178,98 +186,114 @@ struct RecuperacionScreen: View {
                         centerText: "\(store.recoveryPercent)%",
                         label: "",
                         kind: .recovery,
-                        size: 162,
-                        strokeWidth: 15,
-                        subLabel: "Línea base calibrada (90 días)",
-                        centerSubtitle: store.recoveryStatusText,
+                        size: 170,
+                        strokeWidth: 16,
+                        centerSubtitle: "Recuperado",
                         hasData: avail.hasRecoveryData
                     )
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    // 2x2 Grid: VFC | FCR | Resp | SpO2
+                    // Two-tone Headered Stat Boxes (Screenshot 03)
                     HStack(spacing: 12) {
-                        recMiniCard(title: "VFC (RMSSD)", value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.hrvMs), unit: "ms", status: "↑ +9% vs base 30d", color: BevelColors.emeraldEnd) {
-                            onSelectHealthMetric(.hrv)
-                        }
-                        recMiniCard(title: "FC en reposo", value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.restingHrBpm), unit: "ppm", status: "↓ -1.4 ppm óptimo", color: BevelColors.emeraldEnd) {
-                            onSelectHealthMetric(.restingHeartRate)
-                        }
+                        HeaderedMetricCard(
+                            icon: "waveform.path.ecg",
+                            title: "VFC en reposo",
+                            value: avail.hasHrvData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.hrvMs) : "—",
+                            unit: "ms",
+                            onClick: { onSelectHealthMetric(.hrv) }
+                        )
+                        HeaderedMetricCard(
+                            icon: "heart.fill",
+                            title: "FC en reposo",
+                            value: avail.hasRestingHrData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.restingHrBpm) : "—",
+                            unit: "ppm",
+                            onClick: { onSelectHealthMetric(.restingHeartRate) }
+                        )
                     }
 
-                    HStack(spacing: 12) {
-                        recMiniCard(title: "Frec. Respiratoria", value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.respRateRpm), unit: "rpm", status: "Rango normal", color: BevelColors.skyBlue) {
-                            onSelectHealthMetric(.respiratoryRate)
-                        }
-                        recMiniCard(title: "Oxígeno (SpO₂)", value: "\(store.spo2Percent),2", unit: "%", status: "Rango normal", color: BevelColors.emeraldEnd) {
-                            onSelectHealthMetric(.oxygenSaturation)
-                        }
-                    }
-
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 6) {
-                                Text("✨").font(.system(size: 13))
-                                Text("Sistema nervioso parasimpático")
-                                    .font(ImprovingFont.cardTitle(14.5))
+                    // Coaching Card (Screenshot 03)
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("🌙 Sueño muy eficiente")
+                                    .font(ImprovingFont.cardTitle(15))
                                     .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(BevelColors.textMuted)
                             }
-                            Text(store.activeCoachingSummary)
-                                .font(ImprovingFont.body(13))
+                            Text("La señal más clara de tu noche es la eficiencia del 98%: dormiste \(store.sleepDurationText) y la puntuación de Sueño quedó en \(store.sleepPercent)%. Tu VFC en \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.hrvMs)) ms respalda una recuperación sólida.")
+                                .font(ImprovingFont.body(13.5))
                                 .foregroundColor(BevelColors.textSecondary)
                         }
                         .padding(16)
                     }
 
+                    // Cronología de la recuperación (Screenshot 04)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Cronología de la recuperación")
+                            .font(ImprovingFont.sectionTitle(18))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text("1 evento")
+                            .font(ImprovingFont.caption(12.5))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+
+                    BevelCard(cornerRadius: 20) {
+                        VStack(spacing: 14) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "moon.stars.fill")
+                                    .font(.system(size: 17))
+                                    .foregroundColor(BevelColors.periwinkleStart)
+                                    .frame(width: 42, height: 42)
+                                    .background(Circle().fill(BevelColors.indigoSoftBg))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("7:46").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
+                                    Text("Sueño principal").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                    Text("○ \(store.sleepPercent)%   🛏 \(store.sleepDurationText)")
+                                        .font(ImprovingFont.caption(12.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.right").font(.system(size: 12)).foregroundColor(BevelColors.textMuted)
+                            }
+                            Text("Ver cronología")
+                                .font(ImprovingFont.cardTitle(14))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Capsule().fill(BevelColors.cardHeaderStrip))
+                        }
+                        .padding(16)
+                    }
+
+                    // All 6 Exact Tendencias Cards from Screenshots 04–05
                     Text("Tendencias")
-                        .font(ImprovingFont.sectionTitle(17))
+                        .font(ImprovingFont.sectionTitle(18))
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.top, 4)
 
-                    ForEach(store.recoveryTrends) { item in
+                    let recIcons = ["leaf.fill", "waveform.path.ecg", "heart.fill", "lungs.fill", "drop.fill", "thermometer.medium"]
+                    let recKinds: [HealthMetricKind] = [.hrv, .hrv, .restingHeartRate, .respiratoryRate, .oxygenSaturation, .wristTemperature]
+                    ForEach(Array(store.recoveryTrends.enumerated()), id: \.element.id) { idx, item in
                         BevelTrendLightCard(
                             trend: item,
-                            systemIcon: "heart.fill",
-                            onClick: { onOpenTrend?(item) }
+                            systemIcon: recIcons[idx % recIcons.count],
+                            onClick: { onSelectHealthMetric(recKinds[idx % recKinds.count]) }
                         )
                     }
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
     }
-
-    private func recMiniCard(title: String, value: String, unit: String, status: String, color: Color, onClick: @escaping () -> Void) -> some View {
-        Button(action: onClick) {
-            BevelCard(cornerRadius: 18) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(ImprovingFont.caption(12))
-                        .foregroundColor(BevelColors.textSecondary)
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(value)
-                            .font(ImprovingFont.metricHero(22))
-                            .monospacedDigit()
-                            .foregroundColor(BevelColors.textPrimary)
-                        Text(unit)
-                            .font(ImprovingFont.caption(12))
-                            .foregroundColor(BevelColors.textSecondary)
-                    }
-                    Text(status)
-                        .font(ImprovingFont.caption(11.5))
-                        .fontWeight(.medium)
-                        .foregroundColor(color)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-            }
-        }
-    }
 }
 
-// MARK: - 3. Sueño & Necesidad de Sueño Detail Screens (1:1 Android Port)
+// MARK: - 3. Sueño Detail Screen (Literal Match to Screenshots 06, 07, 08, 09)
 
 struct SuenoDetailScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -279,120 +303,141 @@ struct SuenoDetailScreen: View {
 
     var body: some View {
         let avail = store.dataAvailability
-        let d = store.currentDaySummary
-        let deep = d?.deepMinutes ?? 108
-        let rem = d?.remMinutes ?? 116
-        let total = d?.asleepMinutes ?? 478
-        let light = max(total - deep - rem, 226)
-        let awake = max((d?.inBedMinutes ?? 512) - total, 28)
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 AtmosphericHeroHeader(
                     title: "Sueño",
                     subtitle: store.dateLabel,
-                    onBack: onBack
+                    style: .sleep,
+                    onBack: onBack,
+                    rightPrimaryIcon: "square.and.arrow.up",
+                    rightSecondaryIcon: "alarm.fill",
+                    onRightSecondary: onOpenSleepNeed
                 ) {
                     BevelRecessedRingGauge(
                         progress: Double(store.sleepPercent) / 100.0,
                         centerText: "\(store.sleepPercent)%",
                         label: "",
                         kind: .sleep,
-                        size: 162,
-                        strokeWidth: 15,
-                        subLabel: "\(store.sleepDurationText) dormido de 8 h 15 m objetivo",
-                        centerSubtitle: store.sleepStatusText,
+                        size: 170,
+                        strokeWidth: 16,
+                        centerSubtitle: "Calidad",
                         hasData: avail.hasSleepData
                     )
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    // Sleep Need Interactive Banner
-                    Button(action: onOpenSleepNeed) {
-                        BevelCard(cornerRadius: 20) {
-                            HStack(spacing: 12) {
-                                Text("🛏️")
-                                    .font(.system(size: 18))
-                                    .frame(width: 42, height: 42)
-                                    .background(Circle().fill(BevelColors.indigoSoftBg))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Necesidad de sueño y Alarma")
-                                        .font(ImprovingFont.cardTitle(14.5))
-                                        .foregroundColor(BevelColors.textPrimary)
-                                    Text("Objetivo esta noche: 8h 26m · Hora ideal 23:05")
-                                        .font(ImprovingFont.caption(12))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
-                                Spacer()
-                                Text("Plan →")
-                                    .font(ImprovingFont.caption(12.5))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(BevelColors.indigoEnd)
-                            }
-                            .padding(14)
-                        }
+                    // Headered Cards: Tiempo en la cama | Duración del sueño (Screenshot 06)
+                    HStack(spacing: 12) {
+                        HeaderedMetricCard(icon: "bed.double.fill", title: "Tiempo en la cama", value: store.sleepInBedText)
+                        HeaderedMetricCard(icon: "clock.fill", title: "Duración del sueño", value: store.sleepDurationText)
                     }
 
-                    // Sleep Stages Breakdown Card
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 12) {
+                    // Coaching Card (Screenshot 06)
+                    BevelCard(cornerRadius: 20, backgroundColor: BevelColors.isDarkMode ? Color(hex: 0x202741) : BevelColors.card) {
+                        VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text("Fases del sueño")
-                                    .font(ImprovingFont.cardTitle(16))
+                                Text("✨ Una noche muy eficiente")
+                                    .font(ImprovingFont.cardTitle(15))
                                     .foregroundColor(BevelColors.textPrimary)
                                 Spacer()
-                                Text("23:12 — 07:38")
-                                    .font(ImprovingFont.caption(12))
-                                    .foregroundColor(BevelColors.textSecondary)
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(BevelColors.textMuted)
                             }
-
-                            SleepStagesHypnogramBar(deepMin: deep, remMin: rem, lightMin: light, awakeMin: awake)
-
-                            stageRow(label: "Despierto", pct: "6%", duration: "0 h \(awake) m", color: BevelColors.coralHigh)
-                            stageRow(label: "Sueño REM", pct: "23%", duration: "\(rem / 60) h \(rem % 60) m", color: Color(hex: 0x818CF8))
-                            stageRow(label: "Sueño Ligero", pct: "49%", duration: "\(light / 60) h \(light % 60) m", color: BevelColors.periwinkleStart)
-                            stageRow(label: "Sueño Profundo (SWS)", pct: "22%", duration: "\(deep / 60) h \(deep % 60) m", color: BevelColors.indigoEnd)
+                            Text("La eficiencia del Sueño fue del 98%, y el sueño profundo subió a 1 hora y 42 minutos: tu noche fue compacta y muy reparadora. Para esta noche, prueba a repetir este ciclo constante.")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
                         }
                         .padding(16)
                     }
 
-                    //Tendencias
+                    // "✨ Ver información →" pill card (Screenshot 06)
+                    Button(action: onOpenSleepNeed) {
+                        BevelCard(cornerRadius: 18, backgroundColor: BevelColors.isDarkMode ? Color(hex: 0x202741) : BevelColors.card) {
+                            HStack {
+                                Image(systemName: "sparkles").foregroundColor(BevelColors.periwinkleStart)
+                                Text("Ver información").font(ImprovingFont.cardTitle(14.5)).foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.right").font(.system(size: 12)).foregroundColor(BevelColors.textMuted)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                        }
+                    }
+
+                    // 24-Hour Circular Sleep Schedule Clock Dial (Screenshot 07)
+                    SleepSchedule24hDial(
+                        windDownText: "23:47",
+                        bedtimeText: "0:17",
+                        wakeTimeText: "7:40",
+                        sleepNeedText: "7 h 22 min",
+                        onOpenSleepNeed: onOpenSleepNeed
+                    )
+
+                    // Cronología del sueño (Screenshot 07)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Cronología del sueño").font(ImprovingFont.sectionTitle(18)).foregroundColor(BevelColors.textPrimary)
+                            Text("1 evento").font(ImprovingFont.caption(12.5)).foregroundColor(BevelColors.textMuted)
+                        }
+                        Spacer()
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(BevelColors.card))
+                    }
+
+                    BevelCard(cornerRadius: 20, backgroundColor: BevelColors.isDarkMode ? Color(hex: 0x202741) : BevelColors.card) {
+                        VStack(spacing: 14) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "moon.stars.fill")
+                                    .font(.system(size: 17))
+                                    .foregroundColor(BevelColors.periwinkleStart)
+                                    .frame(width: 42, height: 42)
+                                    .background(Circle().fill(Color(hex: 0x2F3962)))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("7:46").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
+                                    Text("Sueño principal").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                    Text("○ \(store.sleepPercent)%   🛏 \(store.sleepDurationText)")
+                                        .font(ImprovingFont.caption(12.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.right").font(.system(size: 12)).foregroundColor(BevelColors.textMuted)
+                            }
+                            Text("Ver cronología")
+                                .font(ImprovingFont.cardTitle(14))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(Capsule().fill(Color(hex: 0x2E375C)))
+                        }
+                        .padding(16)
+                    }
+
+                    // All 9 Exact Tendencias Cards from Screenshots 08–09
                     Text("Tendencias")
-                        .font(ImprovingFont.sectionTitle(17))
+                        .font(ImprovingFont.sectionTitle(18))
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.top, 4)
 
-                    ForEach(store.sleepTrends) { item in
+                    let sleepIcons = ["zzz", "clock.fill", "moon.fill", "moon.stars.fill", "heart.fill", "building.columns.fill", "clock", "sunrise.fill", "hourglass"]
+                    ForEach(Array(store.sleepTrends.enumerated()), id: \.element.id) { idx, item in
                         BevelTrendLightCard(
                             trend: item,
-                            systemIcon: "moon.fill",
+                            systemIcon: sleepIcons[idx % sleepIcons.count],
                             onClick: { onOpenTrend?(item) }
                         )
                     }
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
-    }
-
-    private func stageRow(label: String, pct: String, duration: String, color: Color) -> some View {
-        HStack {
-            Circle().fill(color).frame(width: 10, height: 10)
-            Text(label)
-                .font(ImprovingFont.body(13.5))
-                .foregroundColor(BevelColors.textPrimary)
-            Spacer()
-            Text(pct)
-                .font(ImprovingFont.caption(12.5))
-                .foregroundColor(BevelColors.textSecondary)
-                .padding(.trailing, 8)
-            Text(duration)
-                .font(ImprovingFont.cardTitle(13.5))
-                .monospacedDigit()
-                .foregroundColor(BevelColors.textPrimary)
-        }
     }
 }
 
@@ -403,18 +448,18 @@ struct SleepNeedDetailScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                DetailSheetHeader(title: "Planificador de Sueño", onBack: onBack)
+                DetailSheetHeader(title: "Necesidad de sueño", onBack: onBack)
 
                 BevelCard {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("NECESIDAD DE SUEÑO ESTA NOCHE")
                             .font(ImprovingFont.microLabel(11))
-                            .foregroundColor(BevelColors.indigoEnd)
-                        Text("8 h 26 min")
+                            .foregroundColor(BevelColors.periwinkleStart)
+                        Text("7 h 22 min")
                             .font(ImprovingFont.displayLarge(32))
                             .monospacedDigit()
                             .foregroundColor(BevelColors.textPrimary)
-                        Text("Calculado por WHOOP 5.0 según tu esfuerzo de hoy (\(store.strainPercent)%) y deuda acumulada.")
+                        Text("Recalculado automáticamente con tu esfuerzo de hoy (\(store.strainPercent)%) y balance acumulado.")
                             .font(ImprovingFont.caption(12.5))
                             .foregroundColor(BevelColors.textSecondary)
 
@@ -422,32 +467,9 @@ struct SleepNeedDetailScreen: View {
 
                         planRow("Necesidad basal fisiológica", "7 h 45 m", BevelColors.textPrimary)
                         planRow("+ Esfuerzo físico de hoy (\(store.strainPercent)%)", "+ 0 h 29 m", BevelColors.orangeEnd)
-                        planRow("+ Deuda de sueño reciente", "+ 0 h 12 m", BevelColors.coralHigh)
-                        planRow("− Siestas registradas hoy", "− 0 h 00 m", BevelColors.emeraldEnd)
+                        planRow("− Superávit reciente", "− 0 h 52 m", BevelColors.greenPrimary)
                     }
                     .padding(18)
-                }
-                .padding(.horizontal, 16)
-
-                HStack(spacing: 12) {
-                    BevelCard(cornerRadius: 18) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Hora ideal dormir").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textSecondary)
-                            Text("23:05").font(ImprovingFont.displayLarge(24)).monospacedDigit().foregroundColor(BevelColors.indigoEnd)
-                            Text("Ventana 22:50 – 23:20").font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.emeraldEnd)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                    }
-                    BevelCard(cornerRadius: 18) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Despertar óptimo").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textSecondary)
-                            Text("07:31").font(ImprovingFont.displayLarge(24)).monospacedDigit().foregroundColor(BevelColors.textPrimary)
-                            Text("100% meta cumplida").font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.emeraldEnd)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                    }
                 }
                 .padding(.horizontal, 16)
 
@@ -457,7 +479,7 @@ struct SleepNeedDetailScreen: View {
                             Text("Alarma Háptica Inteligente")
                                 .font(ImprovingFont.cardTitle(15))
                                 .foregroundColor(BevelColors.textPrimary)
-                            Text("Vibra en fase de sueño ligero o al alcanzar el 100% de tu objetivo")
+                            Text("Despertar óptimo a las 7:40 en fase de sueño ligero")
                                 .font(ImprovingFont.caption(12))
                                 .foregroundColor(BevelColors.textSecondary)
                         }
@@ -466,7 +488,7 @@ struct SleepNeedDetailScreen: View {
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 140)
         }
         .background(BevelColors.canvas)
     }
@@ -480,154 +502,140 @@ struct SleepNeedDetailScreen: View {
     }
 }
 
-// MARK: - 4. Estrés Detail Screen (1:1 Android Port)
+// MARK: - 4. Estrés Detail Screen (Literal Match to Screenshots 10, 11, 12)
 
 struct EstresScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
+    var onOpenTrend: ((EffortTrendItem) -> Void)? = nil
 
     var body: some View {
         let pts = store.currentDaySummary?.stressSeries24h ?? []
-        let stressMax = pts.map { Int($0.rounded()) }.max() ?? 77
-        let stressMin = pts.map { Int($0.rounded()) }.min() ?? 2
-        let stressAvg = pts.isEmpty ? 35 : Int((pts.reduce(0, +) / Double(pts.count)).rounded())
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 AtmosphericHeroHeader(
-                    title: "Puntuación de estrés",
-                    subtitle: store.dateLabel,
+                    title: "Estrés",
+                    subtitle: store.fullDateLabel,
+                    style: .stress,
                     onBack: onBack
                 ) {
-                    StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 162, isHeroGauge: true, hasData: store.dataAvailability.hasStressData)
+                    StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 176, isHeroGauge: true, hasData: store.dataAvailability.hasStressData)
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    // Instant / Avg VFC & FC cards
+                    // Headered Cards: VFC media | FC media (Screenshot 10)
                     HStack(spacing: 12) {
-                        BevelCard(cornerRadius: 18) {
-                            HStack(spacing: 10) {
-                                Text("📈")
-                                    .font(.system(size: 16))
-                                    .frame(width: 36, height: 36)
-                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.trackGroove))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(alignment: .firstTextBaseline, spacing: 2) {
-                                        Text("\(Int(store.hrvMs))")
-                                            .font(ImprovingFont.metricHero(20))
-                                            .foregroundColor(BevelColors.textPrimary)
-                                        Text(" / 51 ms")
-                                            .font(ImprovingFont.caption(11.5))
-                                            .foregroundColor(BevelColors.textSecondary)
-                                    }
-                                    Text("VFC (inst. / prom.)")
-                                        .font(ImprovingFont.caption(11))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                        }
-
-                        BevelCard(cornerRadius: 18) {
-                            HStack(spacing: 10) {
-                                Text("❤️")
-                                    .font(.system(size: 16))
-                                    .frame(width: 36, height: 36)
-                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.trackGroove))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(alignment: .firstTextBaseline, spacing: 2) {
-                                        Text("\(store.liveHrBpm > 0 ? store.liveHrBpm : 68)")
-                                            .font(ImprovingFont.metricHero(20))
-                                            .foregroundColor(BevelColors.textPrimary)
-                                        Text(" / 70 ppm")
-                                            .font(ImprovingFont.caption(11.5))
-                                            .foregroundColor(BevelColors.textSecondary)
-                                    }
-                                    Text("FC (inst. / prom.)")
-                                        .font(ImprovingFont.caption(11))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                        }
+                        HeaderedMetricCard(icon: "waveform.path.ecg", title: "VFC media", value: "\(Int(store.hrvMs))", unit: "ms")
+                        HeaderedMetricCard(icon: "heart.fill", title: "FC media", value: "\(store.liveHrBpm > 0 ? store.liveHrBpm : 63)", unit: "ppm")
                     }
 
-                    // Coaching Card
-                    BevelCard {
-                        Text(store.activeCoachingSummary)
-                            .font(ImprovingFont.body(13))
-                            .foregroundColor(BevelColors.textPrimary)
-                            .padding(16)
-                    }
-
-                    // 24h Stress Timeline Card
-                    Text("Línea de tiempo")
-                        .font(ImprovingFont.sectionTitle(17))
-                        .foregroundColor(BevelColors.textPrimary)
-
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(spacing: 18) {
-                                statSmall("\(stressMax)", "Máximo", BevelColors.amberStart)
-                                statSmall("\(stressMin)", "Mínimo", BevelColors.emeraldEnd)
-                                statSmall("\(stressAvg)", "Promedio", BevelColors.emeraldEnd)
+                    // Coaching Card (Screenshot 10)
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("🧠 Estrés contenido")
+                                    .font(ImprovingFont.cardTitle(15))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(BevelColors.textMuted)
                             }
-
-                            Timeline24hChart(points: pts, isEnergy: false, showSleepTopBar: true)
-
-                            Divider().background(BevelColors.divider)
-
-                            stressZoneBar(label: "Alto", pct: 4, duration: "1h 1m", color: BevelColors.coralHigh)
-                            stressZoneBar(label: "Med.", pct: 18, duration: "4h 12m", color: BevelColors.amberStart)
-                            stressZoneBar(label: "Bajo", pct: 78, duration: "18h 10m", color: BevelColors.emeraldEnd)
+                            Text("El Estrés estuvo en \(store.stressScore) de media hoy, con 30 minutos en nivel alto dentro de la ventana diaria; el resto se repartió entre 7 horas y 24 minutos en nivel medio y 13 horas y 54 minutos en nivel bajo.")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
                         }
                         .padding(16)
+                    }
+
+                    // Full-width 24h Stress Graph (Screenshot 11)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.fullDateLabel)
+                            .font(ImprovingFont.cardTitle(16))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text("ESTRÉS DE HOY")
+                            .font(ImprovingFont.microLabel(11))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+                    .padding(.top, 4)
+
+                    Timeline24hChart(points: pts, isEnergy: false, showSleepTopBar: true)
+
+                    HStack {
+                        Spacer()
+                        Text("Duración:  ")
+                            .font(ImprovingFont.caption(12.5))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text("21:48:00")
+                            .font(ImprovingFont.cardTitle(13.5))
+                            .monospacedDigit()
+                            .foregroundColor(BevelColors.textPrimary)
+                    }
+
+                    // 3 Individual Zone Pill Cards (Screenshots 11 & 12)
+                    stressZonePill(label: "Alto", pct: 2, duration: "0:30:00", color: BevelColors.redAlert)
+                    stressZonePill(label: "Med.", pct: 34, duration: "7:24:00", color: BevelColors.amberStart)
+                    stressZonePill(label: "Nivel bajo", pct: 64, duration: "13:54:00", color: BevelColors.tealLow)
+
+                    // All 3 Exact Tendencias Cards (Screenshot 12)
+                    Text("Tendencias")
+                        .font(ImprovingFont.sectionTitle(18))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .padding(.top, 6)
+
+                    let stressIcons = ["speedometer", "brain.head.profile", "moon.zzz.fill"]
+                    ForEach(Array(store.stressTrends.enumerated()), id: \.element.id) { idx, item in
+                        BevelTrendLightCard(
+                            trend: item,
+                            systemIcon: stressIcons[idx % stressIcons.count],
+                            onClick: { onOpenTrend?(item) }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
     }
 
-    private func statSmall(_ val: String, _ label: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(val).font(ImprovingFont.metricHero(22)).monospacedDigit().foregroundColor(color)
-            Text(label).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textSecondary)
-        }
-    }
+    private func stressZonePill(label: String, pct: Int, duration: String, color: Color) -> some View {
+        BevelCard(cornerRadius: 16) {
+            HStack(spacing: 10) {
+                Text(label)
+                    .font(ImprovingFont.cardTitle(14))
+                    .foregroundColor(BevelColors.textPrimary)
+                    .frame(width: 58, alignment: .leading)
 
-    private func stressZoneBar(label: String, pct: Int, duration: String, color: Color) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(ImprovingFont.caption(12))
-                .foregroundColor(BevelColors.textSecondary)
-                .frame(width: 36, alignment: .leading)
-            Text("\(pct) %")
-                .font(ImprovingFont.caption(12))
-                .fontWeight(.bold)
-                .foregroundColor(BevelColors.textPrimary)
-                .frame(width: 36, alignment: .leading)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(BevelColors.trackGroove).frame(height: 6)
-                    Capsule().fill(color).frame(width: geo.size.width * CGFloat(pct) / 100.0, height: 6)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(color.opacity(0.18)).frame(height: 8)
+                        Capsule().fill(color).frame(width: max(6, geo.size.width * CGFloat(pct) / 100.0), height: 8)
+                    }
+                    .frame(maxHeight: .infinity)
                 }
-                .frame(maxHeight: .infinity)
+                .frame(height: 16)
+
+                Text("\(pct)%")
+                    .font(ImprovingFont.cardTitle(14))
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textPrimary)
+                    .frame(width: 38, alignment: .trailing)
+
+                Text(duration)
+                    .font(ImprovingFont.caption(13.5))
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textSecondary)
+                    .frame(width: 62, alignment: .trailing)
             }
-            .frame(height: 16)
-            Text(duration)
-                .font(ImprovingFont.caption(12))
-                .foregroundColor(BevelColors.textSecondary)
-                .frame(width: 52, alignment: .trailing)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 14)
         }
     }
 }
 
-// MARK: - 5. Energía Detail Screen (1:1 Android Port)
+// MARK: - 5. Reservas de Energía Detail Screen (Literal Match to Screenshots 13 & 14)
 
 struct EnergiaScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -638,131 +646,182 @@ struct EnergiaScreen: View {
         let stressPts = store.currentDaySummary?.stressSeries24h ?? []
         let chargedPct = min(98, max(20, store.sleepPercent - 16))
         let drainedPct = max(12, chargedPct - store.energyPercent + 24)
+        let batteryFillColor: Color = store.energyPercent >= 55 ? BevelColors.greenPrimary : BevelColors.amberStart
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 AtmosphericHeroHeader(
-                    title: "Banco de energía",
-                    subtitle: store.dateLabel,
-                    onBack: onBack
+                    title: "Reservas de energía",
+                    subtitle: store.fullDateLabel,
+                    style: .energy,
+                    onBack: onBack,
+                    rightPrimaryIcon: "ellipsis",
+                    rightSecondaryIcon: "info.circle"
                 ) {
-                    VStack(spacing: 12) {
-                        HStack(spacing: 3) {
+                    VStack(spacing: 14) {
+                        // 3D Translucent Hatched Battery Widget (Screenshot 13)
+                        HStack(spacing: 4) {
                             ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                    .fill(BevelColors.card)
-                                    .frame(width: 194, height: 84)
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .fill(batteryFillColor.opacity(0.22))
+                                    .frame(width: 196, height: 88)
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                            .strokeBorder(BevelColors.cardBorder, lineWidth: 1.5)
+                                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                            .strokeBorder(batteryFillColor.opacity(0.45), lineWidth: 1.8)
                                     )
+                                    .shadow(color: batteryFillColor.opacity(0.28), radius: 18)
 
-                                RoundedRectangle(cornerRadius: 19, style: .continuous)
+                                RoundedRectangle(cornerRadius: 17, style: .continuous)
                                     .fill(
                                         LinearGradient(
-                                            colors: [BevelColors.emeraldStart, BevelColors.emeraldEnd],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
+                                            colors: [batteryFillColor, batteryFillColor.opacity(0.85)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
                                         )
                                     )
-                                    .frame(width: max(20, 182 * CGFloat(store.energyPercent) / 100.0), height: 72)
-                                    .padding(.leading, 6)
+                                    .frame(width: max(22, 188 * CGFloat(store.energyPercent) / 100.0), height: 80)
+                                    .padding(.leading, 4)
+
+                                VStack(spacing: 2) {
+                                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                                        Text("\(store.energyPercent)")
+                                            .font(ImprovingFont.displayLarge(34))
+                                            .monospacedDigit()
+                                            .foregroundColor(.white)
+                                        Text("%")
+                                            .font(ImprovingFont.sectionTitle(18))
+                                            .foregroundColor(.white.opacity(0.9))
+                                    }
+                                    Image(systemName: "bolt.fill")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.white.opacity(0.9))
+                                }
+                                .frame(width: 196)
                             }
+
                             RoundedRectangle(cornerRadius: 4)
-                                .fill(BevelColors.textMuted.opacity(0.45))
-                                .frame(width: 7, height: 28)
+                                .fill(Color.white.opacity(0.2))
+                                .frame(width: 7, height: 30)
                         }
 
-                        HStack(alignment: .firstTextBaseline, spacing: 2) {
-                            Text("\(store.energyPercent)")
-                                .font(ImprovingFont.displayLarge(38))
-                                .monospacedDigit()
-                                .foregroundColor(BevelColors.textPrimary)
-                            Text("%")
-                                .font(ImprovingFont.sectionTitle(20))
+                        HStack(spacing: 4) {
+                            Text("Última carga hasta")
+                                .font(ImprovingFont.caption(13))
                                 .foregroundColor(BevelColors.textSecondary)
+                            Text("\(min(store.energyPercent + 24, 96)) % a las 07:38")
+                                .font(ImprovingFont.caption(13))
+                                .fontWeight(.semibold)
+                                .foregroundColor(BevelColors.textPrimary)
                         }
-                        Text("Nivel de energía adecuado")
-                            .font(ImprovingFont.cardTitle(14.5))
-                            .foregroundColor(BevelColors.emeraldEnd)
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    // +Charged / -Drained cards
+                    // +Total cargado / -Total gastado (Screenshot 13)
                     HStack(spacing: 12) {
                         BevelCard(cornerRadius: 18) {
-                            HStack(spacing: 10) {
-                                Text("⚡")
-                                    .font(.system(size: 16))
-                                    .frame(width: 36, height: 36)
-                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.greenSoftBg))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("+\(chargedPct) %")
-                                        .font(ImprovingFont.metricHero(20))
-                                        .foregroundColor(BevelColors.emeraldEnd)
-                                    Text("Total cargado")
-                                        .font(ImprovingFont.caption(11.5))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
+                            VStack(spacing: 4) {
+                                Text("+\(chargedPct)%")
+                                    .font(ImprovingFont.metricHero(22))
+                                    .foregroundColor(BevelColors.greenPrimary)
+                                Text("Total cargado")
+                                    .font(ImprovingFont.caption(13))
+                                    .foregroundColor(BevelColors.textPrimary)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
                         }
 
                         BevelCard(cornerRadius: 18) {
-                            HStack(spacing: 10) {
-                                Text("📉")
-                                    .font(.system(size: 16))
-                                    .frame(width: 36, height: 36)
-                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.coralSoftBg))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("-\(drainedPct) %")
-                                        .font(ImprovingFont.metricHero(20))
-                                        .foregroundColor(BevelColors.coralHigh)
-                                    Text("Total gastado")
-                                        .font(ImprovingFont.caption(11.5))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
+                            VStack(spacing: 4) {
+                                Text("-\(drainedPct)%")
+                                    .font(ImprovingFont.metricHero(22))
+                                    .foregroundColor(BevelColors.coralHigh)
+                                Text("Total gastado")
+                                    .font(ImprovingFont.caption(13))
+                                    .foregroundColor(BevelColors.textPrimary)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
                         }
                     }
 
-                    // Coaching Card
-                    BevelCard {
-                        Text(store.activeCoachingSummary)
-                            .font(ImprovingFont.body(13))
-                            .foregroundColor(BevelColors.textPrimary)
+                    // Coaching Summary Card
+                    BevelCard(cornerRadius: 20) {
+                        Text("El Sueño recargó tus reservas de energía aportando +\(chargedPct) puntos; tras la carga diaria actual mantienes un \(store.energyPercent)% de reserva disponible.")
+                            .font(ImprovingFont.body(13.5))
+                            .foregroundColor(BevelColors.textSecondary)
                             .padding(16)
                     }
 
-                    // Dual Synchronized 24h Charts (Energy + Stress)
-                    Text("Línea de tiempo")
-                        .font(ImprovingFont.sectionTitle(17))
-                        .foregroundColor(BevelColors.textPrimary)
+                    // Synchronized Dual Energy + Charging Bolt Bar + Stress Chart (Screenshot 14)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.fullDateLabel)
+                            .font(ImprovingFont.cardTitle(16))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text("NIVEL DE ENERGÍA")
+                            .font(ImprovingFont.microLabel(11))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
 
-                    BevelCard {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Banco de energía")
-                                .font(ImprovingFont.cardTitle(14.5))
-                                .foregroundColor(BevelColors.textPrimary)
-                            Timeline24hChart(points: energyPts, isEnergy: true, showSleepTopBar: true)
+                    Timeline24hChart(points: energyPts, isEnergy: true, showSleepTopBar: true, fillArea: true)
 
-                            Divider().background(BevelColors.divider)
+                    // Middle Green Charging Strip with Lightning Icon (Exact Match to Screenshot 14!)
+                    HStack(spacing: 4) {
+                        Capsule().fill(BevelColors.greenPrimary).frame(height: 6)
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(BevelColors.greenPrimary)
+                        Capsule().fill(BevelColors.greenPrimary).frame(width: 72, height: 6)
+                        ForEach(0..<8, id: \.self) { i in
+                            Capsule()
+                                .fill(i % 2 == 0 ? BevelColors.greenPrimary.opacity(0.85) : BevelColors.greenSoftBg)
+                                .frame(width: i % 2 == 0 ? 4 : 10, height: 6)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 4)
 
-                            Text("Puntuación de estrés")
-                                .font(ImprovingFont.cardTitle(14.5))
-                                .foregroundColor(BevelColors.textPrimary)
-                            Timeline24hChart(points: stressPts, isEnergy: false, showSleepTopBar: false)
+                    Timeline24hChart(points: stressPts, isEnergy: false, showSleepTopBar: false)
+
+                    // Uso de energía (Screenshot 14)
+                    HStack {
+                        Text("Uso de energía")
+                            .font(ImprovingFont.sectionTitle(18))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Spacer()
+                        Text("El día anterior")
+                            .font(ImprovingFont.caption(12.5))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+                    .padding(.top, 4)
+
+                    BevelCard(cornerRadius: 20) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "moon.stars.fill")
+                                .font(.system(size: 17))
+                                .foregroundColor(BevelColors.periwinkleStart)
+                                .frame(width: 42, height: 42)
+                                .background(Circle().fill(BevelColors.indigoSoftBg))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("23:12 - 07:38").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
+                                Text("Sueño principal").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                Text("○ \(store.sleepPercent)%   🛏 \(store.sleepDurationText)")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            Spacer()
+                            Text("+\(chargedPct)%")
+                                .font(ImprovingFont.cardTitle(16))
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.greenPrimary)
                         }
                         .padding(16)
                     }
                 }
                 .padding(.horizontal, 16)
             }
-            .padding(.bottom, 120)
+            .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
     }
