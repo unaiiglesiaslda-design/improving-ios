@@ -250,7 +250,7 @@ struct BiologiaScreen: View {
         title: String,
         subtitle: String,
         subtitleColor: Color,
-        @ViewBuilder details: () -> Content
+        @ViewBuilder details: @escaping () -> Content
     ) -> some View {
         let isExpanded = expandedCategoryId == id
         return BevelCard(cornerRadius: 24) {
