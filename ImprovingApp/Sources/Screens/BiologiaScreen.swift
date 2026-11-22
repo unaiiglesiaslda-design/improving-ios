@@ -9,12 +9,40 @@ struct BiologiaScreen: View {
 
     var body: some View {
         let chronologicalAge = store.userProfile.ageYears
-        let bioDelta = -2.4
+        let recent30 = store.trailingCalendarSummaries(days: 30)
+        let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
+        let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
+        let sleepVals = recent30.compactMap { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
+        let stepsVals = recent30.compactMap { $0.summary?.stepsCount }
+        let vo2Val = store.latestVo2Max
+
+        let hasBioBase = !rhrVals.isEmpty || !hrvVals.isEmpty || !sleepVals.isEmpty || vo2Val != nil
+        let meanRhr = rhrVals.isEmpty ? nil : (rhrVals.reduce(0, +) / Double(rhrVals.count))
+        let meanHrv = hrvVals.isEmpty ? nil : (hrvVals.reduce(0, +) / Double(hrvVals.count))
+        let meanSleep = sleepVals.isEmpty ? nil : (sleepVals.reduce(0, +) / Double(sleepVals.count))
+        let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
+
+        let bioDelta: Double = {
+            guard hasBioBase else { return 0 }
+            var delta = 0.0
+            if let r = meanRhr { delta += (r - 58.0) * 0.12 }
+            if let h = meanHrv { delta += (65.0 - h) * 0.04 }
+            if let s = meanSleep { delta += (7.5 - s) * 0.45 }
+            if let v = vo2Val { delta += (42.0 - v) * 0.14 }
+            return AppleHealthExportImporter.round1(min(max(delta, -6.0), 6.0))
+        }()
         let bioAge = max(16.0, chronologicalAge + bioDelta)
+
+        let hrvSeries = recent30.map { $0.summary?.hrvMs }
+        let rhrSeries = recent30.map { $0.summary?.restingHrBpm }
+        let weightSeries = recent30.map { $0.summary?.bodyWeightKg }
+        let fatSeries = recent30.map { $0.summary?.bodyFatPct }
+        let leanSeries = recent30.map { $0.summary?.leanMassKg }
+        let vo2Series = recent30.map { $0.summary?.vo2MaxMlKgMin }
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                // 1. Atmospheric Emerald-Teal Biological Age Hero (Screenshot 69)
+                // 1. Atmospheric Biological Age Hero (Strictly derived from real imported data!)
                 ZStack(alignment: .top) {
                     LinearGradient(
                         colors: BevelColors.isDarkMode ? [Color(hex: 0x1A2E2A), Color(hex: 0x172022), BevelColors.canvas] : [BevelColors.canvas, BevelColors.canvas],
@@ -27,20 +55,14 @@ struct BiologiaScreen: View {
                     VStack(spacing: 8) {
                         HStack {
                             Spacer()
-                            HStack(spacing: 14) {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.system(size: 15, weight: .medium))
+                            Button { onNavigate(.dispositivos) } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 15, weight: .bold))
                                     .foregroundColor(BevelColors.textPrimary)
-                                Button { onNavigate(.dispositivos) } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.system(size: 15, weight: .bold))
-                                        .foregroundColor(BevelColors.textPrimary)
-                                }
+                                    .frame(width: 40, height: 40)
+                                    .background(Circle().fill(BevelColors.glassChromeFill))
+                                    .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                             }
-                            .padding(.horizontal, 14)
-                            .frame(height: 40)
-                            .background(Capsule().fill(BevelColors.glassChromeFill))
-                            .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                         }
 
                         Text("Edad biológica")
@@ -54,7 +76,8 @@ struct BiologiaScreen: View {
                             bioAgeYears: bioAge,
                             chronoAgeYears: chronologicalAge,
                             diffYears: bioDelta,
-                            sampledDays: max(store.realHistory.count, 730)
+                            sampledDays: store.activeHistory.count,
+                            hasData: hasBioBase
                         )
                     }
                     .padding(.horizontal, 16)
@@ -62,177 +85,156 @@ struct BiologiaScreen: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
-                    // 2. Confianza Card (Screenshot 69)
-                    HStack(spacing: 12) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(BevelColors.greenPrimary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Confianza del 88 %")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.greenPrimary)
-                            Text("Estimación de edad de alta calidad con lagunas menores")
-                                .font(ImprovingFont.caption(12.5))
-                                .foregroundColor(BevelColors.textSecondary)
-                        }
-                        Spacer()
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 12))
-                            .foregroundColor(BevelColors.textMuted)
-                    }
-                    .padding(16)
-                    .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(BevelColors.greenSoftBg))
-                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(BevelColors.greenSoftBorder.opacity(0.6), lineWidth: 0.9))
-
-                    // 3. Biomarcadores de edad — 5 Exact Expandable Categories with Dot Range Sliders (Screenshots 70, 72–74)
                     Text("Biomarcadores de edad")
                         .font(ImprovingFont.sectionTitle(18.5))
                         .foregroundColor(BevelColors.textPrimary)
 
-                    // Category 1: Sueño
-                    bioCategoryCard(
-                        id: "sleep",
-                        icon: "moon.fill",
-                        ringPrimary: BevelColors.bioTeal,
-                        ringSecondary: BevelColors.trackGroove,
-                        title: "Sueño",
-                        subtitle: "1,2 años menos",
-                        subtitleColor: BevelColors.bioTeal
-                    ) {
-                        BioDotRangeSlider(title: "Duración del sueño", valueLabel: store.sleepDurationText, minLabel: "5 h", maxLabel: "11 h", deltaText: "-0,0", deltaUnit: "años", positionFrac: 0.44, fillStartFrac: 0.44, fillEndFrac: 0.44, accentColor: BevelColors.textPrimary)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Regularidad del sueño", valueLabel: "88%", minLabel: "30%", maxLabel: "100%", deltaText: "-1,2", deltaUnit: "años", positionFrac: 0.80, fillStartFrac: 0.56, fillEndFrac: 0.96, accentColor: BevelColors.bioTeal)
+                    // Category 1: Sueño (only if real sleep data exists)
+                    if let avgS = meanSleep {
+                        let hrs = Int(avgS)
+                        let mins = Int(((avgS - Double(hrs)) * 60).rounded())
+                        bioCategoryCard(
+                            id: "sleep",
+                            icon: "moon.fill",
+                            ringPrimary: BevelColors.bioTeal,
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Sueño",
+                            subtitle: "\(hrs) h \(String(format: "%02d", mins)) min promedio",
+                            subtitleColor: BevelColors.bioTeal
+                        ) {
+                            BioDotRangeSlider(
+                                title: "Duración media (30 d)",
+                                valueLabel: "\(hrs) h \(String(format: "%02d", mins)) min",
+                                minLabel: "5 h",
+                                maxLabel: "10 h",
+                                deltaText: "",
+                                deltaUnit: "",
+                                positionFrac: min(max((avgS - 5.0) / 5.0, 0.05), 0.95),
+                                fillStartFrac: 0.40,
+                                fillEndFrac: 0.80,
+                                accentColor: BevelColors.bioTeal
+                            )
+                        }
                     }
 
-                    // Category 2: Actividad
-                    bioCategoryCard(
-                        id: "activity",
-                        icon: "figure.run",
-                        ringPrimary: BevelColors.amberStart,
-                        ringSecondary: BevelColors.bioTeal,
-                        title: "Actividad",
-                        subtitle: "0,7 años menos",
-                        subtitleColor: BevelColors.bioTeal
-                    ) {
-                        BioDotRangeSlider(title: "Número de pasos", valueLabel: String(format: "%.2fk", Double(store.stepsCount) / 1000.0), minLabel: "0", maxLabel: "16k", deltaText: "-0,4", deltaUnit: "años", positionFrac: 0.72, fillStartFrac: 0.50, fillEndFrac: 0.75, accentColor: BevelColors.bioTeal)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Zonas 2-3", valueLabel: "185m", minLabel: "0m", maxLabel: "300m", deltaText: "-0,3", deltaUnit: "años", positionFrac: 0.62, fillStartFrac: 0.45, fillEndFrac: 0.68, accentColor: BevelColors.bioTeal)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Zonas 4-5", valueLabel: "22m", minLabel: "0m", maxLabel: "60m", deltaText: "+0,2", deltaUnit: "años", positionFrac: 0.35, fillStartFrac: 0.15, fillEndFrac: 0.42, accentColor: BevelColors.amberStart)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Entrenamiento de Fuerza", valueLabel: "42m", minLabel: "0m", maxLabel: "120m", deltaText: "-0,2", deltaUnit: "años", positionFrac: 0.36, fillStartFrac: 0.20, fillEndFrac: 0.90, accentColor: BevelColors.bioTeal)
+                    // Category 2: Actividad (only if steps or zones exist)
+                    if let avgSt = meanSteps {
+                        bioCategoryCard(
+                            id: "activity",
+                            icon: "figure.run",
+                            ringPrimary: BevelColors.bioTeal,
+                            ringSecondary: BevelColors.amberStart,
+                            title: "Actividad",
+                            subtitle: "\(avgSt) pasos/día (30 d)",
+                            subtitleColor: BevelColors.bioTeal
+                        ) {
+                            BioDotRangeSlider(
+                                title: "Número de pasos medio",
+                                valueLabel: String(format: "%.1fk", Double(avgSt) / 1000.0),
+                                minLabel: "0",
+                                maxLabel: "16k",
+                                deltaText: "",
+                                deltaUnit: "",
+                                positionFrac: min(max(Double(avgSt) / 16000.0, 0.04), 0.96),
+                                fillStartFrac: 0.48,
+                                fillEndFrac: 0.85,
+                                accentColor: BevelColors.bioTeal
+                            )
+                        }
                     }
 
-                    // Category 3: Fitness
-                    bioCategoryCard(
-                        id: "fitness",
-                        icon: "heart.fill",
-                        ringPrimary: BevelColors.bioTeal,
-                        ringSecondary: BevelColors.amberStart,
-                        title: "Fitness",
-                        subtitle: "0,1 años menos",
-                        subtitleColor: BevelColors.textSecondary
-                    ) {
-                        BioDotRangeSlider(title: "VO₂ máx.", valueLabel: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.vo2Max), minLabel: "15", maxLabel: "65", deltaText: "+1,4", deltaUnit: "años", positionFrac: 0.60, fillStartFrac: 0.0, fillEndFrac: 0.65, accentColor: BevelColors.amberStart)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "FC en reposo", valueLabel: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.restingHrBpm), minLabel: "40", maxLabel: "100", deltaText: "-1,5", deltaUnit: "años", positionFrac: 0.16, fillStartFrac: 0.0, fillEndFrac: 0.34, accentColor: BevelColors.bioTeal)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Porcentaje de masa magra del cuerpo", valueLabel: "83,8%", minLabel: "50%", maxLabel: "95%", deltaText: "—", deltaUnit: "años", positionFrac: 0.75, fillStartFrac: 0.55, fillEndFrac: 0.80, accentColor: BevelColors.textMuted)
-                    }
-
-                    // Category 4: Estilo de vida
-                    bioCategoryCard(
-                        id: "lifestyle",
-                        icon: "figure.stand",
-                        ringPrimary: BevelColors.textMuted,
-                        ringSecondary: BevelColors.trackGroove,
-                        title: "Estilo de vida",
-                        subtitle: "0,0 años menos",
-                        subtitleColor: BevelColors.textSecondary
-                    ) {
-                        BioDotRangeSlider(title: "Nutrición", valueLabel: "\(store.foodQualityScore)", minLabel: "0", maxLabel: "100", deltaText: "-0,2", deltaUnit: "años", positionFrac: 0.86, fillStartFrac: 0.65, fillEndFrac: 0.90, accentColor: BevelColors.bioTeal)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Efectos del tabaco", valueLabel: "No fumador", minLabel: "No fumador", maxLabel: "Fuerte", deltaText: "+0,0", deltaUnit: "años", positionFrac: 0.02, fillStartFrac: 0.0, fillEndFrac: 0.02, accentColor: BevelColors.textSecondary)
-                        Divider().background(BevelColors.divider)
-                        BioDotRangeSlider(title: "Alcohol", valueLabel: "0", minLabel: "0", maxLabel: "20", deltaText: "+0,0", deltaUnit: "años", positionFrac: 0.02, fillStartFrac: 0.0, fillEndFrac: 0.04, accentColor: BevelColors.textSecondary)
-                    }
-
-                    // Category 5: Sangre (PhenoAge 8 Markers — Screenshot 74)
-                    bioCategoryCard(
-                        id: "blood",
-                        icon: "flask.fill",
-                        ringPrimary: BevelColors.bioTeal,
-                        ringSecondary: BevelColors.bioTeal,
-                        title: "Sangre",
-                        subtitle: "7,1 años menos",
-                        subtitleColor: BevelColors.bioTeal
-                    ) {
-                        let markers: [(String, String, Double)] = [
-                            ("Albúmina", "4,4 g/dL", 0.56),
-                            ("Creatina", "1,1 mg/dL", 0.64),
-                            ("Glucosa", "76 mg/dL", 0.30),
-                            ("Fosfatasa alcalina (ALP)", "68 U/L", 0.42),
-                            ("% de linfocitos", "33,6%", 0.50),
-                            ("Volumen corpuscular medio (MCV)", "90,6 fL", 0.58),
-                            ("Índice de distribución eritrocitaria (RDW)", "11,6%", 0.38),
-                            ("Recuento de glóbulos blancos (WBC)", "5,4 K/μL", 0.45),
-                        ]
-                        ForEach(Array(markers.enumerated()), id: \.offset) { idx, m in
-                            BioDotRangeSlider(title: m.0, valueLabel: m.1, minLabel: "", maxLabel: "", deltaText: "", deltaUnit: "", positionFrac: m.2, fillStartFrac: 0.25, fillEndFrac: 0.75, accentColor: BevelColors.bioTeal, showMinMax: false, statusBadgeText: "En el rango")
-                            if idx < markers.count - 1 {
-                                Divider().background(BevelColors.divider)
+                    // Category 3: Fitness (only showing recorded sub-biomarkers)
+                    if meanRhr != nil || vo2Val != nil {
+                        bioCategoryCard(
+                            id: "fitness",
+                            icon: "heart.fill",
+                            ringPrimary: BevelColors.bioTeal,
+                            ringSecondary: BevelColors.amberStart,
+                            title: "Fitness",
+                            subtitle: meanRhr.map { String(format: "FCR media %.1f ppm", locale: Locale(identifier: "es_ES"), $0) } ?? "VO₂ máx. registrado",
+                            subtitleColor: BevelColors.textSecondary
+                        ) {
+                            if let v = vo2Val {
+                                BioDotRangeSlider(
+                                    title: "VO₂ máx.",
+                                    valueLabel: String(format: "%.1f", locale: Locale(identifier: "es_ES"), v),
+                                    minLabel: "20",
+                                    maxLabel: "65",
+                                    deltaText: "",
+                                    deltaUnit: "",
+                                    positionFrac: min(max((v - 20.0) / 45.0, 0.05), 0.95),
+                                    fillStartFrac: 0.45,
+                                    fillEndFrac: 0.90,
+                                    accentColor: BevelColors.amberStart
+                                )
+                            }
+                            if let r = meanRhr {
+                                if vo2Val != nil { Divider().background(BevelColors.divider) }
+                                BioDotRangeSlider(
+                                    title: "FC en reposo (30 d)",
+                                    valueLabel: String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), r),
+                                    minLabel: "40",
+                                    maxLabel: "90",
+                                    deltaText: "",
+                                    deltaUnit: "",
+                                    positionFrac: min(max((r - 40.0) / 50.0, 0.05), 0.95),
+                                    fillStartFrac: 0.05,
+                                    fillEndFrac: 0.35,
+                                    accentColor: BevelColors.bioTeal
+                                )
                             }
                         }
                     }
 
-                    // 4. Otros biomarcadores (Exact 7 Cards from Screenshot 71)
-                    HStack {
-                        Text("Otros biomarcadores")
-                            .font(ImprovingFont.sectionTitle(18.5))
-                            .foregroundColor(BevelColors.textPrimary)
-                        Spacer()
-                        Text("Editar").font(ImprovingFont.caption(13)).underline().foregroundColor(BevelColors.textSecondary)
+                    // 4. Otros biomarcadores (Strictly real readings — omit unrecorded body/blood metrics!)
+                    Text("Otros biomarcadores")
+                        .font(ImprovingFont.sectionTitle(18.5))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .padding(.top, 4)
+
+                    if let w = store.latestBodyWeightKg {
+                        otherBioCard(title: "Peso", statusText: "Registrado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), w), lineColor: BevelColors.textSecondary, points: weightSeries) { onNavigate(.dispositivos) }
                     }
-                    .padding(.top, 4)
-
-                    otherBioCard(title: "Peso", statusIcon: "arrow.down.circle.fill", statusText: "Ha bajado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), store.userProfile.weightKg), lineColor: BevelColors.textSecondary, points: [81.4, 81.1, 80.9, 80.7, store.userProfile.weightKg]) { onNavigate(.dispositivos) }
-                    otherBioCard(title: "VFC histórico", statusIcon: "arrow.right.circle.fill", statusText: "Estable", statusColor: BevelColors.textSecondary, value: String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), store.hrvMs), lineColor: BevelColors.textSecondary, points: [70, 72, 71, 79, 80, 77, store.hrvMs]) { onSelectHealthMetric(.hrv) }
-                    otherBioCard(title: "Históricos FCR", statusIcon: nil, statusText: "Excelente", statusColor: BevelColors.skyBlue, value: String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), store.restingHrBpm), lineColor: BevelColors.skyBlue, points: [53, 51, 51, 48, 48, 49, store.restingHrBpm]) { onSelectHealthMetric(.restingHeartRate) }
-                    otherBioCard(title: "Grasa corporal", statusIcon: nil, statusText: "Normal", statusColor: BevelColors.textSecondary, value: "16,2 %", lineColor: BevelColors.textMuted, points: [16.5, 16.4, 16.3, 16.2]) { onNavigate(.dispositivos) }
-                    otherBioCard(title: "Masa magra", statusIcon: nil, statusText: "Normal", statusColor: BevelColors.textSecondary, value: "67,5 kg", lineColor: BevelColors.textMuted, points: [67.2, 67.3, 67.4, 67.5]) { onNavigate(.dispositivos) }
-                    otherBioCard(title: "VO₂ máx.", statusIcon: nil, statusText: "Aceptable", statusColor: BevelColors.amberStart, value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.vo2Max), lineColor: BevelColors.amberStart, points: [42.2, 43.4, 43.9, store.vo2Max]) { onNavigate(.cardioMetricDetail) }
-
-                    // Presión arterial with green layered zone widget (Screenshot 71)
-                    BevelCard(cornerRadius: 20) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Presión arterial").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
-                                HStack(spacing: 5) {
-                                    Text("No elevada").font(ImprovingFont.caption(13)).fontWeight(.semibold).foregroundColor(BevelColors.greenPrimary)
-                                    Text("·").foregroundColor(BevelColors.textMuted)
-                                    Text("99/51 mmHg").font(ImprovingFont.caption(13)).fontWeight(.semibold).foregroundColor(BevelColors.textPrimary)
+                    if store.dataAvailability.hasHrvData || meanHrv != nil {
+                        let val = store.dataAvailability.hasHrvData ? store.hrvMs : (meanHrv ?? 0)
+                        otherBioCard(title: "VFC histórico", statusText: "Real", statusColor: BevelColors.greenPrimary, value: String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), val), lineColor: BevelColors.greenPrimary, points: hrvSeries) { onSelectHealthMetric(.hrv) }
+                    }
+                    if store.dataAvailability.hasRestingHrData || meanRhr != nil {
+                        let val = store.dataAvailability.hasRestingHrData ? store.restingHrBpm : (meanRhr ?? 0)
+                        otherBioCard(title: "Históricos FCR", statusText: "Real", statusColor: BevelColors.skyBlue, value: String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), val), lineColor: BevelColors.skyBlue, points: rhrSeries) { onSelectHealthMetric(.restingHeartRate) }
+                    }
+                    if let fat = store.latestBodyFatPct {
+                        otherBioCard(title: "Grasa corporal", statusText: "Registrado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f %%", locale: Locale(identifier: "es_ES"), fat), lineColor: BevelColors.textMuted, points: fatSeries) { onNavigate(.dispositivos) }
+                    }
+                    if let lean = store.latestLeanMassKg {
+                        otherBioCard(title: "Masa magra", statusText: "Registrado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), lean), lineColor: BevelColors.textMuted, points: leanSeries) { onNavigate(.dispositivos) }
+                    }
+                    if let v = vo2Val {
+                        otherBioCard(title: "VO₂ máx.", statusText: "Registrado", statusColor: BevelColors.amberStart, value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), v), lineColor: BevelColors.amberStart, points: vo2Series) { onNavigate(.cardioMetricDetail) }
+                    }
+                    if let bp = store.latestBloodPressure {
+                        BevelCard(cornerRadius: 20) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Presión arterial").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                    Text("\(bp.sys)/\(bp.dia) mmHg")
+                                        .font(ImprovingFont.caption(13.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(BevelColors.greenPrimary)
                                 }
+                                Spacer()
                             }
-                            Spacer()
-                            VStack(spacing: 2) {
-                                Capsule().fill(Color.white.opacity(0.1)).frame(width: 72, height: 3)
-                                Capsule().fill(Color.white.opacity(0.14)).frame(width: 72, height: 3)
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 5).fill(BevelColors.greenPrimary.opacity(0.65)).frame(width: 72, height: 22)
-                                    Circle().fill(BevelColors.card).frame(width: 9, height: 9).overlay(Circle().strokeBorder(BevelColors.greenPrimary, lineWidth: 2))
-                                }
-                            }
+                            .padding(16)
                         }
-                        .padding(16)
                     }
 
-                    Button { onNavigate(.dispositivos) } label: {
-                        HStack(spacing: 4) {
-                            Text("Ver todo").font(ImprovingFont.caption(13.5)).foregroundColor(BevelColors.textSecondary)
-                            Image(systemName: "chevron.right").font(.system(size: 11)).foregroundColor(BevelColors.textMuted)
+                    if !hasBioBase {
+                        BevelCard(cornerRadius: 20) {
+                            Text("Importa tus datos de Apple Health o conecta tu dispositivo en Ajustes para calcular tu biología real sin valores inventados.")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .padding(16)
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -282,7 +284,7 @@ struct BiologiaScreen: View {
                                 .font(ImprovingFont.cardTitle(16))
                                 .foregroundColor(BevelColors.textPrimary)
                             Text(subtitle)
-                                .font(ImprovingFont.cardTitle(14.5))
+                                .font(ImprovingFont.cardTitle(14))
                                 .foregroundColor(subtitleColor)
                         }
                         Spacer()
@@ -301,24 +303,23 @@ struct BiologiaScreen: View {
         }
     }
 
-    private func otherBioCard(title: String, statusIcon: String?, statusText: String, statusColor: Color, value: String, lineColor: Color, points: [Double], onClick: @escaping () -> Void) -> some View {
+    private func otherBioCard(title: String, statusText: String, statusColor: Color, value: String, lineColor: Color, points: [Double?], onClick: @escaping () -> Void) -> some View {
         Button(action: onClick) {
             BevelCard(cornerRadius: 20) {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(title).font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
                         HStack(spacing: 5) {
-                            if let ic = statusIcon {
-                                Image(systemName: ic).font(.system(size: 12)).foregroundColor(statusColor)
-                            }
                             Text(statusText).font(ImprovingFont.caption(13)).fontWeight(.semibold).foregroundColor(statusColor)
                             Text("·").foregroundColor(BevelColors.textMuted)
                             Text(value).font(ImprovingFont.caption(13)).fontWeight(.semibold).monospacedDigit().foregroundColor(BevelColors.textPrimary)
                         }
                     }
                     Spacer()
-                    TrendSparklineWithBand(points: points, lineColor: lineColor, fillUnder: true, showGlowDot: true)
-                        .frame(width: 82, height: 34)
+                    if points.compactMap({ $0 }).count >= 2 {
+                        TrendSparklineWithBand(optionalPoints: points, lineColor: lineColor, fillUnder: true, showGlowDot: true)
+                            .frame(width: 82, height: 34)
+                    }
                 }
                 .padding(16)
             }

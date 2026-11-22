@@ -92,7 +92,7 @@ struct IridescentPearlOrb: View {
     }
 }
 
-// MARK: - Recessed 3D Ring Gauge (Screenshots 01, 03, 06 + Always-Visible Optimal Range & Red Overreach)
+// MARK: - Recessed 3D Ring Gauge (Bulletproof Animatable Trim — NEVER Sticks at 0%!)
 
 struct BevelRecessedRingGauge: View {
     let progress: Double
@@ -106,12 +106,16 @@ struct BevelRecessedRingGauge: View {
     var targetRange: ClosedRange<Double>? = nil
     var hasData: Bool = true
 
-    @State private var animatedProgress: Double = 0
+    private var targetProgress: Double {
+        guard hasData else { return 0 }
+        let clamped = min(max(progress, 0), 1)
+        return clamped > 0 ? max(clamped, 0.02) : 0
+    }
 
     private var overreachFraction: Double {
-        guard kind == .strain, hasData, let tr = targetRange, animatedProgress > tr.upperBound else { return 0 }
+        guard kind == .strain, hasData, let tr = targetRange, targetProgress > tr.upperBound else { return 0 }
         let headroom = max(1.0 - tr.upperBound, 0.08)
-        return min(max((animatedProgress - tr.upperBound) / headroom, 0), 1)
+        return min(max((targetProgress - tr.upperBound) / headroom, 0), 1)
     }
 
     private var gradientColors: [Color] {
@@ -121,40 +125,39 @@ struct BevelRecessedRingGauge: View {
                 let s = Color.lerp(BevelColors.amberStart, BevelColors.orangeEnd, t: min(overreachFraction * 0.75, 1))
                 let m = Color.lerp(BevelColors.orangeEnd, BevelColors.coralHigh, t: min(overreachFraction * 1.15, 1))
                 let e = Color.lerp(BevelColors.coralHigh, BevelColors.redAlert, t: overreachFraction)
-                return [s, m, e]
+                return [s, m, e, s]
             }
-            return [BevelColors.amberStart, BevelColors.orangeEnd]
+            return [BevelColors.amberStart, BevelColors.orangeEnd, BevelColors.amberStart]
         case .recovery:
-            return [BevelColors.limeStart, BevelColors.greenPrimary, BevelColors.emeraldEnd]
+            return [BevelColors.limeStart, BevelColors.greenPrimary, BevelColors.emeraldEnd, BevelColors.limeStart]
         case .sleep:
-            return [Color(hex: 0xC4D6FF), BevelColors.periwinkleStart, BevelColors.indigoEnd]
+            return [Color(hex: 0xC4D6FF), BevelColors.periwinkleStart, BevelColors.indigoEnd, Color(hex: 0xC4D6FF)]
         }
     }
 
     var body: some View {
+        let pad = strokeWidth / 2 + 4
+        let ringDiameter = max(size - pad * 2, 16)
+
         VStack(spacing: 6) {
             ZStack {
+                // Static recessed bevel + groove + center dish + optimal effort hatch band
                 Canvas { context, canvasSize in
-                    let pad = strokeWidth / 2 + 4
                     let arcRect = CGRect(x: pad, y: pad, width: canvasSize.width - pad * 2, height: canvasSize.height - pad * 2)
                     let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
                     let radius = arcRect.width / 2
 
-                    // Recessed outer bevel ring matching iOS Bevel screenshots 01, 03, 06
                     let bezelOuter = Path(ellipseIn: arcRect.insetBy(dx: -strokeWidth * 0.65, dy: -strokeWidth * 0.65))
                     context.fill(bezelOuter, with: .color(BevelColors.isDarkMode ? Color(hex: 0x333640, alpha: 0.7) : Color(hex: 0xE5E9F0)))
                     context.stroke(bezelOuter, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.14 : 0.7)), lineWidth: 1)
 
-                    // Inner deep channel groove
                     let groovePath = Path(ellipseIn: arcRect)
                     context.stroke(groovePath, with: .color(BevelColors.isDarkMode ? Color(hex: 0x1D1F25) : BevelColors.trackGroove), lineWidth: strokeWidth)
 
-                    // Inner circular center dish
                     let innerDish = Path(ellipseIn: arcRect.insetBy(dx: strokeWidth * 0.56, dy: strokeWidth * 0.56))
                     context.fill(innerDish, with: .color(BevelColors.isDarkMode ? Color(hex: 0x2C2F38, alpha: 0.85) : Color.white))
                     context.stroke(innerDish, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.08 : 0.4)), lineWidth: 0.9)
 
-                    // Target hatched optimal effort band (always visible beneath & overlaid with hatch marks)
                     if hasData, let tr = targetRange {
                         let startDeg = -90.0 + tr.lowerBound * 360.0
                         let endDeg = -90.0 + tr.upperBound * 360.0
@@ -174,42 +177,53 @@ struct BevelRecessedRingGauge: View {
                             context.stroke(tick, with: .color(BevelColors.strainHatchLine.opacity(0.75)), style: StrokeStyle(lineWidth: 1.25, lineCap: .round))
                         }
                     }
-
-                    if hasData {
-                        let sweepDeg = max(animatedProgress * 360.0, progress > 0 ? 5.0 : 0.0)
-                        if sweepDeg > 0 {
-                            var sweepPath = Path()
-                            sweepPath.addArc(center: center, radius: radius, startAngle: .degrees(-90), endAngle: .degrees(-90 + sweepDeg), clockwise: false)
-                            context.stroke(
-                                sweepPath,
-                                with: .conicGradient(Gradient(colors: gradientColors), center: center, angle: .degrees(-90)),
-                                style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
-                            )
-                        }
-
-                        // Always keep optimal effort markers subtly visible even when progress passes through
-                        if let tr = targetRange {
-                            let startDeg = -90.0 + tr.lowerBound * 360.0
-                            let endDeg = -90.0 + tr.upperBound * 360.0
-                            let covered = min(max((animatedProgress - tr.lowerBound) / max(tr.upperBound - tr.lowerBound, 0.01), 0), 1)
-                            if covered > 0.05 {
-                                var outerGuide = Path()
-                                outerGuide.addArc(center: center, radius: radius + strokeWidth * 0.62, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
-                                context.stroke(outerGuide, with: .color(Color.white.opacity(0.45)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                            }
-                            for boundDeg in [startDeg, endDeg] {
-                                let rad = boundDeg * .pi / 180.0
-                                let rIn = radius - strokeWidth * 0.48
-                                let rOut = radius + strokeWidth * 0.48
-                                var bTick = Path()
-                                bTick.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
-                                bTick.addLine(to: CGPoint(x: center.x + rOut * cos(rad), y: center.y + rOut * sin(rad)))
-                                context.stroke(bTick, with: .color(Color.white.opacity(0.88)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                            }
-                        }
-                    }
                 }
                 .frame(width: size, height: size)
+
+                // Native GPU-animated SwiftUI trim ring — directly bound to targetProgress, NEVER gets stuck at 0%
+                if targetProgress > 0 {
+                    Circle()
+                        .trim(from: 0, to: CGFloat(targetProgress))
+                        .stroke(
+                            AngularGradient(
+                                gradient: Gradient(colors: gradientColors),
+                                center: .center,
+                                startAngle: .degrees(0),
+                                endAngle: .degrees(360)
+                            ),
+                            style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: ringDiameter, height: ringDiameter)
+                        .animation(.easeOut(duration: 0.45), value: targetProgress)
+                }
+
+                // Always-visible white boundary ticks for optimal effort range
+                if hasData, let tr = targetRange {
+                    Canvas { context, canvasSize in
+                        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                        let radius = ringDiameter / 2
+                        let startDeg = -90.0 + tr.lowerBound * 360.0
+                        let endDeg = -90.0 + tr.upperBound * 360.0
+                        let covered = min(max((targetProgress - tr.lowerBound) / max(tr.upperBound - tr.lowerBound, 0.01), 0), 1)
+                        if covered > 0.05 {
+                            var outerGuide = Path()
+                            outerGuide.addArc(center: center, radius: radius + strokeWidth * 0.62, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
+                            context.stroke(outerGuide, with: .color(Color.white.opacity(0.45)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                        }
+                        for boundDeg in [startDeg, endDeg] {
+                            let rad = boundDeg * .pi / 180.0
+                            let rIn = radius - strokeWidth * 0.48
+                            let rOut = radius + strokeWidth * 0.48
+                            var bTick = Path()
+                            bTick.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
+                            bTick.addLine(to: CGPoint(x: center.x + rOut * cos(rad), y: center.y + rOut * sin(rad)))
+                            context.stroke(bTick, with: .color(Color.white.opacity(0.88)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                        }
+                    }
+                    .frame(width: size, height: size)
+                    .allowsHitTesting(false)
+                }
 
                 VStack(spacing: 1) {
                     Text(hasData ? centerText : "--%")
@@ -221,16 +235,6 @@ struct BevelRecessedRingGauge: View {
                             .font(ImprovingFont.caption(size >= 140 ? 13.5 : 10.5))
                             .foregroundColor(BevelColors.textSecondary)
                     }
-                }
-            }
-            .onAppear {
-                withAnimation(.easeOut(duration: 0.65)) {
-                    animatedProgress = hasData ? min(max(progress, 0), 1) : 0
-                }
-            }
-            .onChange(of: progress) { _, newVal in
-                withAnimation(.easeOut(duration: 0.4)) {
-                    animatedProgress = hasData ? min(max(newVal, 0), 1) : 0
                 }
             }
 
@@ -264,7 +268,6 @@ struct StressRadialDial: View {
         let statusColor: Color = !hasData ? BevelColors.textMuted : (score < 35 ? BevelColors.greenPrimary : (score < 65 ? BevelColors.amberStart : BevelColors.coralHigh))
 
         ZStack {
-            // Subtle glass disc background matching screenshot 01 & 10
             Circle()
                 .fill(BevelColors.isDarkMode ? Color(hex: 0x2F323C, alpha: 0.72) : Color(hex: 0xF1F5F9))
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
@@ -278,7 +281,6 @@ struct StressRadialDial: View {
                 let innerR = outerR - (isHeroGauge ? 13 : 8)
                 let litTicks = hasData ? max(Int(frac * Double(totalTicks)), score > 0 ? 1 : 0) : -1
 
-                // Inner subtle circle outline in hero mode
                 if isHeroGauge {
                     let innerCircleR = innerR - 6
                     ctx.stroke(
@@ -301,7 +303,6 @@ struct StressRadialDial: View {
                     ctx.stroke(line, with: .color(tickColor), style: StrokeStyle(lineWidth: isHeroGauge ? 2.4 : 2.0, lineCap: .round))
                 }
 
-                // Glowing teal pointer triangle in hero mode (screenshot 10)
                 if isHeroGauge && hasData {
                     let ptrDeg = startDeg + frac * sweepTotal
                     let rad = ptrDeg * .pi / 180.0
@@ -351,6 +352,7 @@ struct TrainingLoadTickGauge: View {
     let optimalStartFrac: Double
     let optimalEndFrac: Double
     let currentFrac: Double
+    var hasData: Bool = true
 
     var body: some View {
         ZStack {
@@ -362,24 +364,24 @@ struct TrainingLoadTickGauge: View {
                 let sweepDeg = 260.0
                 let totalTicks = 44
 
-                // Subtle outer arc
                 var trackArc = Path()
                 trackArc.addArc(center: center, radius: outerR + 6, startAngle: .degrees(startDeg), endAngle: .degrees(startDeg + sweepDeg), clockwise: false)
                 ctx.stroke(trackArc, with: .color(Color.white.opacity(0.08)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
 
-                // Bright green optimal band along the top rim
-                var optArc = Path()
-                optArc.addArc(
-                    center: center,
-                    radius: outerR + 6,
-                    startAngle: .degrees(startDeg + sweepDeg * optimalStartFrac),
-                    endAngle: .degrees(startDeg + sweepDeg * optimalEndFrac),
-                    clockwise: false
-                )
-                ctx.stroke(optArc, with: .color(BevelColors.greenPrimary), style: StrokeStyle(lineWidth: 3.2, lineCap: .round))
+                if hasData {
+                    var optArc = Path()
+                    optArc.addArc(
+                        center: center,
+                        radius: outerR + 6,
+                        startAngle: .degrees(startDeg + sweepDeg * optimalStartFrac),
+                        endAngle: .degrees(startDeg + sweepDeg * optimalEndFrac),
+                        clockwise: false
+                    )
+                    ctx.stroke(optArc, with: .color(BevelColors.greenPrimary), style: StrokeStyle(lineWidth: 3.2, lineCap: .round))
+                }
 
                 let clamped = min(max(currentFrac, 0.04), 0.96)
-                let litCount = Int(clamped * Double(totalTicks))
+                let litCount = hasData ? Int(clamped * Double(totalTicks)) : -1
                 for i in 0...totalTicks {
                     let deg = startDeg + Double(i) / Double(totalTicks) * sweepDeg
                     let rad = deg * .pi / 180.0
@@ -389,19 +391,20 @@ struct TrainingLoadTickGauge: View {
                     ctx.stroke(tick, with: .color(i <= litCount ? Color.white.opacity(0.45) : Color.white.opacity(0.11)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
                 }
 
-                // Glowing knob indicator on current position
-                let knobDeg = startDeg + clamped * sweepDeg
-                let kRad = knobDeg * .pi / 180.0
-                let kPt = CGPoint(x: center.x + (outerR - 4) * cos(kRad), y: center.y + (outerR - 4) * sin(kRad))
-                ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 10, y: kPt.y - 10, width: 20, height: 20)), with: .color(Color.white.opacity(0.14)))
-                ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(BevelColors.card))
-                ctx.stroke(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(Color.white.opacity(0.65)), lineWidth: 2.2)
+                if hasData {
+                    let knobDeg = startDeg + clamped * sweepDeg
+                    let kRad = knobDeg * .pi / 180.0
+                    let kPt = CGPoint(x: center.x + (outerR - 4) * cos(kRad), y: center.y + (outerR - 4) * sin(kRad))
+                    ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 10, y: kPt.y - 10, width: 20, height: 20)), with: .color(Color.white.opacity(0.14)))
+                    ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(BevelColors.card))
+                    ctx.stroke(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(Color.white.opacity(0.65)), lineWidth: 2.2)
+                }
             }
 
-            Text("\(value)")
+            Text(hasData ? "\(value)" : "--")
                 .font(ImprovingFont.metricHero(26))
                 .monospacedDigit()
-                .foregroundColor(BevelColors.textPrimary)
+                .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
                 .offset(y: 4)
 
             VStack {
@@ -434,7 +437,7 @@ struct EnergyBankBatteryBar: View {
                 HStack(spacing: 10) {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(BevelColors.greenPrimary)
+                        .foregroundColor(hasData ? BevelColors.greenPrimary : BevelColors.textMuted)
 
                     GeometryReader { geo in
                         let barCount = 34
@@ -536,7 +539,6 @@ struct HealthMonitorRangeCard: View {
                     }
                     Spacer(minLength: 0)
 
-                    // 12x68pt Glowing Vertical Range Thermometer Pill (Screenshot 15)
                     Canvas { ctx, size in
                         let trackRadius = size.width / 2
                         let inset: CGFloat = 1.6
@@ -561,7 +563,6 @@ struct HealthMonitorRangeCard: View {
 
                         ctx.fill(Path(roundedRect: bandRect, cornerRadius: innerR), with: .color(accent.opacity(evaluation.severity == .normal ? 0.82 : 0.28)))
 
-                        // Glowing hollow center ring dot (exact match to Screenshot 15)
                         ctx.fill(Path(ellipseIn: CGRect(x: dotCenter.x - 6.5, y: dotCenter.y - 6.5, width: 13, height: 13)), with: .color(accent.opacity(0.28)))
                         ctx.fill(Path(ellipseIn: CGRect(x: dotCenter.x - 4.6, y: dotCenter.y - 4.6, width: 9.2, height: 9.2)), with: .color(BevelColors.card))
                         ctx.stroke(Path(ellipseIn: CGRect(x: dotCenter.x - 4.6, y: dotCenter.y - 4.6, width: 9.2, height: 9.2)), with: .color(accent), lineWidth: 2.0)
@@ -604,9 +605,9 @@ struct HeaderedMetricCard: View {
                 Text(value)
                     .font(ImprovingFont.metricTile(22))
                     .monospacedDigit()
-                    .foregroundColor(BevelColors.textPrimary)
+                    .foregroundColor(value == "--" || value == "—" ? BevelColors.textMuted : BevelColors.textPrimary)
                     .lineLimit(1)
-                if !unit.isEmpty {
+                if !unit.isEmpty && value != "--" && value != "—" {
                     Text(unit)
                         .font(ImprovingFont.caption(13.5))
                         .foregroundColor(BevelColors.textSecondary)
@@ -631,13 +632,16 @@ struct HeaderedMetricCard: View {
     }
 }
 
-// MARK: - Atmospheric Hero Header with Layered Dusk/Night/Sunset Backdrop (Screenshots 03, 06, 10, 13, 69)
+// MARK: - Atmospheric Hero Header with Optional < Date > Stepper Controls
 
 struct AtmosphericHeroHeader<Content: View>: View {
     let title: String
     let subtitle: String
     var style: AtmosphereStyle = .recovery
     let onBack: () -> Void
+    var onPrevDay: (() -> Void)? = nil
+    var onNextDay: (() -> Void)? = nil
+    var canGoNextDay: Bool = false
     var rightPrimaryIcon: String = "square.and.arrow.up"
     var rightSecondaryIcon: String = "info.circle"
     var onRightSecondary: (() -> Void)? = nil
@@ -707,13 +711,29 @@ struct AtmosphericHeroHeader<Content: View>: View {
                     Text(title)
                         .font(ImprovingFont.displayLarge(23))
                         .foregroundColor(BevelColors.textPrimary)
-                    HStack(spacing: 4) {
+                    HStack(spacing: 10) {
+                        if let prev = onPrevDay {
+                            Button(action: prev) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .frame(width: 26, height: 26)
+                                    .background(Circle().fill(Color.white.opacity(0.08)))
+                            }
+                        }
                         Text(subtitle)
                             .font(ImprovingFont.caption(13.5))
                             .foregroundColor(BevelColors.textSecondary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(BevelColors.textSecondary)
+                        if let next = onNextDay {
+                            Button(action: next) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(canGoNextDay ? BevelColors.textSecondary : BevelColors.textMuted.opacity(0.35))
+                                    .frame(width: 26, height: 26)
+                                    .background(Circle().fill(Color.white.opacity(canGoNextDay ? 0.08 : 0.03)))
+                            }
+                            .disabled(!canGoNextDay)
+                        }
                     }
                 }
 
@@ -725,7 +745,7 @@ struct AtmosphericHeroHeader<Content: View>: View {
     }
 }
 
-// MARK: - Shared Bevel Trend Card with Band + Glowing Dot Sparkline (Screenshots 02, 04, 05, 08, 09, 12)
+// MARK: - Shared Bevel Trend Card with Honest No-Data State & Sparse Sparkline
 
 struct BevelTrendLightCard: View {
     let trend: EffortTrendItem
@@ -738,12 +758,15 @@ struct BevelTrendLightCard: View {
         case .normal: BevelColors.greenPrimary
         case .above: BevelColors.skyBlue
         case .below: BevelColors.orangeEnd
+        case .noData: BevelColors.textMuted
         }
         let statusIcon: String = switch trend.statusTone {
         case .normal: "checkmark.circle.fill"
         case .above: "arrow.up.circle.fill"
         case .below: "arrow.down.circle.fill"
+        case .noData: "info.circle.fill"
         }
+        let realCount = trend.points.compactMap { $0 }.count
 
         Button(action: onClick) {
             BevelCard(cornerRadius: 20) {
@@ -767,12 +790,12 @@ struct BevelTrendLightCard: View {
                     HStack(alignment: .bottom, spacing: 10) {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                Text(trend.valueText)
-                                    .font(ImprovingFont.metricHero(25))
+                                Text(trend.hasData ? trend.valueText : "No hay datos")
+                                    .font(ImprovingFont.metricHero(trend.hasData ? 25 : 21))
                                     .monospacedDigit()
-                                    .foregroundColor(BevelColors.textPrimary)
+                                    .foregroundColor(trend.hasData ? BevelColors.textPrimary : BevelColors.textMuted)
                                     .lineLimit(1)
-                                if !trend.unitText.isEmpty {
+                                if trend.hasData && !trend.unitText.isEmpty {
                                     Text(trend.unitText)
                                         .font(ImprovingFont.sectionTitle(15))
                                         .foregroundColor(BevelColors.textSecondary)
@@ -786,18 +809,21 @@ struct BevelTrendLightCard: View {
                                     .font(ImprovingFont.caption(12.5))
                                     .fontWeight(.semibold)
                                     .foregroundColor(statusColor)
+                                    .lineLimit(1)
                             }
                         }
                         Spacer()
-                        TrendSparklineWithBand(
-                            points: trend.points,
-                            bandLow: trend.bandLow,
-                            bandHigh: trend.bandHigh,
-                            lineColor: lineColor,
-                            showBand: true,
-                            showGlowDot: true
-                        )
-                        .frame(width: 128, height: 54)
+                        if trend.hasData && realCount >= 2 {
+                            TrendSparklineWithBand(
+                                optionalPoints: trend.points,
+                                bandLow: trend.bandLow,
+                                bandHigh: trend.bandHigh,
+                                lineColor: lineColor,
+                                showBand: true,
+                                showGlowDot: true
+                            )
+                            .frame(width: 124, height: 52)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -807,7 +833,7 @@ struct BevelTrendLightCard: View {
     }
 }
 
-// MARK: - Scroll-Collapsing Floating Liquid-Glass Bottom Bar (Exact Match to Screenshots 01, 02, 04, 15, 34, 35, 46, 69, 70)
+// MARK: - Scroll-Collapsing Floating Liquid-Glass Bottom Bar
 
 struct FloatingPillBottomBar: View {
     let selectedTab: MainTab
@@ -823,7 +849,6 @@ struct FloatingPillBottomBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // When expanded: floating "Pregunta a Improving lo que sea" pill above the tab bar (Screenshots 03, 15, 34, 40, 69)
             if !effectiveCollapsed && !isQuickMenuOpen {
                 Button(action: onOpenAskBevel) {
                     HStack(spacing: 10) {
@@ -851,8 +876,6 @@ struct FloatingPillBottomBar: View {
 
             HStack(spacing: 10) {
                 if effectiveCollapsed {
-                    // Collapsed State (Screenshots 02, 04, 07, 11, 35, 46, 70):
-                    // [Current Tab Icon Circle (left)]  [MascotOrb Preguntar a Improving (center)]  [+ Circle (right)]
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         onExpand()
@@ -891,8 +914,6 @@ struct FloatingPillBottomBar: View {
 
                     plusCircleButton
                 } else {
-                    // Expanded State (Screenshots 03, 10, 15, 34, 40, 69):
-                    // [ Inicio | Diario | Fitness | Biología ]  [ + ]
                     HStack(spacing: 4) {
                         ForEach([MainTab.hoy, .diario, .fitness, .biologia]) { tab in
                             if visibleTabs.contains(tab) {
@@ -967,7 +988,7 @@ struct FloatingPillBottomBar: View {
     }
 }
 
-// MARK: - Peeking Mascot Orb Floating AI Pill (Literal Match to Screenshots 16–33, 50–68)
+// MARK: - Peeking Mascot Orb Floating AI Pill
 
 struct FloatingMetricAiCoachOverlay: View {
     let metricKey: String
@@ -1036,7 +1057,6 @@ struct FloatingMetricAiCoachOverlay: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            // Peeking Mascot Orb sitting directly behind top center of dark capsule (Screenshots 16–33, 50–68)
             Button {
                 if !isLoading {
                     UISelectionFeedbackGenerator().selectionChanged()
@@ -1100,14 +1120,9 @@ struct FloatingMetricAiCoachOverlay: View {
         isFullyExpanded = false
         collapsedByScroll = false
         Task {
-            try? await Task.sleep(nanoseconds: 380_000_000)
+            try? await Task.sleep(nanoseconds: 340_000_000)
             await MainActor.run {
                 isLoading = false
-                if !collapsedByScroll {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                        isExpanded = true
-                    }
-                }
             }
         }
     }

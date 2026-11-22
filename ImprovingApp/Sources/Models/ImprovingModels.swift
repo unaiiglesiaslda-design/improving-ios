@@ -33,11 +33,13 @@ enum OverlayRoute: String, Equatable, Hashable, Identifiable {
     case esfuerzo
     case recuperacion
     case suenoDetail
+    case sleepSessionDetail
     case sleepNeedDetail
     case estres
     case energia
     case nutricion
     case nutrientDetail
+    case journalInsights
     case healthMetricDetail
     case trendMetricDetail
     case trainingLoad
@@ -63,8 +65,8 @@ enum HealthMetricKind: String, CaseIterable, Codable, Identifiable {
         case .respiratoryRate: return "Frecuencia respiratoria"
         case .restingHeartRate: return "FC en reposo"
         case .hrv: return "VFC en reposo"
-        case .oxygenSaturation: return "Oxígeno en sangre"
-        case .wristTemperature: return "Temperatura en muñeca"
+        case .oxygenSaturation: return "Saturación de oxígeno"
+        case .wristTemperature: return "Temperatura de la muñeca"
         case .sleepDuration: return "Duración del sueño"
         }
     }
@@ -93,7 +95,7 @@ enum HealthMetricKind: String, CaseIterable, Codable, Identifiable {
 }
 
 enum TrendStatusTone: String, Codable {
-    case normal, below, above
+    case normal, below, above, noData
 }
 
 struct EffortTrendItem: Identifiable, Codable, Hashable {
@@ -103,11 +105,12 @@ struct EffortTrendItem: Identifiable, Codable, Hashable {
     let unitText: String
     let statusText: String
     let statusTone: TrendStatusTone
-    let points: [Double]
+    let points: [Double?]
     let bandLow: Double
     let bandHigh: Double
     let lineColorHex: UInt64
     let detailNote: String
+    var hasData: Bool = true
 }
 
 struct EffortEventItem: Identifiable, Codable, Hashable {
@@ -115,33 +118,80 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
     let title: String
     let timeRange: String
     let durationMin: Int
-    let avgHrBpm: Int
+    let avgHrBpm: Int // 0 means no HR recorded
     let strainScore: Double
     let strainPct: Int
     let categoryLabel: String
     let kcal: Int
+    var distanceKm: Double? = nil
+    var elevationM: Double? = nil
+    var dateIso: String? = nil
 }
 
-struct SleepStageSegment: Identifiable, Codable, Hashable {
+struct TimedBiometricPoint: Codable, Equatable, Hashable {
+    let minuteOfDay: Int // 0...1439 (or offset minutes for overnight sleep)
+    let value: Double
+    var epochSec: Int64? = nil
+}
+
+enum SleepStageKind: String, Codable, Hashable {
+    case awake, rem, core, deep
+}
+
+struct SleepStageBlock: Identifiable, Codable, Equatable, Hashable {
     let id: String
-    let stageName: String
-    let startFrac: Double
-    let endFrac: Double
-    let durationMin: Int
-    let colorHex: UInt64
+    let stage: SleepStageKind
+    let startEpochSec: Int64
+    let endEpochSec: Int64
+
+    var durationSec: Int64 { max(endEpochSec - startEpochSec, 0) }
+}
+
+struct SleepSessionDetail: Codable, Equatable {
+    var startEpochSec: Int64? = nil
+    var endEpochSec: Int64? = nil
+    var startTimeLabel: String? = nil      // e.g. "3:15"
+    var endTimeLabel: String? = nil        // e.g. "11:07"
+    var startDateTimeLabel: String? = nil  // e.g. "22/11/26 a las 3:15"
+    var sourceName: String? = nil          // e.g. "Apple Watch de Unai"
+    var awakeSeconds: Int? = nil
+    var remSeconds: Int? = nil
+    var coreSeconds: Int? = nil
+    var deepSeconds: Int? = nil
+    var latencyMinutes: Int? = nil
+    var efficiencyPct: Int? = nil
+    var hrDipPct: Double? = nil
+    var continuityPct: Int? = nil
+    var stages: [SleepStageBlock] = []
+    var sleepHrSamples: [TimedBiometricPoint] = []
+    var sleepHrvSamples: [TimedBiometricPoint] = []
+    var sleepRespSamples: [TimedBiometricPoint] = []
+    var sleepSpo2Samples: [TimedBiometricPoint] = []
 }
 
 enum JournalCheckState: String, Codable {
     case unset, yes, no
 }
 
-struct JournalHabitItem: Identifiable, Codable, Hashable {
+enum JournalImpactTarget: String, CaseIterable, Identifiable {
+    case recovery = "Recuperación"
+    case sleep = "Sueño"
+    var id: String { rawValue }
+}
+
+enum JournalReliabilityTier: String, Codable {
+    case high, low, locked
+}
+
+struct JournalHabitImpactItem: Identifiable, Equatable {
     let id: String
+    let emoji: String
     let title: String
-    let category: String
-    let state: JournalCheckState
     let impactPct: Int
-    let detailText: String
+    let yesCount: Int
+    let noCount: Int
+    let reliability: JournalReliabilityTier
+    let isAutomatic: Bool
 }
 
 struct NutritionMealItem: Identifiable, Codable, Hashable {
@@ -158,9 +208,12 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
 struct CoachChatMessage: Identifiable, Codable, Hashable {
     let id: String
     let isUser: Bool
+    var verdictTitle: String? = nil
     let text: String
+    var bullets: [String] = []
     let timestampLabel: String
     let isSuggestionChip: Bool
+    var modelUsed: String? = nil
 }
 
 struct MetricFloatingAiInsight: Equatable {
@@ -206,13 +259,17 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var hrvMs: Double?
     var respRateRpm: Double?
     var wristTempDeltaC: Double?
-    var spo2Percent: Int?
+    var wristTempAbsoluteC: Double?
+    var spo2Percent: Double?
     var asleepMinutes: Int?
     var inBedMinutes: Int?
     var deepMinutes: Int?
     var remMinutes: Int?
+    var coreMinutes: Int?
+    var awakeMinutes: Int?
     var sleepPct: Int?
     var sleepDebtMinutes: Int?
+    var sleepSession: SleepSessionDetail?
     var strain21: Double?
     var strainPct: Int?
     var recoveryPct: Int?
@@ -220,11 +277,21 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var energyBankPercent: Int?
     var stepsCount: Int?
     var vo2MaxMlKgMin: Double?
+    var hrRecoveryBpm: Double?
     var glucoseMgDl: Int?
     var activeKcal: Int?
+    var daylightMinutes: Int?
+    var sleepNoiseOver50Db: Bool?
+    var bodyWeightKg: Double?
+    var bodyFatPct: Double?
+    var leanMassKg: Double?
+    var systolicBp: Int?
+    var diastolicBp: Int?
     var hrZoneMinutes: [Int] // 5 elements Z1..Z5
-    var stressSeries24h: [Double]
+    var stressSeries24h: [Double] // legacy hourly fallback if needed
     var energySeries24h: [Double]
+    var stressSamples5m: [TimedBiometricPoint] // high-resolution 5-minute intraday stress
+    var energySamples5m: [TimedBiometricPoint] // high-resolution 5-minute intraday energy
     var strengthMinutes: Int
     var workouts: [EffortEventItem]
 
@@ -235,13 +302,17 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         hrvMs: Double? = nil,
         respRateRpm: Double? = nil,
         wristTempDeltaC: Double? = nil,
-        spo2Percent: Int? = nil,
+        wristTempAbsoluteC: Double? = nil,
+        spo2Percent: Double? = nil,
         asleepMinutes: Int? = nil,
         inBedMinutes: Int? = nil,
         deepMinutes: Int? = nil,
         remMinutes: Int? = nil,
+        coreMinutes: Int? = nil,
+        awakeMinutes: Int? = nil,
         sleepPct: Int? = nil,
         sleepDebtMinutes: Int? = nil,
+        sleepSession: SleepSessionDetail? = nil,
         strain21: Double? = nil,
         strainPct: Int? = nil,
         recoveryPct: Int? = nil,
@@ -249,11 +320,21 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         energyBankPercent: Int? = nil,
         stepsCount: Int? = nil,
         vo2MaxMlKgMin: Double? = nil,
+        hrRecoveryBpm: Double? = nil,
         glucoseMgDl: Int? = nil,
         activeKcal: Int? = nil,
+        daylightMinutes: Int? = nil,
+        sleepNoiseOver50Db: Bool? = nil,
+        bodyWeightKg: Double? = nil,
+        bodyFatPct: Double? = nil,
+        leanMassKg: Double? = nil,
+        systolicBp: Int? = nil,
+        diastolicBp: Int? = nil,
         hrZoneMinutes: [Int] = [0, 0, 0, 0, 0],
         stressSeries24h: [Double] = [],
         energySeries24h: [Double] = [],
+        stressSamples5m: [TimedBiometricPoint] = [],
+        energySamples5m: [TimedBiometricPoint] = [],
         strengthMinutes: Int = 0,
         workouts: [EffortEventItem] = []
     ) {
@@ -263,13 +344,17 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         self.hrvMs = hrvMs
         self.respRateRpm = respRateRpm
         self.wristTempDeltaC = wristTempDeltaC
+        self.wristTempAbsoluteC = wristTempAbsoluteC
         self.spo2Percent = spo2Percent
         self.asleepMinutes = asleepMinutes
         self.inBedMinutes = inBedMinutes
         self.deepMinutes = deepMinutes
         self.remMinutes = remMinutes
+        self.coreMinutes = coreMinutes
+        self.awakeMinutes = awakeMinutes
         self.sleepPct = sleepPct
         self.sleepDebtMinutes = sleepDebtMinutes
+        self.sleepSession = sleepSession
         self.strain21 = strain21
         self.strainPct = strainPct
         self.recoveryPct = recoveryPct
@@ -277,11 +362,21 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         self.energyBankPercent = energyBankPercent
         self.stepsCount = stepsCount
         self.vo2MaxMlKgMin = vo2MaxMlKgMin
+        self.hrRecoveryBpm = hrRecoveryBpm
         self.glucoseMgDl = glucoseMgDl
         self.activeKcal = activeKcal
+        self.daylightMinutes = daylightMinutes
+        self.sleepNoiseOver50Db = sleepNoiseOver50Db
+        self.bodyWeightKg = bodyWeightKg
+        self.bodyFatPct = bodyFatPct
+        self.leanMassKg = leanMassKg
+        self.systolicBp = systolicBp
+        self.diastolicBp = diastolicBp
         self.hrZoneMinutes = hrZoneMinutes
         self.stressSeries24h = stressSeries24h
         self.energySeries24h = energySeries24h
+        self.stressSamples5m = stressSamples5m
+        self.energySamples5m = energySamples5m
         self.strengthMinutes = strengthMinutes
         self.workouts = workouts
     }
@@ -313,6 +408,21 @@ struct DataAvailabilitySnapshot: Equatable {
         hasRecoveryData || hasStrainData || hasSleepData || hasHrvData ||
             hasRestingHrData || hasRespData || hasSpo2Data || hasTempData ||
             hasStressData || hasEnergyData || hasWorkoutData
+    }
+
+    var missingCategoryNames: [String] {
+        var list: [String] = []
+        if !hasRecoveryData { list.append("Recuperación") }
+        if !hasStrainData { list.append("Esfuerzo") }
+        if !hasSleepData { list.append("Sueño") }
+        if !hasHrvData { list.append("VFC") }
+        if !hasRestingHrData { list.append("FC en reposo") }
+        if !hasRespData { list.append("Frecuencia respiratoria") }
+        if !hasSpo2Data { list.append("SpO₂") }
+        if !hasTempData { list.append("Temperatura muñeca") }
+        if !hasStressData { list.append("Estrés") }
+        if !hasEnergyData { list.append("Reservas de energía") }
+        return list
     }
 }
 

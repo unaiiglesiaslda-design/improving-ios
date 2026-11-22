@@ -25,7 +25,6 @@ struct ImprovingRootView: View {
                 .transition(.opacity)
             } else {
                 ZStack(alignment: .bottom) {
-                    // Main 4 Tabs
                     Group {
                         switch selectedTab {
                         case .hoy:
@@ -64,14 +63,12 @@ struct ImprovingRootView: View {
                         }
                     }
 
-                    // Active Overlay Screen
                     if currentOverlay != .none {
                         overlayView(for: currentOverlay)
                             .transition(.move(edge: currentOverlay == .askBevel ? .bottom : .trailing).combined(with: .opacity))
                             .zIndex(5)
                     }
 
-                    // Quick Actions (+) Sheet
                     if quickMenuOpen && currentOverlay != .askBevel {
                         QuickActionsOverlaySheet(
                             onDismiss: { quickMenuOpen = false },
@@ -88,7 +85,6 @@ struct ImprovingRootView: View {
                         .zIndex(15)
                     }
 
-                    // Persistent Liquid-Glass Bottom Bar (always visible EXCEPT when talking to AI in AskBevelScreen)
                     if currentOverlay != .askBevel {
                         FloatingPillBottomBar(
                             selectedTab: selectedTab,
@@ -150,6 +146,7 @@ struct ImprovingRootView: View {
                     store.selectedHealthMetric = kind
                     push(.healthMetricDetail)
                 },
+                onOpenSleepSession: { push(.sleepSessionDetail) },
                 onOpenTrend: { _ in push(.healthMetricDetail) }
             )
         case .suenoDetail:
@@ -157,17 +154,28 @@ struct ImprovingRootView: View {
                 store: store,
                 onBack: { pop() },
                 onOpenSleepNeed: { push(.sleepNeedDetail) },
+                onOpenSleepSession: { push(.sleepSessionDetail) },
                 onOpenTrend: { _ in
                     store.selectedHealthMetric = .sleepDuration
                     push(.healthMetricDetail)
                 }
+            )
+        case .sleepSessionDetail:
+            SleepSessionDetailScreen(
+                store: store,
+                onBack: { pop() },
+                onOpenSleepNeed: { push(.sleepNeedDetail) }
             )
         case .sleepNeedDetail:
             SleepNeedDetailScreen(store: store, onBack: { pop() })
         case .estres:
             EstresScreen(store: store, onBack: { pop() }, onOpenTrend: { _ in push(.healthMetricDetail) })
         case .energia:
-            EnergiaScreen(store: store, onBack: { pop() })
+            EnergiaScreen(
+                store: store,
+                onBack: { pop() },
+                onOpenSleepSession: { push(.sleepSessionDetail) }
+            )
         case .nutricion:
             NutricionScreen(store: store, onBack: { pop() }) { key in
                 store.selectedNutrientKey = key
@@ -175,6 +183,8 @@ struct ImprovingRootView: View {
             }
         case .nutrientDetail:
             NutrientDetailScreen(store: store, onBack: { pop() })
+        case .journalInsights:
+            JournalInsightsScreen(store: store, onBack: { pop() })
         case .healthMetricDetail, .trendMetricDetail:
             HealthMetricDetailScreen(store: store, onBack: { pop() })
         case .trainingLoad:

@@ -160,7 +160,8 @@ enum WhoopPhysiologyEngine {
             trimp += Double(mins) * max(rate - floorRate, 0.0)
         }
         let workoutTrimp = effortEvents.reduce(0.0) { acc, ev in
-            let frac = min(max((Double(ev.avgHrBpm) - rhrBpm) / max(Double(computeMaxHeartRate(profile: profile)) - rhrBpm, 40.0), 0.25), 0.98)
+            let hr = ev.avgHrBpm > 0 ? Double(ev.avgHrBpm) : (rhrBpm + 75.0)
+            let frac = min(max((hr - rhrBpm) / max(Double(computeMaxHeartRate(profile: profile)) - rhrBpm, 40.0), 0.25), 0.98)
             return acc + Double(ev.durationMin) * frac * 0.64 * exp(b * frac)
         }
         let musc = Double(completedStrengthSets) * 2.1 + Double(totalStrengthVolumeKg) / 900.0
@@ -179,7 +180,7 @@ enum WhoopPhysiologyEngine {
         }
     }
 
-    // MARK: - Deterministic 730-Day (2-Year) WHOOP Simulator (1:1 Parity with Android WhoopTwoYearSimulator.kt)
+    // MARK: - Deterministic 730-Day (2-Year) Preview Simulator (ONLY used BEFORE real Apple Health / WHOOP import)
 
     static func generateTwoYearSimulatedHistory(profile: UserPhysiologyProfile, endDate: Date = Date()) -> [String: RealBiometricDaySummary] {
         let totalDays = 730
@@ -187,6 +188,9 @@ enum WhoopPhysiologyEngine {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.dateFormat = "yyyy-MM-dd"
+        let shortDtFmt = DateFormatter()
+        shortDtFmt.locale = Locale(identifier: "es_ES")
+        shortDtFmt.dateFormat = "dd/MM/yy"
 
         var map: [String: RealBiometricDaySummary] = [:]
         map.reserveCapacity(totalDays)
@@ -195,59 +199,7 @@ enum WhoopPhysiologyEngine {
             let dayOffset = (totalDays - 1) - i
             guard let date = cal.date(byAdding: .day, value: -dayOffset, to: endDate) else { continue }
             let iso = fmt.string(from: date)
-
-            if dayOffset == 0 {
-                // Exact Android HoyScreen hero snapshot (82% Esfuerzo, 79% Recuperación, 92% Sueño 7h 58m, 35 Estrés, 71% Energía)
-                let stress24: [Double] = [
-                    14, 10, 8, 5, 2, 6, 9, 14, 26, 38, 42, 36,
-                    34, 41, 32, 29, 38, 68, 77, 54, 41, 33, 27, 22
-                ]
-                let energy24: [Double] = [
-                    54, 60, 66, 73, 80, 86, 91, 95, 96, 92, 89, 86,
-                    83, 81, 82, 79, 77, 75, 73, 72, 72, 71, 71, 71
-                ]
-                let workout = EffortEventItem(
-                    id: "sim_today_0",
-                    title: "Tirada Larga Aeróbica",
-                    timeRange: "17:30 - 18:56",
-                    durationMin: 86,
-                    avgHrBpm: 148,
-                    strainScore: 15.8,
-                    strainPct: 82,
-                    categoryLabel: "Cardio",
-                    kcal: 999
-                )
-                map[iso] = RealBiometricDaySummary(
-                    dateIso: iso,
-                    liveHrBpm: 68,
-                    restingHrBpm: 48.2,
-                    hrvMs: 77.5,
-                    respRateRpm: 15.2,
-                    wristTempDeltaC: 0.1,
-                    spo2Percent: 97,
-                    asleepMinutes: 478, // 7 h 58 min
-                    inBedMinutes: 492,
-                    deepMinutes: 102,
-                    remMinutes: 118,
-                    sleepPct: 92,
-                    sleepDebtMinutes: 36,
-                    strain21: 16.4,
-                    strainPct: 82,
-                    recoveryPct: 79,
-                    stressScore: 35,
-                    energyBankPercent: 71,
-                    stepsCount: 12480,
-                    vo2MaxMlKgMin: 44.3,
-                    glucoseMgDl: 94,
-                    activeKcal: 999,
-                    hrZoneMinutes: [45, 16, 7, 1, 0],
-                    stressSeries24h: stress24,
-                    energySeries24h: energy24,
-                    strengthMinutes: 42,
-                    workouts: [workout]
-                )
-                continue
-            }
+            let dayStartEpoch = Int64(cal.startOfDay(for: date).timeIntervalSince1970)
 
             let progress = Double(i) / Double(totalDays)
             let w1 = sin(Double(i) * 2.0 * .pi / 7.0)
@@ -256,19 +208,23 @@ enum WhoopPhysiologyEngine {
             let hash = ((i &* 1_103_515_245 &+ 12_345) >> 16) & 0x7FFF
             let noise = Double((hash % 200) - 100) / 100.0
 
-            let hrv = AppleHealthExportImporter.round1(min(max(64.0 + progress * 11.5 + w2 * 3.5 + noise * 5.2, 42.0), 106.0))
-            let rhr = AppleHealthExportImporter.round1(min(max(53.0 - progress * 3.8 - w2 * 1.1 + noise * 1.6, 43.0), 65.0))
-            let resp = AppleHealthExportImporter.round1(min(max(15.3 - progress * 0.25 + w3 * 0.3 + noise * 0.4, 13.2), 17.8))
-            let spo2 = min(max(Int((97.2 + noise * 1.2).rounded()), 95), 99)
-            let tempDelta = AppleHealthExportImporter.round1(min(max(w2 * 0.14 + noise * 0.20, -0.5), 0.6))
+            let isToday = dayOffset == 0
+            let hrv = isToday ? 77.5 : AppleHealthExportImporter.round1(min(max(64.0 + progress * 11.5 + w2 * 3.5 + noise * 5.2, 42.0), 106.0))
+            let rhr = isToday ? 48.2 : AppleHealthExportImporter.round1(min(max(53.0 - progress * 3.8 - w2 * 1.1 + noise * 1.6, 43.0), 65.0))
+            let resp = isToday ? 15.2 : AppleHealthExportImporter.round1(min(max(15.3 - progress * 0.25 + w3 * 0.3 + noise * 0.4, 13.2), 17.8))
+            let spo2 = isToday ? 96.4 : AppleHealthExportImporter.round1(min(max(96.5 + noise * 1.1, 94.5), 99.2))
+            let tempDelta = isToday ? 0.1 : AppleHealthExportImporter.round1(min(max(w2 * 0.14 + noise * 0.20, -0.5), 0.6))
+            let tempAbs = AppleHealthExportImporter.round1(35.7 + tempDelta)
 
             let weekday = cal.component(.weekday, from: date)
             let isWeekend = (weekday == 1 || weekday == 7)
-            let asleepMin = min(max(Int((436.0 + (isWeekend ? 32.0 : 0.0) + w1 * 18.0 + noise * 24.0).rounded()), 340), 540)
-            let inBedMin = asleepMin + 18 + (hash % 14)
-            let deepMin = Int((Double(asleepMin) * 0.20).rounded())
-            let remMin = Int((Double(asleepMin) * 0.23).rounded())
-            let sleepPct = min(max(Int(((Double(asleepMin) / 480.0) * 84.0 + 10.0).rounded()), 54), 98)
+            let asleepMin = isToday ? 478 : min(max(Int((436.0 + (isWeekend ? 32.0 : 0.0) + w1 * 18.0 + noise * 24.0).rounded()), 340), 540)
+            let inBedMin = isToday ? 492 : asleepMin + 16 + (hash % 14)
+            let deepMin = isToday ? 102 : Int((Double(asleepMin) * 0.18).rounded())
+            let remMin = isToday ? 118 : Int((Double(asleepMin) * 0.22).rounded())
+            let awakeMin = max(inBedMin - asleepMin, 6)
+            let coreMin = max(asleepMin - deepMin - remMin, 120)
+            let sleepPct = isToday ? 92 : min(max(Int(((Double(asleepMin) / 480.0) * 84.0 + 10.0).rounded()), 54), 98)
 
             let trainFactor: Double = switch weekday {
             case 2, 4, 6: 0.72
@@ -276,89 +232,205 @@ enum WhoopPhysiologyEngine {
             case 7: 0.82
             default: 0.28
             }
-            let z1 = max(Int((18.0 + trainFactor * 26.0).rounded()), 8)
-            let z2 = max(Int((10.0 + trainFactor * 22.0).rounded()), 4)
-            let z3 = max(Int((trainFactor * 14.0).rounded()), 0)
-            let z4 = max(Int(((trainFactor - 0.5) * 12.0).rounded()), 0)
+            let z1 = isToday ? 45 : max(Int((18.0 + trainFactor * 26.0).rounded()), 8)
+            let z2 = isToday ? 16 : max(Int((10.0 + trainFactor * 22.0).rounded()), 4)
+            let z3 = isToday ? 7 : max(Int((trainFactor * 14.0).rounded()), 0)
+            let z4 = isToday ? 1 : max(Int(((trainFactor - 0.5) * 12.0).rounded()), 0)
             let zones = [z1, z2, z3, z4, 0]
 
-            let strainPct = min(max(Int((trainFactor * 88.0 + noise * 9.0).rounded()), 18), 94)
-            let strain21 = AppleHealthExportImporter.round1(Double(strainPct) / 100.0 * 20.4)
+            let strainPct = isToday ? 82 : min(max(Int((trainFactor * 88.0 + noise * 9.0).rounded()), 18), 94)
+            let strain21 = isToday ? 16.4 : AppleHealthExportImporter.round1(Double(strainPct) / 100.0 * 20.4)
             let hrvNorm = min(max((hrv - 48.0) / 42.0, 0), 1)
             let rhrNorm = min(max((58.0 - rhr) / 14.0, 0), 1)
-            let recPct = min(max(Int(((0.52 * hrvNorm + 0.24 * rhrNorm + 0.24 * (Double(sleepPct) / 100.0)) * 100.0).rounded()), 28), 97)
-            let stress = min(max(Int((20.0 + (1.0 - hrvNorm) * 24.0 + trainFactor * 14.0 + noise * 5.0).rounded()), 14), 68)
-            let energy = min(max(recPct - Int(Double(strainPct) * 0.22) + 10, 28), 96)
-            let vo2 = AppleHealthExportImporter.round1(41.2 + progress * 3.1 + w3 * 0.25)
+            let recPct = isToday ? 79 : min(max(Int(((0.52 * hrvNorm + 0.24 * rhrNorm + 0.24 * (Double(sleepPct) / 100.0)) * 100.0).rounded()), 28), 97)
+            let stress = isToday ? 35 : min(max(Int((20.0 + (1.0 - hrvNorm) * 24.0 + trainFactor * 14.0 + noise * 5.0).rounded()), 14), 68)
+            let energy = isToday ? 71 : min(max(recPct - Int(Double(strainPct) * 0.22) + 10, 28), 96)
+            let vo2 = isToday ? 44.3 : AppleHealthExportImporter.round1(41.2 + progress * 3.1 + w3 * 0.25)
 
-            let wTitle: String? = switch weekday {
-            case 2: "Fuerza Tren Superior"
-            case 3: "Carrera Base Zona 2"
-            case 4: "Fuerza Pierna e Hip Thrust"
-            case 5: "Movilidad y Cardio Ligero"
-            case 6: "Full Body + Intervalos"
-            case 7: "Tirada Larga Aeróbica"
-            default: nil
-            }
-            let wDur = wTitle != nil ? min(max(z1 + z2 + z3 + z4, 38), 92) : 0
-            let wKcal = wDur * 10 + 110
+            let wTitle: String? = isToday ? "Tirada Larga Aeróbica" : {
+                switch weekday {
+                case 2: return "Fuerza Tren Superior"
+                case 3: return "Carrera Base Zona 2"
+                case 4: return "Fuerza Pierna e Hip Thrust"
+                case 5: return "Movilidad y Cardio Ligero"
+                case 6: return "Full Body + Intervalos"
+                case 7: return "Tirada Larga Aeróbica"
+                default: return nil
+                }
+            }()
+            let wDur = isToday ? 86 : (wTitle != nil ? min(max(z1 + z2 + z3 + z4, 38), 92) : 0)
+            let wKcal = isToday ? 999 : (wDur * 10 + 110)
             let workouts: [EffortEventItem] = wTitle.map {
                 [EffortEventItem(
                     id: "sim_\(dayOffset)",
                     title: $0,
-                    timeRange: "18:00 - \(18 + wDur / 60):\(String(format: "%02d", wDur % 60))",
+                    timeRange: isToday ? "17:30 - 18:56" : "18:00 - \(18 + wDur / 60):\(String(format: "%02d", wDur % 60))",
                     durationMin: wDur,
-                    avgHrBpm: 141,
-                    strainScore: strain21,
+                    avgHrBpm: isToday ? 148 : 141,
+                    strainScore: isToday ? 15.8 : strain21,
                     strainPct: strainPct,
                     categoryLabel: $0.contains("Fuerza") ? "Fuerza" : "Cardio",
-                    kcal: wKcal
+                    kcal: wKcal,
+                    dateIso: iso
                 )]
             } ?? []
 
-            let s24 = (0..<24).map { hr -> Double in
-                let sleepMult = (1...8).contains(hr) ? 0.45 : 1.0
-                let bump = (wTitle != nil && (17...19).contains(hr)) ? 24.0 : 0.0
+            // Generate 5-minute intraday series (only for recent 14 days to keep memory tiny & fast!)
+            var stress5m: [TimedBiometricPoint] = []
+            var energy5m: [TimedBiometricPoint] = []
+            var s24: [Double] = []
+            var e24: [Double] = []
+            let peakE = min(max(Double(recPct) * 0.96, 62), 98)
+            let startE = max(peakE - 34.0, 22)
+
+            for hr in 0..<24 {
+                let sleepMult = (1...8).contains(hr) ? 0.35 : 1.0
+                let bump = (wTitle != nil && (17...19).contains(hr)) ? 26.0 : 0.0
                 let wave = sin(Double(hr) / 23.0 * 3.0 * .pi) * 7.0
-                return min(max(Double(stress) * sleepMult + bump + wave, 4), 92)
+                s24.append(AppleHealthExportImporter.round1(min(max(Double(stress) * sleepMult + bump + wave, 3), 92)))
+                let ev: Double = hr <= 8
+                    ? startE + (peakE - startE) * (Double(hr) / 8.0)
+                    : min(max(peakE - (peakE - Double(energy)) * (Double(hr - 8) / 15.0), 12), 99)
+                e24.append(AppleHealthExportImporter.round1(ev))
             }
-            let peakE = min(max(Double(recPct) * 0.94, 58), 97)
-            let startE = max(peakE - 30.0, 24)
-            let e24 = (0..<24).map { hr -> Double in
-                if hr <= 8 {
-                    return startE + (peakE - startE) * (Double(hr) / 8.0)
+
+            var sleepDetail: SleepSessionDetail? = nil
+            if dayOffset <= 14 {
+                stress5m.reserveCapacity(288)
+                energy5m.reserveCapacity(288)
+                var curEnergy = startE
+                for slot in 0..<288 {
+                    let minOfDay = slot * 5
+                    let hrF = Double(minOfDay) / 60.0
+                    let isSleep = hrF >= 0.5 && hrF <= 8.2
+                    let isWorkout = wTitle != nil && hrF >= 17.5 && hrF <= 19.0
+                    let microWave = sin(Double(slot) * 0.42 + Double(dayOffset)) * 5.2 + cos(Double(slot) * 0.17) * 3.4
+                    let baseSt = isSleep ? Double(stress) * 0.30 : (isWorkout ? 72.0 : Double(stress) * 1.06)
+                    let stVal = AppleHealthExportImporter.round1(min(max(baseSt + microWave, 2.0), 94.0))
+                    let ep = dayStartEpoch + Int64(minOfDay * 60)
+                    stress5m.append(TimedBiometricPoint(minuteOfDay: minOfDay, value: stVal, epochSec: ep))
+
+                    if isSleep {
+                        curEnergy = min(peakE, curEnergy + (peakE - startE) / 92.0)
+                    } else {
+                        let drain = (stVal / 100.0) * 0.52 + (isWorkout ? 0.48 : 0.10)
+                        curEnergy = max(Double(energy) - 4.0, curEnergy - drain)
+                    }
+                    energy5m.append(TimedBiometricPoint(minuteOfDay: minOfDay, value: AppleHealthExportImporter.round1(min(max(curEnergy, 10), 99)), epochSec: ep))
                 }
-                let t = Double(hr - 8) / 15.0
-                return min(max(peakE - (peakE - Double(energy)) * t, 12), 99)
+
+                // Detailed simulated SleepSessionDetail for preview
+                let startMin = 30 // 00:30
+                let sleepStartEpoch = dayStartEpoch + Int64(startMin * 60)
+                let sleepEndEpoch = sleepStartEpoch + Int64(inBedMin * 60)
+                let endMin = (startMin + inBedMin) % 1440
+                let startLabel = String(format: "%d:%02d", startMin / 60, startMin % 60)
+                let endLabel = String(format: "%d:%02d", endMin / 60, endMin % 60)
+
+                var stages: [SleepStageBlock] = []
+                let pattern: [(SleepStageKind, Double)] = [
+                    (.core, 0.08), (.deep, 0.11), (.core, 0.10), (.awake, 0.02),
+                    (.core, 0.12), (.rem, 0.09), (.core, 0.13), (.deep, 0.07),
+                    (.core, 0.11), (.rem, 0.08), (.awake, 0.02), (.core, 0.07)
+                ]
+                var cursor = sleepStartEpoch
+                let totalSpan = Double(sleepEndEpoch - sleepStartEpoch)
+                for (pIdx, seg) in pattern.enumerated() {
+                    let dur = Int64((totalSpan * seg.1).rounded())
+                    let next = min(cursor + dur, sleepEndEpoch)
+                    stages.append(SleepStageBlock(id: "sim_st_\(dayOffset)_\(pIdx)", stage: seg.0, startEpochSec: cursor, endEpochSec: next))
+                    cursor = next
+                }
+
+                var hrPts: [TimedBiometricPoint] = []
+                for m in stride(from: 0, through: inBedMin, by: 6) {
+                    let ep = sleepStartEpoch + Int64(m * 60)
+                    let v = AppleHealthExportImporter.round1(rhr + 3.2 + sin(Double(m) * 0.04) * 3.8 + cos(Double(m) * 0.13) * 2.1)
+                    hrPts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
+                }
+                var hrvPts: [TimedBiometricPoint] = []
+                for m in stride(from: 45, through: max(inBedMin - 20, 45), by: 95) {
+                    let ep = sleepStartEpoch + Int64(m * 60)
+                    let v = AppleHealthExportImporter.round1(hrv + sin(Double(m) * 0.02) * 14.0)
+                    hrvPts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
+                }
+                var respPts: [TimedBiometricPoint] = []
+                for m in stride(from: 10, through: inBedMin, by: 16) {
+                    let ep = sleepStartEpoch + Int64(m * 60)
+                    let v = AppleHealthExportImporter.round1(resp + sin(Double(m) * 0.06) * 1.1)
+                    respPts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
+                }
+                var spo2Pts: [TimedBiometricPoint] = []
+                for m in stride(from: 35, through: inBedMin, by: 55) {
+                    let ep = sleepStartEpoch + Int64(m * 60)
+                    let v = AppleHealthExportImporter.round1(min(max(spo2 + cos(Double(m) * 0.05) * 1.4, 93.0), 99.5))
+                    spo2Pts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
+                }
+
+                sleepDetail = SleepSessionDetail(
+                    startEpochSec: sleepStartEpoch,
+                    endEpochSec: sleepEndEpoch,
+                    startTimeLabel: startLabel,
+                    endTimeLabel: endLabel,
+                    startDateTimeLabel: "\(shortDtFmt.string(from: date)) a las \(startLabel)",
+                    sourceName: "Simulación Improving",
+                    awakeSeconds: awakeMin * 60,
+                    remSeconds: remMin * 60,
+                    coreSeconds: coreMin * 60,
+                    deepSeconds: deepMin * 60,
+                    latencyMinutes: 7,
+                    efficiencyPct: min(max(Int((Double(asleepMin) / Double(max(inBedMin, 1)) * 100.0).rounded()), 60), 99),
+                    hrDipPct: 14.2,
+                    continuityPct: 94,
+                    stages: stages,
+                    sleepHrSamples: hrPts,
+                    sleepHrvSamples: hrvPts,
+                    sleepRespSamples: respPts,
+                    sleepSpo2Samples: spo2Pts
+                )
             }
 
             map[iso] = RealBiometricDaySummary(
                 dateIso: iso,
-                liveHrBpm: Int(rhr.rounded()) + 14,
+                liveHrBpm: isToday ? 68 : Int(rhr.rounded()) + 14,
                 restingHrBpm: rhr,
                 hrvMs: hrv,
                 respRateRpm: resp,
                 wristTempDeltaC: tempDelta,
+                wristTempAbsoluteC: tempAbs,
                 spo2Percent: spo2,
                 asleepMinutes: asleepMin,
                 inBedMinutes: inBedMin,
                 deepMinutes: deepMin,
                 remMinutes: remMin,
+                coreMinutes: coreMin,
+                awakeMinutes: awakeMin,
                 sleepPct: sleepPct,
-                sleepDebtMinutes: max(480 - asleepMin, 12),
+                sleepDebtMinutes: isToday ? 36 : max(480 - asleepMin, 0),
+                sleepSession: sleepDetail,
                 strain21: strain21,
                 strainPct: strainPct,
                 recoveryPct: recPct,
                 stressScore: stress,
                 energyBankPercent: energy,
-                stepsCount: 7400 + (hash % 5400),
+                stepsCount: isToday ? 12480 : 7400 + (hash % 5400),
                 vo2MaxMlKgMin: vo2,
-                glucoseMgDl: 92 + (hash % 9),
+                hrRecoveryBpm: isToday ? 29.0 : AppleHealthExportImporter.round1(26.0 + progress * 5.0),
+                glucoseMgDl: isToday ? 94 : 92 + (hash % 9),
                 activeKcal: wKcal,
+                daylightMinutes: 25 + (hash % 35),
+                sleepNoiseOver50Db: (hash % 5 == 0),
+                bodyWeightKg: profile.weightKg,
+                bodyFatPct: 16.2,
+                leanMassKg: AppleHealthExportImporter.round1(profile.weightKg * 0.838),
+                systolicBp: 112,
+                diastolicBp: 68,
                 hrZoneMinutes: zones,
                 stressSeries24h: s24,
                 energySeries24h: e24,
-                strengthMinutes: (wTitle?.contains("Fuerza") == true) ? wDur : 0,
+                stressSamples5m: stress5m,
+                energySamples5m: energy5m,
+                strengthMinutes: (wTitle?.contains("Fuerza") == true) ? wDur : (isToday ? 42 : 0),
                 workouts: workouts
             )
         }

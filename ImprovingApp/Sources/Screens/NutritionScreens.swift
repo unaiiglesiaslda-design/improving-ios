@@ -33,15 +33,19 @@ struct NutricionScreen: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 3) {
-                                Text("Calidad \(store.foodQualityScore)")
-                                    .font(ImprovingFont.cardTitle(13.5))
-                                    .foregroundColor(BevelColors.greenPrimary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(Capsule().fill(BevelColors.greenSoftBg))
-                                Text("CGM \(store.cgmMgDl) mg/dL")
-                                    .font(ImprovingFont.caption(11.5))
-                                    .foregroundColor(BevelColors.textSecondary)
+                                if let fq = store.foodQualityScore {
+                                    Text("Calidad \(fq)")
+                                        .font(ImprovingFont.cardTitle(13.5))
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Capsule().fill(BevelColors.greenSoftBg))
+                                }
+                                if let cgm = store.cgmMgDl {
+                                    Text("CGM \(cgm) mg/dL")
+                                        .font(ImprovingFont.caption(11.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
                             }
                         }
 

@@ -7,6 +7,8 @@ struct DispositivosScreen: View {
 
     @State private var showingImporter = false
     @State private var apiKeyDraft: String = ""
+    @State private var selectedModelDraft: String = "gemini-2.5-flash"
+    @State private var savedBanner: Bool = false
     @State private var darkToggle: Bool = BevelColors.isDarkMode
 
     var body: some View {
@@ -65,7 +67,7 @@ struct DispositivosScreen: View {
                             }
                         }
 
-                        Text("En tu iPhone: App Salud → foto de perfil → Exportar todos los datos de salud → selecciona exportar.zip o export.xml aquí.")
+                        Text("En tu iPhone: App Salud → foto de perfil → Exportar todos los datos de salud → selecciona exportar.zip o export.xml aquí. Solo se mostrarán datos reales recopilados.")
                             .font(ImprovingFont.caption(11.5))
                             .foregroundColor(BevelColors.textSecondary)
 
@@ -79,10 +81,85 @@ struct DispositivosScreen: View {
                             Text(errMsg).font(ImprovingFont.caption(12)).foregroundColor(BevelColors.redAlert)
                         }
                         if !store.realHistory.isEmpty {
-                            Text("\(store.realHistory.count) días reales almacenados en este iPhone.")
+                            Text("\(store.realHistory.count) días reales almacenados en este iPhone (cero datos inventados).")
                                 .font(ImprovingFont.caption(11.5))
                                 .foregroundColor(BevelColors.textPrimary)
                         }
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
+
+                // Gemini AI Key & Model Selector (Exact 1:1 Android Structure!)
+                BevelCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            BevelMascotOrb(size: 26)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("INTELIGENCIA ARTIFICIAL (GEMINI)")
+                                    .font(ImprovingFont.microLabel(11))
+                                    .foregroundColor(BevelColors.greenPrimary)
+                                Text("Personalidad directa, preguntas libres y cero datos inventados")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        SecureField("Pega tu API Key de Google Gemini (AIza...)", text: $apiKeyDraft)
+                            .font(ImprovingFont.body(13.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .padding(11)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+
+                        Text("Modelo Gemini")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(GeminiCoachService.supportedModels, id: \.self) { m in
+                                    let active = selectedModelDraft == m
+                                    Button {
+                                        selectedModelDraft = m
+                                    } label: {
+                                        Text(m)
+                                            .font(ImprovingFont.caption(12))
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 7)
+                                            .background(Capsule().fill(active ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                                    }
+                                }
+                            }
+                        }
+
+                        HStack {
+                            Button {
+                                store.updateGeminiConfig(apiKey: apiKeyDraft, model: selectedModelDraft)
+                                savedBanner = true
+                            } label: {
+                                Text("Guardar configuración IA")
+                                    .font(ImprovingFont.caption(13))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(Capsule().fill(BevelColors.emeraldEnd))
+                            }
+
+                            if savedBanner {
+                                Label("Guardado", systemImage: "checkmark.circle.fill")
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.greenPrimary)
+                            }
+                            Spacer()
+                        }
+
+                        Text("Con tu clave de Gemini usa la API oficial directamente. Sin clave funciona igualmente en vivo con el motor cloud de respaldo.")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
                     }
                     .padding(16)
                 }
@@ -133,7 +210,7 @@ struct DispositivosScreen: View {
                             .font(ImprovingFont.microLabel(11))
                             .foregroundColor(BevelColors.textSecondary)
 
-                        Toggle("Modo oscuro (fondo negro puro)", isOn: $darkToggle)
+                        Toggle("Modo oscuro", isOn: $darkToggle)
                             .font(ImprovingFont.body(14))
                             .foregroundColor(BevelColors.textPrimary)
                             .onChange(of: darkToggle) { _, newVal in
@@ -156,34 +233,15 @@ struct DispositivosScreen: View {
                     .padding(16)
                 }
                 .padding(.horizontal, 16)
-
-                // Gemini AI Key Config
-                BevelCard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("INTELIGENCIA ARTIFICIAL (GEMINI)")
-                            .font(ImprovingFont.microLabel(11))
-                            .foregroundColor(BevelColors.textSecondary)
-                        SecureField("API Key de Gemini (opcional)", text: $apiKeyDraft)
-                            .font(ImprovingFont.body(13.5))
-                            .padding(10)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
-                        Button("Guardar clave IA") {
-                            store.updateGeminiConfig(apiKey: apiKeyDraft, model: store.selectedGeminiModel)
-                        }
-                        .font(ImprovingFont.caption(12.5))
-                        .fontWeight(.semibold)
-                        .foregroundColor(BevelColors.emeraldEnd)
-                    }
-                    .padding(16)
-                }
-                .padding(.horizontal, 16)
             }
             .padding(.bottom, 120)
         }
         .background(BevelColors.canvas)
         .onAppear {
             apiKeyDraft = store.geminiApiKey
+            selectedModelDraft = store.selectedGeminiModel
             darkToggle = BevelColors.isDarkMode
+            savedBanner = false
         }
         .fileImporter(
             isPresented: $showingImporter,

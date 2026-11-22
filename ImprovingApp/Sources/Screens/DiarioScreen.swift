@@ -2,9 +2,8 @@ import SwiftUI
 
 private enum DiarioRowKind {
     case triState(id: String)
-    case nutritionLinked(key: String, valueText: String, isMet: Bool)
     case moodPicker
-    case sugarPopup
+    case hydrationLink
 }
 
 private struct DiarioEntrySpec: Identifiable {
@@ -17,11 +16,10 @@ private struct DiarioEntrySpec: Identifiable {
 private let dayEntries: [DiarioEntrySpec] = [
     DiarioEntrySpec(id: "fish_oil", emoji: "💊", title: "Aceite de pescado", kind: .triState(id: "fish_oil")),
     DiarioEntrySpec(id: "sexual_activity", emoji: "❣️", title: "Actividad sexual", kind: .triState(id: "sexual_activity")),
-    DiarioEntrySpec(id: "alcohol", emoji: "🍷", title: "Alcohol", kind: .nutritionLinked(key: "Alcohol", valueText: "0,0 bebidas", isMet: true)),
+    DiarioEntrySpec(id: "alcohol", emoji: "🍷", title: "Alcohol", kind: .triState(id: "alcohol")),
     DiarioEntrySpec(id: "ashwagandha", emoji: "💊", title: "Ashwagandha", kind: .triState(id: "ashwagandha")),
-    DiarioEntrySpec(id: "added_sugar", emoji: "🍬", title: "Azúcar añadido", kind: .sugarPopup),
-    DiarioEntrySpec(id: "caffeine", emoji: "☕", title: "Cafeína", kind: .nutritionLinked(key: "Cafeína", valueText: "3,1 mg", isMet: false)),
-    DiarioEntrySpec(id: "calcium", emoji: "💊", title: "Calcio", kind: .nutritionLinked(key: "Calcio", valueText: "513,0 mg", isMet: true)),
+    DiarioEntrySpec(id: "added_sugar", emoji: "🍬", title: "Azúcar añadido", kind: .triState(id: "added_sugar")),
+    DiarioEntrySpec(id: "caffeine", emoji: "☕", title: "Cafeína", kind: .triState(id: "caffeine")),
     DiarioEntrySpec(id: "creatine", emoji: "💊", title: "Creatina", kind: .triState(id: "creatine")),
     DiarioEntrySpec(id: "turmeric", emoji: "🫚", title: "Cúrcuma", kind: .triState(id: "turmeric")),
     DiarioEntrySpec(id: "low_carb", emoji: "🥖", title: "Dieta baja en carbohidratos", kind: .triState(id: "low_carb")),
@@ -30,21 +28,13 @@ private let dayEntries: [DiarioEntrySpec] = [
     DiarioEntrySpec(id: "mood", emoji: "😊", title: "Estado de ánimo diario", kind: .moodPicker),
     DiarioEntrySpec(id: "fever", emoji: "🤒", title: "Fiebre", kind: .triState(id: "fever")),
     DiarioEntrySpec(id: "physio", emoji: "🚶", title: "Fisioterapia", kind: .triState(id: "physio")),
-    DiarioEntrySpec(id: "hydration", emoji: "💧", title: "Hidratación", kind: .nutritionLinked(key: "Hidratación", valueText: "2083,8 ml", isMet: true)),
+    DiarioEntrySpec(id: "hydration", emoji: "💧", title: "Hidratación", kind: .hydrationLink),
     DiarioEntrySpec(id: "injury", emoji: "🩹", title: "Lesión", kind: .triState(id: "injury")),
     DiarioEntrySpec(id: "morning_sun", emoji: "☀️", title: "Luz del sol por la mañana", kind: .triState(id: "morning_sun")),
     DiarioEntrySpec(id: "dairy", emoji: "🥛", title: "Lácteos", kind: .triState(id: "dairy")),
-    DiarioEntrySpec(id: "magnesium", emoji: "💊", title: "Magnesio", kind: .nutritionLinked(key: "Magnesio", valueText: "265,7 mg", isMet: true)),
+    DiarioEntrySpec(id: "magnesium", emoji: "💊", title: "Magnesio", kind: .triState(id: "magnesium")),
     DiarioEntrySpec(id: "pain_meds", emoji: "℞", title: "Medicación para el dolor", kind: .triState(id: "pain_meds")),
     DiarioEntrySpec(id: "probiotic", emoji: "🦠", title: "Probiótico", kind: .triState(id: "probiotic")),
-    DiarioEntrySpec(id: "vit_a", emoji: "🥕", title: "Vitamina A", kind: .nutritionLinked(key: "Vitamina A", valueText: "405,3 μg", isMet: true)),
-    DiarioEntrySpec(id: "vit_b12", emoji: "🅱️", title: "Vitamina B-12", kind: .nutritionLinked(key: "Vitamina B-12", valueText: "4,8 μg", isMet: true)),
-    DiarioEntrySpec(id: "vit_b6", emoji: "🍗", title: "Vitamina B6", kind: .nutritionLinked(key: "Vitamina B6", valueText: "2,4 mg", isMet: true)),
-    DiarioEntrySpec(id: "vit_c", emoji: "🍊", title: "Vitamina C", kind: .nutritionLinked(key: "Vitamina C", valueText: "62,3 mg", isMet: true)),
-    DiarioEntrySpec(id: "vit_d", emoji: "☀️", title: "Vitamina D", kind: .nutritionLinked(key: "Vitamina D", valueText: "4,7 μg", isMet: true)),
-    DiarioEntrySpec(id: "vit_e", emoji: "🌻", title: "Vitamina E", kind: .nutritionLinked(key: "Vitamina E", valueText: "7,4 mg", isMet: true)),
-    DiarioEntrySpec(id: "vit_k", emoji: "🥦", title: "Vitamina K", kind: .nutritionLinked(key: "Vitamina K", valueText: "48,7 μg", isMet: true)),
-    DiarioEntrySpec(id: "zinc", emoji: "💊", title: "Zinc", kind: .nutritionLinked(key: "Zinc", valueText: "4,8 mg", isMet: true)),
 ]
 
 private let nightEntries: [DiarioEntrySpec] = [
@@ -66,43 +56,59 @@ struct DiarioScreen: View {
     @ObservedObject var store: ImprovingStore
     let onNavigate: (OverlayRoute) -> Void
 
-    @State private var showInsightsSheet: Bool = false
-    @State private var showSugarSheet: Bool = false
     @State private var showMoodSheet: Bool = false
-
-    private let dayNames = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
-    private let dayOffsets = [-5, -4, -3, -2, -1, 0, 1]
+    @State private var showCalendarSheet: Bool = false
 
     var body: some View {
-        let dayMap = store.journalCheckinsByDate[store.selectedDateIso] ?? defaultMap
-        let mood = store.journalMoodByDate[store.selectedDateIso] ?? 3
+        // STRICT RULE: Every manual checkbox starts UNSET (center —) unless the user actively chooses ✓ or ✕!
+        let dayMap = store.journalCheckinsByDate[store.selectedDateIso] ?? [:]
+        let moodOpt = store.journalMoodByDate[store.selectedDateIso]
         let moodLabels = ["Agotado", "Bajo", "Normal", "Bien", "Excelente"]
-        let moodText = moodLabels[max(0, min(4, mood - 1))]
-        let glasses = store.hydrationGlassesByDate[store.selectedDateIso] ?? 8
-        let waterMl = Double(glasses) * 250.0 + 83.8
+        let moodText = moodOpt.map { moodLabels[max(0, min(4, $0 - 1))] } ?? "Sin seleccionar"
+        let glasses = store.hydrationGlassesByDate[store.selectedDateIso] ?? 0
+        let waterMl = Double(glasses) * 250.0
+        let curSummary = store.currentDaySummary
 
         let autoRows: [AutoDiarioRow] = [
-            AutoDiarioRow(id: "a_steps", emoji: "👟", title: "10.000+ pasos", state: store.stepsCount >= 10000 ? .yes : .no),
-            AutoDiarioRow(id: "a_cardio", emoji: "🏃", title: "20+ minutos de cardio", state: (store.workoutsToday.first?.durationMin ?? 0) >= 20 ? .yes : .no),
-            AutoDiarioRow(id: "a_strength", emoji: "🏋️", title: "20+ minutos de fuerza", state: (store.currentDaySummary?.strengthMinutes ?? 0) >= 20 ? .yes : .no),
-            AutoDiarioRow(id: "a_daylight", emoji: "☀️", title: "20+ minutos de luz natural", state: .unset),
-            AutoDiarioRow(id: "a_z2", emoji: "🟠", title: "30+ minutos en la zona 2", state: (store.currentDaySummary?.hrZoneMinutes[safe: 1] ?? 0) >= 30 ? .yes : .no),
-            AutoDiarioRow(id: "a_stress", emoji: "💢", title: "50+ puntuación del Estrés", state: store.stressScore >= 50 ? .yes : .no),
-            AutoDiarioRow(id: "a_nutri", emoji: "🍎", title: "67+ puntuación de nutrición", state: store.foodQualityScore >= 67 ? .yes : .no),
-            AutoDiarioRow(id: "a_msun", emoji: "☀️", title: "Luz del sol por la mañana (automático)", state: .no),
-            AutoDiarioRow(id: "a_strain", emoji: "😮‍💨", title: "Objetivo de Esfuerzo superado", state: store.strainPercent > 84 ? .yes : .no),
-            AutoDiarioRow(id: "a_noise", emoji: "🔊", title: "Ruido al dormir de 50+ dB", state: .no),
-            AutoDiarioRow(id: "a_mind", emoji: "🧘", title: "Sesión de «mindfulness»", state: .no),
-            AutoDiarioRow(id: "a_nap", emoji: "😴", title: "Siestas", state: .no),
+            AutoDiarioRow(id: "a_steps", emoji: "👟", title: "10.000+ pasos", state: store.automaticHabitState(id: "a_steps", day: curSummary)),
+            AutoDiarioRow(id: "a_cardio", emoji: "🏃", title: "20+ minutos de cardio", state: store.automaticHabitState(id: "a_cardio", day: curSummary)),
+            AutoDiarioRow(id: "a_strength", emoji: "🏋️", title: "20+ minutos de fuerza", state: store.automaticHabitState(id: "a_strength", day: curSummary)),
+            AutoDiarioRow(id: "a_daylight", emoji: "☀️", title: "20+ minutos de luz natural", state: store.automaticHabitState(id: "a_daylight", day: curSummary)),
+            AutoDiarioRow(id: "a_z2", emoji: "🟠", title: "30+ minutos en la zona 2", state: store.automaticHabitState(id: "a_z2", day: curSummary)),
+            AutoDiarioRow(id: "a_stress", emoji: "💢", title: "50+ puntuación del Estrés", state: store.automaticHabitState(id: "a_stress", day: curSummary)),
+            AutoDiarioRow(id: "a_strain", emoji: "😮‍💨", title: "Objetivo de Esfuerzo superado", state: store.automaticHabitState(id: "a_strain", day: curSummary)),
+            AutoDiarioRow(id: "a_noise", emoji: "🔊", title: "Ruido al dormir de 50+ dB", state: store.automaticHabitState(id: "a_noise", day: curSummary)),
         ]
 
+        // Real 7-day calendar strip ending today + tomorrow preview
+        let cal = Calendar.current
+        let todayStart = cal.startOfDay(for: Date())
+        let stripOffsets = [-5, -4, -3, -2, -1, 0, 1]
+        let wdFmt = DateFormatter()
+        wdFmt.locale = Locale(identifier: "es_ES")
+        wdFmt.dateFormat = "EEE"
+        let shortDayFmt = DateFormatter()
+        shortDayFmt.locale = Locale(identifier: "es_ES")
+        shortDayFmt.dateFormat = "d MMM"
+        let prevNightDate = cal.date(byAdding: .day, value: -1, to: store.selectedDate) ?? store.selectedDate
+        let nightRangeLabel = "\(shortDayFmt.string(from: prevNightDate).replacingOccurrences(of: ".", with: "")) - \(shortDayFmt.string(from: store.selectedDate).replacingOccurrences(of: ".", with: ""))"
+
         VStack(spacing: 0) {
-            // Sticky Header Matching Screenshots 34–40
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
+                    Button { showCalendarSheet = true } label: {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .frame(width: 38, height: 38)
+                            .background(Circle().fill(BevelColors.glassChromeFill))
+                            .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                    }
+
                     Spacer()
+
                     HStack(spacing: 8) {
-                        Button { showInsightsSheet = true } label: {
+                        Button { onNavigate(.journalInsights) } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "sparkles")
                                     .font(.system(size: 13))
@@ -117,7 +123,7 @@ struct DiarioScreen: View {
                             .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                         }
 
-                        Button { showInsightsSheet = true } label: {
+                        Button { onNavigate(.journalInsights) } label: {
                             Image(systemName: "ellipsis")
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundColor(BevelColors.textPrimary)
@@ -128,47 +134,74 @@ struct DiarioScreen: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Diario")
-                        .font(ImprovingFont.displayLarge(28))
-                        .foregroundColor(BevelColors.textPrimary)
-                    Text("nov 2026")
-                        .font(ImprovingFont.body(14))
-                        .foregroundColor(BevelColors.textSecondary)
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Diario")
+                            .font(ImprovingFont.displayLarge(28))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(store.monthYearLabel)
+                            .font(ImprovingFont.body(14))
+                            .foregroundColor(BevelColors.textSecondary)
+                    }
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Button { store.shiftDay(1) } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(BevelColors.card))
+                        }
+                        Button { if store.dayOffset > 0 { store.shiftDay(-1) } } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(store.dayOffset > 0 ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(BevelColors.card.opacity(store.dayOffset > 0 ? 1 : 0.45)))
+                        }
+                        .disabled(store.dayOffset == 0)
+                    }
                 }
 
-                // 7-day strip with gold & emerald checkmarks (Screenshots 34–40)
+                // Dynamic 7-day strip with real dates & checkmarks only on days with logged entries
                 HStack(spacing: 4) {
-                    ForEach(0..<7, id: \.self) { idx in
-                        let offset = dayOffsets[idx]
+                    ForEach(stripOffsets, id: \.self) { offset in
+                        let dt = cal.date(byAdding: .day, value: offset, to: todayStart) ?? todayStart
                         let pastOffset = max(0, -offset)
                         let isFuture = offset > 0
                         let isSelected = !isFuture && (pastOffset == store.dayOffset)
-                        let dayNum = 21 + offset
+                        let dayNum = cal.component(.day, from: dt)
+                        let dayName = wdFmt.string(from: dt).replacingOccurrences(of: ".", with: "").prefix(3)
+                        let iso = store.isoFormatter.string(from: dt)
+                        let hasLogged = (store.journalCheckinsByDate[iso]?.values.contains { $0 != .unset } ?? false)
 
                         Button {
                             if !isFuture { store.selectDayOffset(pastOffset) }
                         } label: {
                             VStack(spacing: 6) {
-                                Text(dayNames[idx])
+                                Text(String(dayName))
                                     .font(ImprovingFont.caption(11.5))
                                     .foregroundColor(BevelColors.textMuted)
                                 Text("\(dayNum)")
                                     .font(ImprovingFont.cardTitle(14))
-                                    .foregroundColor(isSelected ? BevelColors.textPrimary : (idx == 5 ? BevelColors.skyBlue : (isFuture ? BevelColors.textMuted : BevelColors.textPrimary)))
+                                    .foregroundColor(isSelected ? BevelColors.textPrimary : (offset == 0 ? BevelColors.skyBlue : (isFuture ? BevelColors.textMuted : BevelColors.textPrimary)))
 
                                 ZStack {
                                     if isFuture {
                                         Circle()
                                             .strokeBorder(BevelColors.trackGroove, lineWidth: 1.2)
                                             .frame(width: 24, height: 24)
-                                    } else {
+                                    } else if hasLogged {
                                         Circle()
                                             .fill(isSelected ? BevelColors.greenPrimary : Color(hex: 0xBA923A))
                                             .frame(width: 24, height: 24)
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 11, weight: .bold))
                                             .foregroundColor(.white)
+                                    } else {
+                                        Circle()
+                                            .strokeBorder(isSelected ? BevelColors.greenPrimary : BevelColors.trackGroove, lineWidth: 1.5)
+                                            .frame(width: 24, height: 24)
                                     }
                                 }
                             }
@@ -191,10 +224,14 @@ struct DiarioScreen: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(store.dayOffset == 0 ? "Entradas de hoy" : "Entradas de ayer")
+                    Text(store.dayOffset == 0 ? "Entradas de hoy" : "Entradas · \(store.dateLabel)")
                         .font(ImprovingFont.sectionTitle(18))
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.top, 12)
+
+                    Text("Las casillas en el centro (—) no se tienen en cuenta. Marca ✓ en verde o ✕ en rojo para analizar su impacto en tu sueño y recuperación.")
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textSecondary)
 
                     Text("Día")
                         .font(ImprovingFont.body(14))
@@ -204,22 +241,35 @@ struct DiarioScreen: View {
                     ForEach(dayEntries) { entry in
                         switch entry.kind {
                         case .triState(let hid):
-                            triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .no) { next in
+                            triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .unset) { next in
                                 store.setJournalCheck(habitId: hid, state: next)
                             }
-                        case .sugarPopup:
-                            Button { showSugarSheet = true } label: {
-                                triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap["added_sugar"] ?? .no) { next in
-                                    store.setJournalCheck(habitId: "added_sugar", state: next)
-                                }
-                            }
-                        case .nutritionLinked(let key, let defaultVal, let isMet):
-                            let valStr = key == "Hidratación"
-                                ? String(format: "%.1f ml", locale: Locale(identifier: "es_ES"), waterMl)
-                                : defaultVal
-                            nutritionLinkedRow(emoji: entry.emoji, title: entry.title, valueText: valStr, isMet: isMet) {
-                                store.selectedNutrientKey = key
+                        case .hydrationLink:
+                            Button {
+                                store.selectedNutrientKey = "Hidratación"
                                 onNavigate(.nutrientDetail)
+                            } label: {
+                                BevelCard(cornerRadius: 16) {
+                                    HStack(spacing: 10) {
+                                        Text(entry.emoji).font(.system(size: 18))
+                                        Text(entry.title)
+                                            .font(ImprovingFont.cardTitle(14.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Spacer()
+                                        Text(glasses > 0 ? String(format: "%.0f ml", waterMl) : "Sin registrar")
+                                            .font(ImprovingFont.cardTitle(13.5))
+                                            .monospacedDigit()
+                                            .foregroundColor(glasses >= 8 ? BevelColors.greenPrimary : BevelColors.textSecondary)
+                                        Image(systemName: "arrow.right")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                            .frame(width: 34, height: 34)
+                                            .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 9)
+                                }
                             }
                         case .moodPicker:
                             Button { showMoodSheet = true } label: {
@@ -231,8 +281,8 @@ struct DiarioScreen: View {
                                             .foregroundColor(BevelColors.textPrimary)
                                         Spacer()
                                         Text(moodText)
-                                            .font(ImprovingFont.body(14))
-                                            .foregroundColor(BevelColors.textSecondary)
+                                            .font(ImprovingFont.body(13.5))
+                                            .foregroundColor(moodOpt != nil ? BevelColors.textPrimary : BevelColors.textMuted)
                                         Image(systemName: "arrow.right")
                                             .font(.system(size: 13, weight: .semibold))
                                             .foregroundColor(BevelColors.textSecondary)
@@ -247,13 +297,13 @@ struct DiarioScreen: View {
                         }
                     }
 
-                    // Noche Section (Screenshot 38)
+                    // Noche Section (ALL start .unset!)
                     HStack {
                         Text("Noche")
                             .font(ImprovingFont.body(14))
                             .foregroundColor(BevelColors.textSecondary)
                         Spacer()
-                        Text("19 nov - 20 nov")
+                        Text(nightRangeLabel)
                             .font(ImprovingFont.caption(13))
                             .foregroundColor(BevelColors.textMuted)
                     }
@@ -261,13 +311,13 @@ struct DiarioScreen: View {
 
                     ForEach(nightEntries) { entry in
                         if case .triState(let hid) = entry.kind {
-                            triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? (hid == "device_bed" ? .yes : .no)) { next in
+                            triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .unset) { next in
                                 store.setJournalCheck(habitId: hid, state: next)
                             }
                         }
                     }
 
-                    // Automático Section (Screenshots 39–40)
+                    // Automático Section (strictly grounded in real collected data)
                     Text("Automático")
                         .font(ImprovingFont.body(14))
                         .foregroundColor(BevelColors.textSecondary)
@@ -307,44 +357,15 @@ struct DiarioScreen: View {
             .background(BevelColors.canvas)
         }
         .background(BevelColors.canvas)
-        // Screenshot 42: Azúcar añadido bottom sheet popup
-        .sheet(isPresented: $showSugarSheet) {
-            VStack(spacing: 16) {
-                Capsule().fill(BevelColors.trackGroove).frame(width: 40, height: 4).padding(.top, 10)
-                Text("Azúcar añadido")
-                    .font(ImprovingFont.sectionTitle(18))
-                    .foregroundColor(BevelColors.textPrimary)
-                Text("Estos alimentos con azúcares añadidos se detectan automáticamente basándose en tu registro de nutrición de hoy.")
-                    .font(ImprovingFont.body(13.5))
-                    .foregroundColor(BevelColors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 14)
-
-                VStack(spacing: 10) {
-                    sugarFoodCard(emoji: "🥛", name: "Leche con chocolate", detail: "Incluye 9g de Azúcares añadidos")
-                    sugarFoodCard(emoji: "🍪", name: "Galletas de avena con chispas de chocolate", detail: "Incluye 11,9g de Azúcares añadidos")
-                }
-
-                Button {
-                    store.setJournalCheck(habitId: "added_sugar", state: .no)
-                    showSugarSheet = false
-                } label: {
-                    Text("Anulación manual")
-                        .font(ImprovingFont.cardTitle(15))
-                        .foregroundColor(BevelColors.coralHigh)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Capsule().fill(BevelColors.coralSoftBg))
-                }
-
-                Button("Cancelar") { showSugarSheet = false }
-                    .font(ImprovingFont.cardTitle(15))
-                    .foregroundColor(BevelColors.textPrimary)
-                    .padding(.bottom, 12)
-            }
-            .padding(.horizontal, 20)
-            .background(BevelColors.sheetHeaderBg.ignoresSafeArea())
-            .presentationDetents([.medium])
+        .sheet(isPresented: $showCalendarSheet) {
+            DatePickerSheetView(
+                selectedDate: Binding(
+                    get: { store.selectedDate },
+                    set: { d in store.selectDate(d); showCalendarSheet = false }
+                ),
+                onJumpToday: { store.selectDayOffset(0); showCalendarSheet = false },
+                onClose: { showCalendarSheet = false }
+            )
         }
         .sheet(isPresented: $showMoodSheet) {
             VStack(spacing: 16) {
@@ -365,7 +386,7 @@ struct DiarioScreen: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
-                            .background(RoundedRectangle(cornerRadius: 14).fill(mood == m ? BevelColors.greenSoftBg : BevelColors.card))
+                            .background(RoundedRectangle(cornerRadius: 14).fill(moodOpt == m ? BevelColors.greenSoftBg : BevelColors.card))
                         }
                     }
                 }
@@ -373,59 +394,6 @@ struct DiarioScreen: View {
             .padding(20)
             .background(BevelColors.sheetHeaderBg.ignoresSafeArea())
             .presentationDetents([.height(220)])
-        }
-        .sheet(isPresented: $showInsightsSheet) {
-            NavigationStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Impacto estadístico sobre tu Recuperación (90 días)")
-                            .font(ImprovingFont.caption(13))
-                            .foregroundColor(BevelColors.textSecondary)
-                        ForEach([
-                            ("💧", "Hidratación (2+ L)", "+5,4% Recuperación"),
-                            ("💊", "Magnesio nocturno", "+6,1% Sueño profundo"),
-                            ("☀️", "Luz del sol matutina", "+4,2% VFC"),
-                            ("📱", "Dispositivo en la cama", "-4,8% Eficiencia sueño"),
-                            ("🍷", "Alcohol (0 bebidas)", "+7,3% Recuperación"),
-                        ], id: \.1) { emoji, label, impact in
-                            BevelCard(cornerRadius: 16) {
-                                HStack {
-                                    Text(emoji)
-                                    Text(label).font(ImprovingFont.cardTitle(14)).foregroundColor(BevelColors.textPrimary)
-                                    Spacer()
-                                    Text(impact).font(ImprovingFont.caption(12.5)).fontWeight(.semibold).foregroundColor(impact.hasPrefix("+") ? BevelColors.greenPrimary : BevelColors.coralHigh)
-                                }
-                                .padding(14)
-                            }
-                        }
-                    }
-                    .padding(16)
-                }
-                .background(BevelColors.canvas)
-                .navigationTitle("Información del Diario")
-                .navigationBarTitleDisplayMode(.inline)
-            }
-        }
-    }
-
-    private var defaultMap: [String: JournalCheckState] {
-        ["dairy": .yes, "device_bed": .yes]
-    }
-
-    private func sugarFoodCard(emoji: String, name: String, detail: String) -> some View {
-        BevelCard(cornerRadius: 16, backgroundColor: BevelColors.card) {
-            HStack(spacing: 12) {
-                Text(emoji)
-                    .font(.system(size: 20))
-                    .frame(width: 40, height: 40)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name).font(ImprovingFont.cardTitle(14)).foregroundColor(BevelColors.textPrimary)
-                    Text(detail).font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textSecondary)
-                }
-                Spacer()
-            }
-            .padding(12)
         }
     }
 
@@ -439,9 +407,18 @@ struct DiarioScreen: View {
                     .lineLimit(1)
                 Spacer()
                 HStack(spacing: 2) {
-                    triBtn(icon: "xmark", active: state == .no, activeFill: Color(hex: 0x7A4232), activeBorder: BevelColors.coralHigh) { onSelect(.no) }
-                    triBtn(icon: "minus", active: state == .unset, activeFill: BevelColors.floatingDarkButton, activeBorder: Color.white.opacity(0.2)) { onSelect(.unset) }
-                    triBtn(icon: "checkmark", active: state == .yes, activeFill: Color(hex: 0x355C9E), activeBorder: BevelColors.skyBlue) { onSelect(.yes) }
+                    triBtn(icon: "xmark", active: state == .no, activeFill: Color(hex: 0x7A3229), activeBorder: BevelColors.coralHigh) {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        onSelect(state == .no ? .unset : .no)
+                    }
+                    triBtn(icon: "minus", active: state == .unset, activeFill: BevelColors.floatingDarkButton, activeBorder: Color.white.opacity(0.22)) {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        onSelect(.unset)
+                    }
+                    triBtn(icon: "checkmark", active: state == .yes, activeFill: Color(hex: 0x1E6B45), activeBorder: BevelColors.greenPrimary) {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        onSelect(state == .yes ? .unset : .yes)
+                    }
                 }
                 .padding(2)
                 .background(RoundedRectangle(cornerRadius: 11).fill(BevelColors.cardSubtle))
@@ -455,47 +432,316 @@ struct DiarioScreen: View {
     private func triBtn(icon: String, active: Bool, activeFill: Color, activeBorder: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12, weight: .bold))
                 .foregroundColor(active ? .white : BevelColors.textMuted.opacity(0.6))
                 .frame(width: 34, height: 32)
                 .background(RoundedRectangle(cornerRadius: 9).fill(active ? activeFill : .clear))
                 .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(active ? activeBorder : .clear, lineWidth: 1.2))
         }
     }
-
-    private func nutritionLinkedRow(emoji: String, title: String, valueText: String, isMet: Bool, onClick: @escaping () -> Void) -> some View {
-        Button(action: onClick) {
-            BevelCard(cornerRadius: 16) {
-                HStack(spacing: 10) {
-                    Text(emoji).font(.system(size: 18))
-                    Text(title)
-                        .font(ImprovingFont.cardTitle(14.5))
-                        .foregroundColor(BevelColors.textPrimary)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(valueText)
-                        .font(ImprovingFont.cardTitle(14))
-                        .monospacedDigit()
-                        .foregroundColor(isMet ? BevelColors.greenPrimary : BevelColors.coralHigh)
-                    Image(systemName: isMet ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.system(size: 19))
-                        .foregroundColor(isMet ? BevelColors.greenPrimary : BevelColors.coralHigh)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(BevelColors.textSecondary)
-                        .frame(width: 34, height: 34)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-            }
-        }
-    }
 }
 
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+// MARK: - Diario ✨ Información Screen (Literal Match to Screenshots 1 & 2: Puntuación del Sueño & Recuperación)
+
+struct JournalInsightsScreen: View {
+    @ObservedObject var store: ImprovingStore
+    let onBack: () -> Void
+
+    @State private var target: JournalImpactTarget = .sleep
+
+    var body: some View {
+        let allItems = store.computeJournalImpacts(for: target)
+        let highItems = allItems.filter { $0.reliability == .high }
+        let lowItems = allItems.filter { $0.reliability == .low }
+        let lockedItems = allItems.filter { $0.reliability == .locked }
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Atmospheric Header (Starry Night for Sueño, Misty Dusk Hills for Recuperación)
+                ZStack(alignment: .topLeading) {
+                    if target == .sleep {
+                        LinearGradient(
+                            colors: [Color(hex: 0x26386B), Color(hex: 0x1A2241), BevelColors.canvas],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        // Subtle starry night sky + crescent moon (Screenshot 1)
+                        Canvas { ctx, sz in
+                            let stars: [(CGFloat, CGFloat, CGFloat)] = [
+                                (0.12, 0.16, 1.5), (0.28, 0.24, 1.2), (0.45, 0.14, 1.8),
+                                (0.62, 0.20, 1.4), (0.82, 0.18, 1.6), (0.91, 0.30, 1.2),
+                                (0.18, 0.36, 1.2), (0.54, 0.34, 1.5), (0.76, 0.40, 1.3)
+                            ]
+                            for (fx, fy, r) in stars {
+                                ctx.fill(Path(ellipseIn: CGRect(x: sz.width * fx, y: sz.height * fy, width: r * 2, height: r * 2)), with: .color(Color.white.opacity(0.45)))
+                            }
+                        }
+                        HStack {
+                            Spacer()
+                            Image(systemName: "moon.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(Color.white.opacity(0.82))
+                                .shadow(color: Color.white.opacity(0.45), radius: 10)
+                                .padding(.top, 52)
+                                .padding(.trailing, 76)
+                        }
+                    } else {
+                        // Misty dusk hills atmosphere (Screenshot 2)
+                        LinearGradient(
+                            colors: [Color(hex: 0x676B78), Color(hex: 0x3D4150), BevelColors.canvas],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button(action: onBack) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(Color.black.opacity(0.32)))
+                                .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8))
+                        }
+                        .padding(.top, 8)
+
+                        Spacer(minLength: 26)
+
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.92))
+                            Text("Información")
+                                .font(ImprovingFont.cardTitle(16))
+                                .foregroundColor(.white.opacity(0.92))
+                        }
+
+                        Text(target == .sleep ? "Puntuación del Sueño" : "Puntuación de Recuperación")
+                            .font(ImprovingFont.displayLarge(27))
+                            .foregroundColor(.white)
+
+                        Text(target == .sleep
+                             ? "Aquí se analiza cómo tus comportamientos y hábitos diarios afectan el sueño."
+                             : "Aquí se analiza cómo tus comportamientos y hábitos diarios afectan la recuperación.")
+                            .font(ImprovingFont.body(14))
+                            .foregroundColor(.white.opacity(0.84))
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        // Dual Pill Selector: [ Recuperación ] [ Sueño ]
+                        HStack(spacing: 10) {
+                            ForEach(JournalImpactTarget.allCases) { tab in
+                                let active = target == tab
+                                Button {
+                                    UISelectionFeedbackGenerator().selectionChanged()
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        target = tab
+                                    }
+                                } label: {
+                                    Text(tab.rawValue)
+                                        .font(ImprovingFont.cardTitle(14.5))
+                                        .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 12)
+                                        .background(Capsule().fill(active ? Color(hex: 0x6A6E7A) : Color(hex: 0x2F323B).opacity(0.85)))
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 18)
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    // 1. High Reliability Section (when ≥5 ✓ and ≥5 ✕ in last 90 days)
+                    if !highItems.isEmpty {
+                        impactAxisHeader
+                        ForEach(highItems) { item in
+                            impactBarCard(item: item, isHighReliability: true)
+                        }
+                    }
+
+                    // 2. Fiabilidad baja Section (when ≥1 ✓ and ≥1 ✕, but < 5 on either side)
+                    if !lowItems.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Fiabilidad baja")
+                                .font(ImprovingFont.sectionTitle(18))
+                                .foregroundColor(BevelColors.textPrimary)
+                            Text("Sigue registrando datos para mejorar la puntuación de fiabilidad.")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                        }
+                        .padding(.top, highItems.isEmpty ? 6 : 16)
+
+                        impactAxisHeader
+                        ForEach(lowItems) { item in
+                            impactBarCard(item: item, isHighReliability: false)
+                        }
+                    }
+
+                    // 3. Etiquetas bloqueadas Section
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Etiquetas bloqueadas")
+                            .font(ImprovingFont.sectionTitle(18))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text("Registra al menos 5 positivos y 5 negativos para los últimos 90 días para desbloquear el análisis de fiabilidad alta.")
+                            .font(ImprovingFont.body(13.5))
+                            .foregroundColor(BevelColors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 16)
+
+                    if lockedItems.isEmpty {
+                        BevelCard(cornerRadius: 16) {
+                            HStack(spacing: 10) {
+                                Image(systemName: "checkmark.seal.fill").foregroundColor(BevelColors.greenPrimary)
+                                Text("Todas tus etiquetas ya cuentan con suficiente historial para calcular su impacto.")
+                                    .font(ImprovingFont.caption(13))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            .padding(14)
+                        }
+                    } else {
+                        ForEach(lockedItems) { item in
+                            BevelCard(cornerRadius: 16) {
+                                HStack(spacing: 12) {
+                                    Text(item.emoji).font(.system(size: 18))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.title)
+                                            .font(ImprovingFont.cardTitle(14))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                            .lineLimit(1)
+                                        Text("✓ \(item.yesCount)/5 positivos  ·  ✕ \(item.noCount)/5 negativos")
+                                            .font(ImprovingFont.caption(11.5))
+                                            .foregroundColor(BevelColors.textMuted)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "lock.fill")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(BevelColors.textMuted)
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 150)
+            }
+        }
+        .background(BevelColors.canvas)
+    }
+
+    private var impactAxisHeader: some View {
+        HStack {
+            Text("Negativo")
+                .font(ImprovingFont.caption(12))
+                .fontWeight(.semibold)
+                .foregroundColor(Color(hex: 0xE67E5A))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x3F261F)))
+            Spacer()
+            Text("Impacto %")
+                .font(ImprovingFont.caption(12.5))
+                .foregroundColor(BevelColors.textSecondary)
+            Spacer()
+            Text("Positivo")
+                .font(ImprovingFont.caption(12))
+                .fontWeight(.semibold)
+                .foregroundColor(Color(hex: 0x6EA4FF))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x1F2D46)))
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func impactBarCard(item: JournalHabitImpactItem, isHighReliability: Bool) -> some View {
+        let pct = item.impactPct
+        let isPositive = pct > 0
+        let signText = pct > 0 ? "+\(pct)%" : (pct == 0 ? "-0%" : "\(pct)%")
+        let barColor: Color = {
+            if !isHighReliability { return Color(hex: 0x6B7080) }
+            return isPositive ? Color(hex: 0x6095FF) : Color(hex: 0xE67E5A)
+        }()
+        let textColor: Color = {
+            if !isHighReliability { return BevelColors.textMuted }
+            return isPositive ? Color(hex: 0x6095FF) : Color(hex: 0xE67E5A)
+        }()
+        // Scale: ±15% fills full half-bar
+        let frac = min(max(Double(abs(pct)) / 15.0, pct == 0 ? 0.0 : 0.08), 1.0)
+
+        return BevelCard(cornerRadius: 18) {
+            VStack(spacing: 11) {
+                HStack(spacing: 10) {
+                    Text(item.emoji).font(.system(size: 18))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .lineLimit(1)
+                        Text("✓ \(item.yesCount) días · ✕ \(item.noCount) días")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+                    Spacer()
+                    Text(signText)
+                        .font(ImprovingFont.metricTile(18))
+                        .monospacedDigit()
+                        .foregroundColor(textColor)
+                }
+
+                // Centered Bidirectional Impact Bar (Literal match to Screenshots 1 & 2!)
+                GeometryReader { geo in
+                    let midX = geo.size.width / 2
+                    let halfW = max(midX - 12, 10)
+                    let fillW = halfW * CGFloat(frac)
+
+                    ZStack {
+                        // Left track
+                        Capsule()
+                            .fill(Color.white.opacity(0.06))
+                            .frame(width: halfW, height: 6)
+                            .position(x: midX - 10 - halfW / 2, y: geo.size.height / 2)
+
+                        // Right track
+                        Capsule()
+                            .fill(Color.white.opacity(0.06))
+                            .frame(width: halfW, height: 6)
+                            .position(x: midX + 10 + halfW / 2, y: geo.size.height / 2)
+
+                        // Filled half-bar
+                        if fillW > 2 {
+                            if isPositive {
+                                Capsule()
+                                    .fill(barColor)
+                                    .frame(width: fillW, height: 6)
+                                    .position(x: midX + 10 + fillW / 2, y: geo.size.height / 2)
+                            } else {
+                                Capsule()
+                                    .fill(barColor)
+                                    .frame(width: fillW, height: 6)
+                                    .position(x: midX - 10 - fillW / 2, y: geo.size.height / 2)
+                            }
+                        }
+
+                        // Glowing center dot
+                        Circle()
+                            .fill(barColor.opacity(0.24))
+                            .frame(width: 18, height: 18)
+                            .position(x: midX, y: geo.size.height / 2)
+                        Circle()
+                            .fill(barColor)
+                            .frame(width: 9, height: 9)
+                            .position(x: midX, y: geo.size.height / 2)
+                    }
+                }
+                .frame(height: 18)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+        }
     }
 }

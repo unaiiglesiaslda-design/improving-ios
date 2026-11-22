@@ -122,25 +122,39 @@ enum WhoopExportImporter {
                     hrvMs: imp.hrvMs ?? cur.hrvMs,
                     respRateRpm: imp.respRateRpm ?? cur.respRateRpm,
                     wristTempDeltaC: imp.wristTempDeltaC ?? cur.wristTempDeltaC,
+                    wristTempAbsoluteC: imp.wristTempAbsoluteC ?? cur.wristTempAbsoluteC,
                     spo2Percent: imp.spo2Percent ?? cur.spo2Percent,
                     asleepMinutes: imp.asleepMinutes ?? cur.asleepMinutes,
                     inBedMinutes: imp.inBedMinutes ?? cur.inBedMinutes,
                     deepMinutes: imp.deepMinutes ?? cur.deepMinutes,
                     remMinutes: imp.remMinutes ?? cur.remMinutes,
+                    coreMinutes: imp.coreMinutes ?? cur.coreMinutes,
+                    awakeMinutes: imp.awakeMinutes ?? cur.awakeMinutes,
                     sleepPct: imp.sleepPct ?? cur.sleepPct,
                     sleepDebtMinutes: imp.sleepDebtMinutes ?? cur.sleepDebtMinutes,
+                    sleepSession: imp.sleepSession ?? cur.sleepSession,
                     strain21: imp.strain21 ?? cur.strain21,
                     strainPct: imp.strainPct ?? cur.strainPct,
                     recoveryPct: imp.recoveryPct ?? cur.recoveryPct,
-                    stressScore: cur.stressScore ?? imp.stressScore,
-                    energyBankPercent: cur.energyBankPercent ?? imp.energyBankPercent,
-                    stepsCount: cur.stepsCount ?? imp.stepsCount,
+                    stressScore: imp.stressScore ?? cur.stressScore,
+                    energyBankPercent: imp.energyBankPercent ?? cur.energyBankPercent,
+                    stepsCount: imp.stepsCount ?? cur.stepsCount,
                     vo2MaxMlKgMin: imp.vo2MaxMlKgMin ?? cur.vo2MaxMlKgMin,
+                    hrRecoveryBpm: imp.hrRecoveryBpm ?? cur.hrRecoveryBpm,
                     glucoseMgDl: imp.glucoseMgDl ?? cur.glucoseMgDl,
-                    activeKcal: cur.activeKcal ?? imp.activeKcal,
+                    activeKcal: imp.activeKcal ?? cur.activeKcal,
+                    daylightMinutes: imp.daylightMinutes ?? cur.daylightMinutes,
+                    sleepNoiseOver50Db: imp.sleepNoiseOver50Db ?? cur.sleepNoiseOver50Db,
+                    bodyWeightKg: imp.bodyWeightKg ?? cur.bodyWeightKg,
+                    bodyFatPct: imp.bodyFatPct ?? cur.bodyFatPct,
+                    leanMassKg: imp.leanMassKg ?? cur.leanMassKg,
+                    systolicBp: imp.systolicBp ?? cur.systolicBp,
+                    diastolicBp: imp.diastolicBp ?? cur.diastolicBp,
                     hrZoneMinutes: zones,
-                    stressSeries24h: !cur.stressSeries24h.isEmpty ? cur.stressSeries24h : imp.stressSeries24h,
-                    energySeries24h: !cur.energySeries24h.isEmpty ? cur.energySeries24h : imp.energySeries24h,
+                    stressSeries24h: !imp.stressSeries24h.isEmpty ? imp.stressSeries24h : cur.stressSeries24h,
+                    energySeries24h: !imp.energySeries24h.isEmpty ? imp.energySeries24h : cur.energySeries24h,
+                    stressSamples5m: !imp.stressSamples5m.isEmpty ? imp.stressSamples5m : cur.stressSamples5m,
+                    energySamples5m: !imp.energySamples5m.isEmpty ? imp.energySamples5m : cur.energySamples5m,
                     strengthMinutes: max(cur.strengthMinutes, imp.strengthMinutes),
                     workouts: combinedWorkouts
                 )
@@ -173,7 +187,7 @@ enum WhoopExportImporter {
                 d.strain21 = s
                 d.strainPct = min(max(Int(((s / 21.0) * 100.0).rounded()), 1), 100)
             }
-            d.spo2Percent = parseNum(cell(r, spo2Col)).map { Int($0.rounded()) } ?? d.spo2Percent
+            d.spo2Percent = parseNum(cell(r, spo2Col)) ?? d.spo2Percent
             d.respRateRpm = parseNum(cell(r, respCol)) ?? d.respRateRpm
             if let sl = parseNum(cell(r, sleepCol)) {
                 if sl > 100 { d.asleepMinutes = Int(sl.rounded()) } else { d.sleepPct = Int(sl.rounded()) }
