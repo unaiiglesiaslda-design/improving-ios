@@ -1345,39 +1345,48 @@ final class ImprovingStore: ObservableObject {
         let yesHabits = Self.journalCatalog.filter { dayJournal[$0.id] == .yes }.map(\.title)
         let noHabits = Self.journalCatalog.filter { dayJournal[$0.id] == .no }.map(\.title)
 
+        let perfil: [String: Any] = [
+            "nombre": userProfile.userName.isEmpty ? "Usuario" : userProfile.userName,
+            "edad": Int(userProfile.ageYears),
+            "sexo": userProfile.sex.rawValue,
+            "peso_kg": latestBodyWeightKg ?? userProfile.weightKg,
+            "altura_cm": userProfile.heightCm
+        ]
+
+        var metricas: [String: Any] = [:]
+        metricas["recuperacion_pct"] = av.hasRecoveryData ? (recoveryPercent as Any) : "NO_DISPONIBLE"
+        metricas["esfuerzo_pct"] = av.hasStrainData ? (strainPercent as Any) : "NO_DISPONIBLE"
+        metricas["strain_21"] = av.hasStrainData ? (strain21 as Any) : "NO_DISPONIBLE"
+        metricas["sueno_pct"] = av.hasSleepData ? (sleepPercent as Any) : "NO_DISPONIBLE"
+        metricas["sueno_duracion"] = av.hasSleepData ? (sleepDurationText as Any) : "NO_DISPONIBLE"
+        metricas["sueno_profundo_min"] = (d?.deepMinutes ?? 0) > 0 ? ((d?.deepMinutes ?? 0) as Any) : "NO_DISPONIBLE"
+        metricas["sueno_rem_min"] = (d?.remMinutes ?? 0) > 0 ? ((d?.remMinutes ?? 0) as Any) : "NO_DISPONIBLE"
+        metricas["vfc_ms"] = av.hasHrvData ? (hrvMs as Any) : "NO_DISPONIBLE"
+        metricas["fc_reposo_ppm"] = av.hasRestingHrData ? (restingHrBpm as Any) : "NO_DISPONIBLE"
+        metricas["frecuencia_respiratoria_rpm"] = av.hasRespData ? (respRateRpm as Any) : "NO_DISPONIBLE"
+        metricas["spo2_pct"] = spo2Value.map { $0 as Any } ?? "NO_DISPONIBLE"
+        metricas["temperatura_muneca_c"] = wristTempAbsoluteC.map { $0 as Any } ?? "NO_DISPONIBLE"
+        metricas["estres_medio"] = av.hasStressData ? (stressScore as Any) : "NO_DISPONIBLE"
+        metricas["energia_pct"] = av.hasEnergyData ? (energyPercent as Any) : "NO_DISPONIBLE"
+        metricas["pasos"] = stepsCount.map { $0 as Any } ?? "NO_DISPONIBLE"
+        metricas["vo2_max"] = latestVo2Max.map { $0 as Any } ?? "NO_DISPONIBLE"
+        if workoutsToday.isEmpty {
+            metricas["entrenamientos_hoy"] = "NINGUNO"
+        } else {
+            metricas["entrenamientos_hoy"] = workoutsToday.map { "\($0.title) \($0.durationMin)min \($0.kcal)kcal" }
+        }
+
+        let diarioHoy: [String: Any] = [
+            "marcados_si": yesHabits,
+            "marcados_no": noHabits
+        ]
+
         let payload: [String: Any] = [
             "fecha_seleccionada": selectedDateIso,
             "origen_datos": hasImportedOrPairedRealData ? "Apple Health / Sensores reales" : "Modo vista previa",
-            "perfil": [
-                "nombre": userProfile.userName.isEmpty ? "Usuario" : userProfile.userName,
-                "edad": Int(userProfile.ageYears),
-                "sexo": userProfile.sex.rawValue,
-                "peso_kg": latestBodyWeightKg ?? userProfile.weightKg,
-                "altura_cm": userProfile.heightCm
-            ],
-            "metricas_hoy": [
-                "recuperacion_pct": av.hasRecoveryData ? recoveryPercent : "NO_DISPONIBLE",
-                "esfuerzo_pct": av.hasStrainData ? strainPercent : "NO_DISPONIBLE",
-                "strain_21": av.hasStrainData ? strain21 : "NO_DISPONIBLE",
-                "sueno_pct": av.hasSleepData ? sleepPercent : "NO_DISPONIBLE",
-                "sueno_duracion": av.hasSleepData ? sleepDurationText : "NO_DISPONIBLE",
-                "sueno_profundo_min": (d?.deepMinutes ?? 0) > 0 ? (d?.deepMinutes ?? 0) : "NO_DISPONIBLE",
-                "sueno_rem_min": (d?.remMinutes ?? 0) > 0 ? (d?.remMinutes ?? 0) : "NO_DISPONIBLE",
-                "vfc_ms": av.hasHrvData ? hrvMs : "NO_DISPONIBLE",
-                "fc_reposo_ppm": av.hasRestingHrData ? restingHrBpm : "NO_DISPONIBLE",
-                "frecuencia_respiratoria_rpm": av.hasRespData ? respRateRpm : "NO_DISPONIBLE",
-                "spo2_pct": spo2Value ?? "NO_DISPONIBLE",
-                "temperatura_muneca_c": wristTempAbsoluteC ?? "NO_DISPONIBLE",
-                "estres_medio": av.hasStressData ? stressScore : "NO_DISPONIBLE",
-                "energia_pct": av.hasEnergyData ? energyPercent : "NO_DISPONIBLE",
-                "pasos": stepsCount ?? "NO_DISPONIBLE",
-                "vo2_max": latestVo2Max ?? "NO_DISPONIBLE",
-                "entrenamientos_hoy": workoutsToday.isEmpty ? "NINGUNO" : workoutsToday.map { "\($0.title) \($0.durationMin)min \($0.kcal)kcal" }
-            ],
-            "diario_hoy": [
-                "marcados_si": yesHabits,
-                "marcados_no": noHabits
-            ]
+            "perfil": perfil,
+            "metricas_hoy": metricas,
+            "diario_hoy": diarioHoy
         ]
 
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]),
