@@ -13,9 +13,12 @@ struct FitnessScreen: View {
         let cal = Calendar.current
         let todayStart = cal.startOfDay(for: Date())
         let stripOffsets = [-3, -2, -1, 0, 1, 2, 3]
-        let wdFmt = DateFormatter()
-        wdFmt.locale = Locale(identifier: "es_ES")
-        wdFmt.dateFormat = "EEEEE"
+        let wdFmt: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "es_ES")
+            f.dateFormat = "EEEEE"
+            return f
+        }()
 
         // Real 30-day workout totals (strictly zero invented numbers!)
         let last30 = store.trailingCalendarSummaries(days: 30)

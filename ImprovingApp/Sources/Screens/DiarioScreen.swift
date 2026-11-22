@@ -84,12 +84,18 @@ struct DiarioScreen: View {
         let cal = Calendar.current
         let todayStart = cal.startOfDay(for: Date())
         let stripOffsets = [-5, -4, -3, -2, -1, 0, 1]
-        let wdFmt = DateFormatter()
-        wdFmt.locale = Locale(identifier: "es_ES")
-        wdFmt.dateFormat = "EEE"
-        let shortDayFmt = DateFormatter()
-        shortDayFmt.locale = Locale(identifier: "es_ES")
-        shortDayFmt.dateFormat = "d MMM"
+        let wdFmt: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "es_ES")
+            f.dateFormat = "EEE"
+            return f
+        }()
+        let shortDayFmt: DateFormatter = {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "es_ES")
+            f.dateFormat = "d MMM"
+            return f
+        }()
         let prevNightDate = cal.date(byAdding: .day, value: -1, to: store.selectedDate) ?? store.selectedDate
         let nightRangeLabel = "\(shortDayFmt.string(from: prevNightDate).replacingOccurrences(of: ".", with: "")) - \(shortDayFmt.string(from: store.selectedDate).replacingOccurrences(of: ".", with: ""))"
 
