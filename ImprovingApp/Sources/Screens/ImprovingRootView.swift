@@ -10,6 +10,7 @@ struct ImprovingRootView: View {
     @State private var isBottomBarCollapsed: Bool = false
     @State private var trainingLoadTab: TrainingLoadTab = .cardio
     @State private var cardioRoute: CardioMetricRoute = .activitiesDuration
+    @State private var showLaunchSplash: Bool = true
 
     private var currentOverlay: OverlayRoute { overlayStack.last ?? .none }
 
@@ -116,6 +117,15 @@ struct ImprovingRootView: View {
                     }
                 }
             }
+
+            if showLaunchSplash {
+                LaunchMotionGraphicOverlay {
+                    withAnimation(.easeOut(duration: 0.35)) {
+                        showLaunchSplash = false
+                    }
+                }
+                .zIndex(50)
+            }
         }
         .preferredColorScheme(themeSettings.isDarkMode ? .dark : .light)
         .animation(.easeInOut(duration: 0.25), value: currentOverlay)
@@ -129,12 +139,22 @@ struct ImprovingRootView: View {
         case .esfuerzo:
             EsfuerzoScreen(store: store, onBack: { pop() }, onOpenTrend: { _ in push(.healthMetricDetail) })
         case .recuperacion:
-            RecuperacionScreen(store: store, onBack: { pop() }) { kind in
-                store.selectedHealthMetric = kind
-                push(.healthMetricDetail)
-            }
+            RecuperacionScreen(
+                store: store,
+                onBack: { pop() },
+                onSelectHealthMetric: { kind in
+                    store.selectedHealthMetric = kind
+                    push(.healthMetricDetail)
+                },
+                onOpenTrend: { _ in push(.healthMetricDetail) }
+            )
         case .suenoDetail:
-            SuenoDetailScreen(store: store, onBack: { pop() }, onOpenSleepNeed: { push(.sleepNeedDetail) })
+            SuenoDetailScreen(
+                store: store,
+                onBack: { pop() },
+                onOpenSleepNeed: { push(.sleepNeedDetail) },
+                onOpenTrend: { _ in push(.healthMetricDetail) }
+            )
         case .sleepNeedDetail:
             SleepNeedDetailScreen(store: store, onBack: { pop() })
         case .estres:
@@ -180,6 +200,56 @@ struct ImprovingRootView: View {
         isBottomBarCollapsed = false
         if !overlayStack.isEmpty {
             overlayStack.removeLast()
+        }
+    }
+}
+
+// MARK: - Launch Motion Graphic Overlay (1:1 Android App Icon & Startup Animation)
+
+private struct LaunchMotionGraphicOverlay: View {
+    let onFinished: () -> Void
+    @State private var sweepProgress: CGFloat = 0.0
+    @State private var opacity: Double = 1.0
+
+    var body: some View {
+        ZStack {
+            BevelColors.canvas.ignoresSafeArea()
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle()
+                        .stroke(BevelColors.trackGroove, lineWidth: 10)
+                        .frame(width: 84, height: 84)
+                    Circle()
+                        .trim(from: 0, to: 0.72 * sweepProgress)
+                        .stroke(
+                            LinearGradient(colors: [BevelColors.emeraldStart, BevelColors.emeraldEnd], startPoint: .topLeading, endPoint: .bottomTrailing),
+                            style: StrokeStyle(lineWidth: 10, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 84, height: 84)
+                    Circle()
+                        .fill(BevelColors.textPrimary)
+                        .frame(width: 14, height: 14)
+                }
+                Text("IMPROVING")
+                    .font(ImprovingFont.microLabel(13))
+                    .tracking(4)
+                    .foregroundColor(BevelColors.textPrimary)
+            }
+        }
+        .opacity(opacity)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.75)) {
+                sweepProgress = 1.0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.95) {
+                withAnimation(.easeIn(duration: 0.28)) {
+                    opacity = 0.0
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    onFinished()
+                }
+            }
         }
     }
 }

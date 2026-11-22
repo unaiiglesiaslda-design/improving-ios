@@ -51,9 +51,10 @@ struct BevelRecessedRingGauge: View {
     let centerText: String
     let label: String
     let kind: GaugeKind
-    var size: CGFloat = 86
-    var strokeWidth: CGFloat = 10
+    var size: CGFloat = 82
+    var strokeWidth: CGFloat = 9
     var subLabel: String? = nil
+    var centerSubtitle: String? = nil
     var targetRange: ClosedRange<Double>? = nil
     var hasData: Bool = true
 
@@ -95,7 +96,7 @@ struct BevelRecessedRingGauge: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 5) {
             ZStack {
                 Canvas { context, canvasSize in
                     let pad = strokeWidth / 2 + 3
@@ -103,15 +104,12 @@ struct BevelRecessedRingGauge: View {
                     let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
                     let radius = arcRect.width / 2
 
-                    // Subtle outer recessed shadow
                     let outerPath = Path(ellipseIn: arcRect.insetBy(dx: -strokeWidth * 0.52, dy: -strokeWidth * 0.52))
                     context.stroke(outerPath, with: .color(BevelColors.trackInnerShadow.opacity(0.45)), lineWidth: 1.5)
 
-                    // Base track groove
                     let groovePath = Path(ellipseIn: arcRect)
                     context.stroke(groovePath, with: .color(BevelColors.trackGroove), lineWidth: strokeWidth)
 
-                    // Target range under-band
                     if hasData, let tr = targetRange {
                         let startDeg = -90.0 + tr.lowerBound * 360.0
                         let endDeg = -90.0 + tr.upperBound * 360.0
@@ -132,7 +130,6 @@ struct BevelRecessedRingGauge: View {
                         }
                     }
 
-                    // Active sweep arc
                     if hasData {
                         let sweepDeg = max(animatedProgress * 360.0, progress > 0 ? 4.0 : 0.0)
                         if sweepDeg > 0 {
@@ -151,7 +148,6 @@ struct BevelRecessedRingGauge: View {
                             context.fill(Path(ellipseIn: dotRect), with: .color(.white.opacity(0.9)))
                         }
 
-                        // Always-visible optimal effort boundary markers & translucent guide arc on top
                         if let tr = targetRange {
                             let startDeg = -90.0 + tr.lowerBound * 360.0
                             let endDeg = -90.0 + tr.upperBound * 360.0
@@ -190,18 +186,25 @@ struct BevelRecessedRingGauge: View {
                 }
                 .frame(width: size, height: size)
 
-                Text(hasData ? centerText : "--")
-                    .font(ImprovingFont.metricHero(size >= 120 ? 32 : 20))
-                    .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
-                    .monospacedDigit()
+                VStack(spacing: 1) {
+                    Text(hasData ? centerText : "--")
+                        .font(ImprovingFont.metricHero(size >= 120 ? 32 : 20))
+                        .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
+                        .monospacedDigit()
+                    if let cSub = centerSubtitle {
+                        Text(hasData ? cSub : "Sin datos")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(hasData ? BevelColors.textSecondary : BevelColors.textMuted)
+                    }
+                }
             }
             .onAppear {
-                withAnimation(.easeOut(duration: 0.7)) {
+                withAnimation(.easeOut(duration: 0.65)) {
                     animatedProgress = hasData ? min(max(progress, 0), 1) : 0
                 }
             }
             .onChange(of: progress) { _, newVal in
-                withAnimation(.easeOut(duration: 0.45)) {
+                withAnimation(.easeOut(duration: 0.4)) {
                     animatedProgress = hasData ? min(max(newVal, 0), 1) : 0
                 }
             }
@@ -217,31 +220,386 @@ struct BevelRecessedRingGauge: View {
                     .font(ImprovingFont.caption(11))
                     .fontWeight(.semibold)
                     .foregroundColor(subColor)
+                    .lineLimit(1)
             }
         }
     }
 }
 
-// MARK: - Iridescent Pearl Orb
+// MARK: - Signature Radial Tick-Mark Stress Dial (Compact 36-tick & Hero 54-tick)
+
+struct StressRadialDial: View {
+    let score: Int
+    let statusLabel: String
+    var size: CGFloat = 86
+    var isHeroGauge: Bool = false
+    var hasData: Bool = true
+
+    var body: some View {
+        let frac = hasData ? min(max(Double(score) / 100.0, 0), 1) : 0
+        let statusColor: Color = !hasData ? BevelColors.textMuted : (score < 35 ? BevelColors.tealLow : (score < 65 ? BevelColors.amberStart : BevelColors.coralHigh))
+
+        ZStack {
+            Canvas { ctx, canvasSize in
+                let totalTicks = isHeroGauge ? 54 : 36
+                let startDeg = isHeroGauge ? 135.0 : -90.0
+                let sweepTotal = isHeroGauge ? 270.0 : 360.0
+                let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                let outerR = min(canvasSize.width, canvasSize.height) / 2 - 4
+                let innerR = outerR - (isHeroGauge ? 11 : 8)
+                let litTicks = hasData ? max(Int(frac * Double(totalTicks)), score > 0 ? 1 : 0) : -1
+                let maxIdx = isHeroGauge ? totalTicks : (totalTicks - 1)
+
+                for i in 0...maxIdx {
+                    let angleDeg = startDeg + (Double(i) * sweepTotal / Double(totalTicks))
+                    let rad = angleDeg * .pi / 180.0
+                    let ratio = Double(i) / Double(totalTicks)
+                    let tickColor: Color
+                    if hasData && i <= litTicks {
+                        tickColor = ratio < 0.35 ? BevelColors.greenPrimary : (ratio < 0.65 ? BevelColors.amberStart : BevelColors.coralHigh)
+                    } else {
+                        tickColor = BevelColors.trackGroove
+                    }
+                    var line = Path()
+                    line.move(to: CGPoint(x: center.x + innerR * cos(rad), y: center.y + innerR * sin(rad)))
+                    line.addLine(to: CGPoint(x: center.x + outerR * cos(rad), y: center.y + outerR * sin(rad)))
+                    ctx.stroke(line, with: .color(tickColor), style: StrokeStyle(lineWidth: isHeroGauge ? 2.4 : 2.1, lineCap: .round))
+                }
+            }
+
+            VStack(spacing: 1) {
+                Text(hasData ? "\(score)" : "--")
+                    .font(ImprovingFont.metricTile(isHeroGauge ? 34 : 22))
+                    .monospacedDigit()
+                    .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
+                Text(!hasData ? "Sin datos" : (isHeroGauge ? statusLabel : "\(statusLabel) →"))
+                    .font(ImprovingFont.caption(isHeroGauge ? 12.5 : 10.5))
+                    .fontWeight(.semibold)
+                    .foregroundColor(statusColor)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+// MARK: - Energy Bank 34-Bar Segmented Battery Bar (1:1 Android EnergyBankBatteryBar)
+
+struct EnergyBankBatteryBar: View {
+    let percent: Int
+    var hasData: Bool = true
+    let onClick: () -> Void
+
+    var body: some View {
+        let clamped = hasData ? min(max(percent, 0), 100) : 0
+        let barColor = clamped >= 50 ? BevelColors.greenPrimary : BevelColors.amberStart
+
+        Button(action: onClick) {
+            BevelCard(cornerRadius: 18) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(hasData ? BevelColors.greenSoftBg : BevelColors.trackGroove)
+                            .frame(width: 28, height: 28)
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(BevelColors.amberStart)
+                    }
+
+                    GeometryReader { geo in
+                        let barCount = 34
+                        let gap: CGFloat = 2.5
+                        let totalGap = gap * CGFloat(barCount - 1)
+                        let barW = max((geo.size.width - totalGap) / CGFloat(barCount), 2)
+                        let litBars = hasData ? Int((Double(clamped) / 100.0) * Double(barCount)) : 0
+
+                        HStack(spacing: gap) {
+                            ForEach(0..<barCount, id: \.self) { idx in
+                                Capsule()
+                                    .fill(hasData && idx < litBars ? barColor : BevelColors.trackGroove)
+                                    .frame(width: barW, height: 18)
+                            }
+                        }
+                        .frame(maxHeight: .infinity, alignment: .center)
+                    }
+                    .frame(height: 22)
+
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(hasData ? "\(clamped)%" : "--")
+                            .font(ImprovingFont.cardTitle(15))
+                            .fontWeight(.bold)
+                            .monospacedDigit()
+                            .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
+                        Text(hasData ? "Energía" : "Sin datos")
+                            .font(ImprovingFont.caption(10))
+                            .foregroundColor(hasData ? BevelColors.textSecondary : BevelColors.textMuted)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+            }
+        }
+    }
+}
+
+// MARK: - 2-Column Health Monitor Card with Vertical Thermometer Range Gauge (1:1 Android HealthMonitorRangeCard)
+
+struct HealthMonitorRangeCard: View {
+    let title: String
+    let value: String
+    let unit: String
+    let systemIcon: String
+    let evaluation: VitalEvaluation
+    let onClick: () -> Void
+
+    var body: some View {
+        let hasData = evaluation.severity != .noData
+        let accent: Color = switch evaluation.severity {
+        case .optimalExcellent: BevelColors.skyBlue
+        case .normal: BevelColors.emeraldEnd
+        case .borderlineWarning: BevelColors.orangeEnd
+        case .alertOutOfRange: BevelColors.redAlert
+        case .noData: BevelColors.textMuted
+        }
+        let statusIcon: String = {
+            if !hasData { return "info.circle.fill" }
+            if evaluation.severity == .normal { return "checkmark.circle.fill" }
+            if evaluation.isAboveBand { return "arrow.up" }
+            if evaluation.isBelowBand { return "arrow.down" }
+            return "checkmark.circle.fill"
+        }()
+
+        Button(action: onClick) {
+            BevelCard(cornerRadius: 18) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: systemIcon)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(title)
+                                .font(ImprovingFont.caption(13))
+                                .foregroundColor(BevelColors.textSecondary)
+                        }
+
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(hasData ? value : "--")
+                                .font(ImprovingFont.metricTile(value.count > 6 ? 17 : 21))
+                                .monospacedDigit()
+                                .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
+                                .lineLimit(1)
+                            if hasData && !unit.isEmpty {
+                                Text(unit)
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        HStack(spacing: 4) {
+                            Image(systemName: statusIcon)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(accent)
+                            Text(hasData ? evaluation.statusLabel : "Sin datos")
+                                .font(ImprovingFont.caption(12))
+                                .fontWeight(.semibold)
+                                .foregroundColor(accent)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 0)
+
+                    // 14x66pt Vertical Recessed Thermometer Range Pill
+                    Canvas { ctx, size in
+                        let trackRadius = size.width / 2
+                        let inset: CGFloat = 1.8
+                        let innerW = size.width - inset * 2
+                        let innerR = innerW / 2
+
+                        let outerRect = CGRect(origin: .zero, size: size)
+                        ctx.fill(Path(roundedRect: outerRect, cornerRadius: trackRadius), with: .color(BevelColors.trackGroove))
+
+                        let bandTop = size.height * 0.26
+                        let bandBottom = size.height * 0.74
+                        let bandRect = CGRect(x: inset, y: bandTop, width: innerW, height: bandBottom - bandTop)
+
+                        if !hasData {
+                            ctx.fill(Path(roundedRect: bandRect, cornerRadius: innerR), with: .color(BevelColors.trackInnerShadow.opacity(0.45)))
+                            return
+                        }
+
+                        let clampedPos = min(max(evaluation.normalizedPosition, 0.08), 0.92)
+                        let dotY = size.height * (1.0 - clampedPos)
+                        let dotCenter = CGPoint(x: size.width / 2, y: dotY)
+
+                        if evaluation.severity == .normal {
+                            ctx.fill(Path(roundedRect: bandRect, cornerRadius: innerR), with: .color(BevelColors.greenPrimary.opacity(0.88)))
+                        } else {
+                            ctx.fill(Path(roundedRect: bandRect, cornerRadius: innerR), with: .color(BevelColors.greenPrimary.opacity(0.24)))
+                            if dotY < bandTop {
+                                let tTop = max(dotY - innerR * 0.4, inset)
+                                let tH = max(bandTop - tTop + innerR * 0.8, innerW)
+                                ctx.fill(Path(roundedRect: CGRect(x: inset, y: tTop, width: innerW, height: tH), cornerRadius: innerR), with: .color(accent.opacity(0.88)))
+                            } else if dotY > bandBottom {
+                                let tStart = max(bandBottom - innerR * 0.8, bandTop)
+                                let tEnd = min(dotY + innerR * 0.4, size.height - inset)
+                                let tH = max(tEnd - tStart, innerW)
+                                ctx.fill(Path(roundedRect: CGRect(x: inset, y: tStart, width: innerW, height: tH), cornerRadius: innerR), with: .color(accent.opacity(0.88)))
+                            }
+                        }
+
+                        ctx.fill(Path(ellipseIn: CGRect(x: dotCenter.x - 6.8, y: dotCenter.y - 6.8, width: 13.6, height: 13.6)), with: .color(accent.opacity(0.22)))
+                        ctx.fill(Path(ellipseIn: CGRect(x: dotCenter.x - 5.4, y: dotCenter.y - 5.4, width: 10.8, height: 10.8)), with: .color(.white))
+                        ctx.fill(Path(ellipseIn: CGRect(x: dotCenter.x - 3.2, y: dotCenter.y - 3.2, width: 6.4, height: 6.4)), with: .color(accent))
+                    }
+                    .frame(width: 14, height: 66)
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 12)
+            }
+        }
+    }
+}
+
+// MARK: - Atmospheric Hero Header for Detail Screens (1:1 Android AtmosphericHeroHeader)
+
+struct AtmosphericHeroHeader<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let onBack: () -> Void
+    var rightSystemIcon: String = "info.circle"
+    var onRightAction: (() -> Void)? = nil
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(BevelColors.card))
+                }
+                Spacer()
+                VStack(spacing: 2) {
+                    Text(title)
+                        .font(ImprovingFont.sectionTitle(17))
+                        .foregroundColor(BevelColors.textPrimary)
+                    Text(subtitle)
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textSecondary)
+                }
+                Spacer()
+                Button {
+                    onRightAction?()
+                } label: {
+                    Image(systemName: rightSystemIcon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(BevelColors.textSecondary)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(BevelColors.card))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            content()
+        }
+        .padding(.bottom, 10)
+    }
+}
+
+// MARK: - Shared Bevel Trend Card with Sparkline (Esfuerzo, Recuperación, Sueño)
+
+struct BevelTrendLightCard: View {
+    let trend: EffortTrendItem
+    let systemIcon: String
+    let onClick: () -> Void
+
+    var body: some View {
+        let lineColor = Color(hex: trend.lineColorHex)
+        let statusColor: Color = switch trend.statusTone {
+        case .normal: BevelColors.emeraldEnd
+        case .above: BevelColors.skyBlue
+        case .below: BevelColors.orangeEnd
+        }
+
+        Button(action: onClick) {
+            BevelCard(cornerRadius: 18) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 5) {
+                            Image(systemName: systemIcon)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(BevelColors.textSecondary)
+                            Text(trend.title)
+                                .font(ImprovingFont.caption(12.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .lineLimit(1)
+                        }
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(statusColor)
+                            Text(trend.statusText)
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.semibold)
+                                .foregroundColor(statusColor)
+                        }
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(trend.valueText)
+                                .font(ImprovingFont.metricTile(21))
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.textPrimary)
+                            if !trend.unitText.isEmpty {
+                                Text(trend.unitText)
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+                    }
+                    Spacer()
+                    TrendSparklineWithBand(points: trend.points, bandLow: trend.bandLow, bandHigh: trend.bandHigh, lineColor: lineColor)
+                        .frame(width: 118, height: 52)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(BevelColors.textMuted)
+                }
+                .padding(14)
+            }
+        }
+    }
+}
+
+// MARK: - Iridescent Pearl Orb (1:1 Android Multi-Stop Radial Glass Orb)
 
 struct IridescentPearlOrb: View {
-    var size: CGFloat = 34
+    var size: CGFloat = 36
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [Color(hex: 0xFFFFFF), Color(hex: 0xD8F8EC), Color(hex: 0xC7D2FE)],
+                        colors: [
+                            Color(hex: 0xFFFFFF),
+                            Color(hex: 0xE0F2FE),
+                            Color(hex: 0xFCE7F3),
+                            Color(hex: 0xDDD6FE),
+                            Color(hex: 0xCCFBF1),
+                        ],
                         center: .topLeading,
                         startRadius: 1,
-                        endRadius: size * 0.9
+                        endRadius: size * 0.95
                     )
                 )
             Circle()
-                .strokeBorder(.white.opacity(0.65), lineWidth: 1)
+                .strokeBorder(.white.opacity(0.9), lineWidth: 1.4)
+            Circle()
+                .fill(.white.opacity(0.65))
+                .frame(width: size * 0.34, height: size * 0.34)
+                .offset(x: size * 0.16, y: size * 0.14)
         }
         .frame(width: size, height: size)
-        .shadow(color: Color(hex: 0x22C55E).opacity(0.22), radius: 6, y: 2)
+        .shadow(color: Color(hex: 0x818CF8).opacity(0.32), radius: 7, y: 2)
     }
 }
 
@@ -294,7 +652,7 @@ struct FloatingPillBottomBar: View {
                                 .font(.system(size: 19, weight: .semibold))
                                 .foregroundColor(isQuickMenuOpen ? .white : BevelColors.textPrimary)
                                 .rotationEffect(.degrees(isQuickMenuOpen ? 45 : 0))
-                                .frame(width: 44, height: 44)
+                                .frame(width: 46, height: 46)
                                 .background(
                                     Circle().fill(isQuickMenuOpen ? BevelColors.floatingDarkButton : BevelColors.trackGroove)
                                 )
@@ -459,13 +817,9 @@ struct FloatingMetricAiCoachOverlay: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 86) // Sits cleanly above persistent bottom navigation bar
-        .onAppear {
-            triggerReveal()
-        }
-        .onChange(of: metricKey) { _, _ in
-            triggerReveal()
-        }
+        .padding(.bottom, 86)
+        .onAppear { triggerReveal() }
+        .onChange(of: metricKey) { _, _ in triggerReveal() }
         .onChange(of: scrollCollapseSignal) { _, _ in
             if isExpanded {
                 withAnimation(.easeOut(duration: 0.22)) {
@@ -483,7 +837,7 @@ struct FloatingMetricAiCoachOverlay: View {
         isFullyExpanded = false
         collapsedByScroll = false
         Task {
-            try? await Task.sleep(nanoseconds: 450_000_000)
+            try? await Task.sleep(nanoseconds: 420_000_000)
             await MainActor.run {
                 isLoading = false
                 if !collapsedByScroll {
@@ -496,7 +850,7 @@ struct FloatingMetricAiCoachOverlay: View {
     }
 }
 
-// MARK: - Quick Actions Sheet (+)
+// MARK: - 3x3 Quick Actions Sheet with Centered 60pt Iridescent Pearl Orb (1:1 Android QuickActionsOverlaySheet)
 
 struct QuickActionsOverlaySheet: View {
     let onDismiss: () -> Void
@@ -509,42 +863,78 @@ struct QuickActionsOverlaySheet: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color.black.opacity(0.45)
+            Color.black.opacity(0.48)
                 .ignoresSafeArea()
                 .onTapGesture(perform: onDismiss)
 
-            BevelCard(cornerRadius: 26, backgroundColor: BevelColors.card.opacity(0.98)) {
-                VStack(spacing: 14) {
-                    Button(action: onOpenAskBevel) {
-                        HStack(spacing: 12) {
-                            IridescentPearlOrb(size: 36)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Preguntar a Improving IA")
-                                    .font(ImprovingFont.cardTitle(15))
-                                    .foregroundColor(BevelColors.textPrimary)
-                                Text("Analiza sueño, recuperación, VFC y entreno")
-                                    .font(ImprovingFont.caption(11.5))
-                                    .foregroundColor(BevelColors.textSecondary)
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(BevelColors.textMuted)
-                        }
-                        .padding(12)
-                        .background(RoundedRectangle(cornerRadius: 16).fill(BevelColors.cardSubtle))
+            BevelCard(cornerRadius: 28, backgroundColor: BevelColors.card.opacity(0.98)) {
+                VStack(spacing: 16) {
+                    Capsule()
+                        .fill(BevelColors.trackGroove)
+                        .frame(width: 38, height: 4)
+
+                    VStack(spacing: 3) {
+                        Text("ACCIONES RÁPIDAS")
+                            .font(ImprovingFont.microLabel(10.5))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text("Registrar o Consultar")
+                            .font(ImprovingFont.sectionTitle(18))
+                            .foregroundColor(BevelColors.textPrimary)
                     }
 
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        quickTile("Nutrición", icon: "fork.knife", color: BevelColors.emeraldEnd, action: onOpenNutrition)
-                        quickTile("Fitness", icon: "figure.run", color: BevelColors.orangeEnd, action: onOpenFitness)
-                        quickTile("Diario", icon: "book.fill", color: BevelColors.skyBlue, action: onOpenJournal)
-                        quickTile("Sueño", icon: "moon.stars.fill", color: BevelColors.periwinkleStart, action: onOpenSleep)
-                        quickTile("Salud / Apple", icon: "heart.text.square.fill", color: BevelColors.redAlert, action: onOpenDevices)
-                        quickTile("Ajustes", icon: "slider.horizontal.3", color: BevelColors.textSecondary, action: onOpenDevices)
+                    // Row 1
+                    HStack {
+                        quickActionTile("Describir comida", icon: "square.and.pencil", action: onOpenNutrition)
+                        Spacer()
+                        quickActionTile("Importar foto", icon: "photo.on.rectangle", action: onOpenNutrition)
+                        Spacer()
+                        quickActionTile("Capturar comida", icon: "camera.fill", badge: true, action: onOpenNutrition)
+                    }
+
+                    // Row 2 with 60pt Iridescent Pearl Orb in center
+                    HStack(alignment: .center) {
+                        quickActionTile("Escanear código", icon: "qrcode.viewfinder", action: onOpenNutrition)
+                        Spacer()
+                        Button(action: onOpenAskBevel) {
+                            VStack(spacing: 8) {
+                                IridescentPearlOrb(size: 60)
+                                Text("Ask Improving")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.textPrimary)
+                            }
+                            .frame(width: 96)
+                        }
+                        Spacer()
+                        quickActionTile("Buscar alimento", icon: "magnifyingglass", action: onOpenNutrition)
+                    }
+
+                    // Row 3
+                    HStack {
+                        quickActionTile("Generar rutinas", icon: "sparkles", action: onOpenFitness)
+                        Spacer()
+                        quickActionTile("Ver plantillas", icon: "dumbbell.fill", action: onOpenFitness)
+                        Spacer()
+                        quickActionTile("Sueño & Alarma", icon: "bed.double.fill", action: onOpenSleep)
+                    }
+
+                    Button(action: onOpenDevices) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundColor(BevelColors.emeraldEnd)
+                            Text("WHOOP BLE + Apple Health · Configurar")
+                                .font(ImprovingFont.caption(12))
+                                .fontWeight(.semibold)
+                                .foregroundColor(BevelColors.emeraldEnd)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(BevelColors.greenSoftBg))
+                        .overlay(Capsule().strokeBorder(BevelColors.greenSoftBorder, lineWidth: 0.8))
                     }
                 }
-                .padding(16)
+                .padding(20)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 88)
@@ -552,39 +942,46 @@ struct QuickActionsOverlaySheet: View {
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
-    private func quickTile(_ title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func quickActionTile(_ title: String, icon: String, badge: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(color)
-                    .frame(width: 38, height: 38)
-                    .background(Circle().fill(color.opacity(0.14)))
+            VStack(spacing: 7) {
+                ZStack(alignment: .topTrailing) {
+                    Circle()
+                        .fill(BevelColors.cardSubtle)
+                        .frame(width: 50, height: 50)
+                        .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                    Image(systemName: icon)
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .frame(width: 50, height: 50)
+                    if badge {
+                        Circle()
+                            .fill(BevelColors.greenPrimary)
+                            .frame(width: 9, height: 9)
+                            .offset(x: -2, y: 2)
+                    }
+                }
                 Text(title)
-                    .font(ImprovingFont.caption(11.5))
-                    .foregroundColor(BevelColors.textPrimary)
+                    .font(ImprovingFont.caption(11))
+                    .foregroundColor(BevelColors.textSecondary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.cardSubtle))
+            .frame(width: 92)
         }
     }
 }
 
-// MARK: - Segmented Bar Meter & Pills
-
 struct SegmentedEnergyMeter: View {
     let percent: Int
-    var totalSegments: Int = 26
+    var totalSegments: Int = 28
 
     var body: some View {
         let filled = Int((Double(min(max(percent, 0), 100)) / 100.0 * Double(totalSegments)).rounded())
-        HStack(spacing: 3.5) {
+        HStack(spacing: 3) {
             ForEach(0..<totalSegments, id: \.self) { idx in
                 RoundedRectangle(cornerRadius: 3)
                     .fill(idx < filled ? BevelColors.greenPrimary : BevelColors.trackGroove)
-                    .frame(height: 22)
+                    .frame(height: 20)
             }
         }
     }
@@ -608,8 +1005,6 @@ struct StatusDotPill: View {
         .background(Capsule().fill(bgColor))
     }
 }
-
-// MARK: - Passive Scroll Detector Modifier
 
 struct VerticalScrollDetector: ViewModifier {
     let onVerticalScroll: () -> Void
