@@ -21,7 +21,7 @@ struct FitnessScreen: View {
                 // 1. Top Bar: Date + Orb + •••
                 HStack {
                     HStack(spacing: 4) {
-                        Button { store.shiftDay(-1) } label: {
+                        Button { store.shiftDay(1) } label: {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(BevelColors.textSecondary)
@@ -62,13 +62,14 @@ struct FitnessScreen: View {
                 HStack(spacing: 4) {
                     ForEach(0..<7, id: \.self) { idx in
                         let offset = dayOffsets[idx]
-                        let isSelected = offset == store.selectedDayOffset
-                        let dayNum = 21 + offset
+                        let pastOffset = max(0, -offset)
                         let isFuture = offset > 0
+                        let isSelected = !isFuture && (pastOffset == store.dayOffset)
+                        let dayNum = 21 + offset
 
                         Button {
                             if !isFuture {
-                                store.shiftDay(offset - store.selectedDayOffset)
+                                store.selectDayOffset(pastOffset)
                             }
                         } label: {
                             VStack(spacing: 4) {
@@ -432,7 +433,7 @@ struct FitnessScreen: View {
                             .padding(14)
                         }
 
-                        ForEach(store.strengthSets) { s in
+                        ForEach(store.strengthSets, id: \.id) { s in
                             BevelCard(cornerRadius: 16) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {

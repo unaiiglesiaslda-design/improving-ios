@@ -15,6 +15,7 @@ struct PersonalizedPhysiologyNorms: Equatable {
     let sleepLowHours: Double
     let sleepHighHours: Double
     let hydrationGoalLiters: Double
+    let proteinGoalG: Int
 }
 
 enum VitalRangeSeverity: String {
@@ -76,7 +77,8 @@ enum WhoopPhysiologyEngine {
             respHighRpm: 16.8,
             sleepLowHours: 7.0,
             sleepHighHours: 9.0,
-            hydrationGoalLiters: hydro
+            hydrationGoalLiters: hydro,
+            proteinGoalG: max(Int((profile.weightKg * 1.8).rounded()), 95)
         )
     }
 

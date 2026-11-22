@@ -96,13 +96,14 @@ struct DiarioScreen: View {
                 HStack(spacing: 4) {
                     ForEach(0..<7, id: \.self) { idx in
                         let offset = dayOffsets[idx]
-                        let isSelected = offset == store.selectedDayOffset
-                        let dayNum = 21 + offset
+                        let pastOffset = max(0, -offset)
                         let isFuture = offset > 0
+                        let isSelected = !isFuture && (pastOffset == store.dayOffset)
+                        let dayNum = 21 + offset
 
                         Button {
                             if !isFuture {
-                                store.shiftDay(offset - store.selectedDayOffset)
+                                store.selectDayOffset(pastOffset)
                             }
                         } label: {
                             VStack(spacing: 6) {
@@ -225,7 +226,7 @@ struct DiarioScreen: View {
                                 Text("Desayuno / Comida registrada")
                                     .font(ImprovingFont.cardTitle(14.5))
                                     .foregroundColor(BevelColors.textPrimary)
-                                Text(meals.first.map { "\($0.name) (\($0.kcal) kcal)" } ?? "Tostada masa madre, aguacate y huevos")
+                                Text(meals.first.map { "\($0.title) (\($0.kcal) kcal)" } ?? "Tostada masa madre, aguacate y huevos")
                                     .font(ImprovingFont.caption(11.5))
                                     .foregroundColor(BevelColors.textSecondary)
                                     .lineLimit(1)

@@ -10,7 +10,7 @@ struct HealthMetricBaselineChart: View {
     let averageText: String
     let accentColor: Color
     let valueFormatter: (Double) -> String
-    let onPointSelected: (Int?, Double?, String?) -> Void
+    var onPointSelected: (Int?, Double?, String?) -> Void = { _, _, _ in }
 
     @State private var selectedIdx: Int? = nil
     @State private var animatedDisplayVal: Double = 0
@@ -326,6 +326,7 @@ struct BioAgeCurvedDial: View {
 struct Timeline24hChart: View {
     let points: [Double]
     let isEnergy: Bool
+    var showSleepTopBar: Bool = true
 
     @State private var selectedIdx: Int? = nil
     @State private var animatedVal: Double = 0
@@ -350,13 +351,15 @@ struct Timeline24hChart: View {
                                 ctx.stroke(gp, with: .color(BevelColors.trackGroove), lineWidth: 1)
                             }
 
-                            let sRect = CGRect(x: size.width * 0.04, y: 0, width: size.width * 0.32, height: size.height)
-                            ctx.fill(Path(sRect), with: .color(BevelColors.indigoSoftBg.opacity(0.72)))
+                            if showSleepTopBar {
+                                let sRect = CGRect(x: size.width * 0.04, y: 0, width: size.width * 0.32, height: size.height)
+                                ctx.fill(Path(sRect), with: .color(BevelColors.indigoSoftBg.opacity(0.72)))
 
-                            var topBar = Path()
-                            topBar.move(to: CGPoint(x: size.width * 0.04, y: 1.5))
-                            topBar.addLine(to: CGPoint(x: size.width * 0.36, y: 1.5))
-                            ctx.stroke(topBar, with: .color(BevelColors.periwinkleStart), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                var topBar = Path()
+                                topBar.move(to: CGPoint(x: size.width * 0.04, y: 1.5))
+                                topBar.addLine(to: CGPoint(x: size.width * 0.36, y: 1.5))
+                                ctx.stroke(topBar, with: .color(BevelColors.periwinkleStart), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            }
 
                             for i in 0..<(safePts.count - 1) {
                                 let avg = (safePts[i] + safePts[i + 1]) / 2.0

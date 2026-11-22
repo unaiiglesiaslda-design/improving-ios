@@ -38,8 +38,7 @@ struct EsfuerzoScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 AtmosphericHeroHeader(
                     title: "Esfuerzo",
-                    dateLabel: store.dateLabel,
-                    kind: .strain,
+                    subtitle: store.dateLabel,
                     onBack: onBack
                 ) {
                     BevelRecessedRingGauge(
@@ -130,12 +129,10 @@ struct EsfuerzoScreen: View {
 
                     ForEach(store.effortTrends) { item in
                         BevelTrendLightCard(
-                            item: item,
-                            accentColor: BevelColors.orangeEnd,
+                            trend: item,
+                            systemIcon: "flame.fill",
                             onClick: { onOpenTrend(item) }
-                        ) {
-                            TrendSparklineWithBand(points: item.sparkline, lineColor: BevelColors.orangeEnd)
-                        }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
@@ -173,8 +170,7 @@ struct RecuperacionScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 AtmosphericHeroHeader(
                     title: "Recuperación",
-                    dateLabel: store.dateLabel,
-                    kind: .recovery,
+                    subtitle: store.dateLabel,
                     onBack: onBack
                 ) {
                     BevelRecessedRingGauge(
@@ -232,12 +228,10 @@ struct RecuperacionScreen: View {
 
                     ForEach(store.recoveryTrends) { item in
                         BevelTrendLightCard(
-                            item: item,
-                            accentColor: BevelColors.emeraldEnd,
+                            trend: item,
+                            systemIcon: "heart.fill",
                             onClick: { onOpenTrend?(item) }
-                        ) {
-                            TrendSparklineWithBand(points: item.sparkline, lineColor: BevelColors.emeraldEnd)
-                        }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
@@ -296,8 +290,7 @@ struct SuenoDetailScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 AtmosphericHeroHeader(
                     title: "Sueño",
-                    dateLabel: store.dateLabel,
-                    kind: .sleep,
+                    subtitle: store.dateLabel,
                     onBack: onBack
                 ) {
                     BevelRecessedRingGauge(
@@ -371,12 +364,10 @@ struct SuenoDetailScreen: View {
 
                     ForEach(store.sleepTrends) { item in
                         BevelTrendLightCard(
-                            item: item,
-                            accentColor: BevelColors.indigoEnd,
+                            trend: item,
+                            systemIcon: "moon.fill",
                             onClick: { onOpenTrend?(item) }
-                        ) {
-                            TrendSparklineWithBand(points: item.sparkline, lineColor: BevelColors.indigoEnd)
-                        }
+                        )
                     }
                 }
                 .padding(.horizontal, 16)
@@ -505,11 +496,10 @@ struct EstresScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 AtmosphericHeroHeader(
                     title: "Puntuación de estrés",
-                    dateLabel: store.dateLabel,
-                    kind: .stress,
+                    subtitle: store.dateLabel,
                     onBack: onBack
                 ) {
-                    StressRadialDial(score: store.stressScore, size: 162, heroMode: true, hasData: store.dataAvailability.hasStressData)
+                    StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 162, isHeroGauge: true, hasData: store.dataAvailability.hasStressData)
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
@@ -653,8 +643,7 @@ struct EnergiaScreen: View {
             VStack(alignment: .leading, spacing: 14) {
                 AtmosphericHeroHeader(
                     title: "Banco de energía",
-                    dateLabel: store.dateLabel,
-                    kind: .recovery,
+                    subtitle: store.dateLabel,
                     onBack: onBack
                 ) {
                     VStack(spacing: 12) {

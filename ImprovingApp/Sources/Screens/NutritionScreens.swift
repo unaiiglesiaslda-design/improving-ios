@@ -97,20 +97,20 @@ struct NutricionScreen: View {
                     .foregroundColor(BevelColors.textPrimary)
                     .padding(.horizontal, 16)
 
-                ForEach(meals) { meal in
+                ForEach(Array(meals.enumerated()), id: \.element.id) { idx, meal in
                     Button { onOpenNutrient("Proteína") } label: {
                         BevelCard(cornerRadius: 18) {
                             HStack(spacing: 12) {
-                                Text(meal.emoji)
+                                Text(["🥣", "🐟", "🥗", "🥑"][idx % 4])
                                     .font(.system(size: 20))
                                     .frame(width: 44, height: 44)
                                     .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.greenSoftBg))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(meal.name)
+                                    Text(meal.title)
                                         .font(ImprovingFont.cardTitle(14.5))
                                         .foregroundColor(BevelColors.textPrimary)
                                         .lineLimit(1)
-                                    Text("\(meal.time) · \(meal.kcal) kcal · \(meal.proteinG)g P · \(meal.carbsG)g C · \(meal.fatG)g G")
+                                    Text("\(meal.timeLabel) · \(meal.kcal) kcal · \(meal.proteinG)g P · \(meal.carbsG)g C · \(meal.fatG)g G")
                                         .font(ImprovingFont.caption(11.5))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }

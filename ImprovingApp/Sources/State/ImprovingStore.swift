@@ -255,6 +255,17 @@ final class ImprovingStore: ObservableObject {
         return "Baja"
     }
 
+    var sleepStatusText: String {
+        guard dataAvailability.hasSleepData else { return "Sin datos" }
+        if sleepPercent >= 85 { return "Excelente" }
+        if sleepPercent >= 70 { return "Normal" }
+        return "Bajo"
+    }
+
+    var hasEverHadAnyRecordedData: Bool {
+        !activeHistory.isEmpty || dataAvailability.hasAnyRecordedData
+    }
+
     var optimalEffortRange: ClosedRange<Double> {
         WhoopPhysiologyEngine.optimalTargetRange(for: recoveryPercent > 0 ? recoveryPercent : 79)
     }

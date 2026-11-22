@@ -55,15 +55,18 @@ enum BevelColors {
 
     // Recovery & Energy
     static let limeStart = Color(hex: 0xA3E635)
+    static let emeraldStart = Color(hex: 0x4ADE80)
     static let emeraldEnd = Color(hex: 0x16A34A)
     static let greenPrimary = Color(hex: 0x22C55E)
     static var greenSoftBg: Color { isDarkMode ? Color(hex: 0x102A22) : Color(hex: 0xECFDF5) }
     static var greenSoftBorder: Color { isDarkMode ? Color(hex: 0x1D4D3C) : Color(hex: 0xA7F3D0) }
+    static var surfaceOverlay: Color { cardSubtle }
 
     // Strain / Effort
     static let amberStart = Color(hex: 0xFBBF24)
     static let orangeEnd = Color(hex: 0xF97316)
     static var orangeSoftBg: Color { isDarkMode ? Color(hex: 0x2B1F14) : Color(hex: 0xFFF7ED) }
+    static var amberSoftBg: Color { orangeSoftBg }
     static var strainHatchBg: Color { isDarkMode ? Color(hex: 0x2B2219) : Color(hex: 0xEADBC8) }
     static var strainHatchLine: Color { isDarkMode ? Color(hex: 0x5C4936) : Color(hex: 0xC8B29A) }
 
@@ -75,6 +78,7 @@ enum BevelColors {
     // Stress & Alerts
     static let tealLow = Color(hex: 0x2DD4BF)
     static let coralHigh = Color(hex: 0xE07A5F)
+    static var coralSoftBg: Color { isDarkMode ? Color(hex: 0x331B1A) : Color(hex: 0xFEF2F2) }
     static let redAlert = Color(hex: 0xDC2626)
 
     // Biology & Cardio

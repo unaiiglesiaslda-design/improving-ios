@@ -119,10 +119,10 @@ struct BiologiaScreen: View {
                 BevelCard {
                     VStack(spacing: 10) {
                         BioAgeCurvedDial(
-                            biologicalAge: bioAge,
-                            chronologicalAge: chronologicalAge,
-                            deltaYears: bioDelta,
-                            historyDaysCount: max(store.realHistory.count, 730)
+                            bioAgeYears: bioAge,
+                            chronoAgeYears: chronologicalAge,
+                            diffYears: bioDelta,
+                            sampledDays: max(store.realHistory.count, 730)
                         )
 
                         HStack(spacing: 8) {

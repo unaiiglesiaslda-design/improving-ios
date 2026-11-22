@@ -8,14 +8,14 @@ struct HoyScreen: View {
     var body: some View {
         let avail = store.dataAvailability
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
-        let respEval = WhoopPhysiologyEngine.evaluateVital(value: avail.hasRespData ? store.respRateRpm : nil, low: norms.respLowRpm, high: norms.respHighRpm, higherIsBetter: false)
-        let rhrEval = WhoopPhysiologyEngine.evaluateVital(value: avail.hasRestingHrData ? store.restingHrBpm : nil, low: norms.rhrLowBpm, high: norms.rhrHighBpm, higherIsBetter: false)
-        let hrvEval = WhoopPhysiologyEngine.evaluateVital(value: avail.hasHrvData ? store.hrvMs : nil, low: norms.hrvLowMs, high: norms.hrvHighMs, higherIsBetter: true)
-        let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: avail.hasSpo2Data ? Double(store.spo2Percent) : nil, low: 95.0, high: 100.0, higherIsBetter: true)
+        let respEval = WhoopPhysiologyEngine.evaluateVital(value: store.respRateRpm, bandLow: norms.respLowRpm, bandHigh: norms.respHighRpm, lowerIsBetter: true, hasData: avail.hasRespData)
+        let rhrEval = WhoopPhysiologyEngine.evaluateVital(value: store.restingHrBpm, bandLow: norms.rhrLowBpm, bandHigh: norms.rhrHighBpm, lowerIsBetter: true, hasData: avail.hasRestingHrData)
+        let hrvEval = WhoopPhysiologyEngine.evaluateVital(value: store.hrvMs, bandLow: norms.hrvLowMs, bandHigh: norms.hrvHighMs, higherIsBetter: true, hasData: avail.hasHrvData)
+        let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: Double(store.spo2Percent), bandLow: 95.0, bandHigh: 100.0, higherIsBetter: true, hasData: avail.hasSpo2Data)
         let tempAbs = 35.9 + store.wristTempDeltaC
-        let tempEval = WhoopPhysiologyEngine.evaluateVital(value: avail.hasTempData ? tempAbs : nil, low: 35.5, high: 36.6, higherIsBetter: nil)
+        let tempEval = WhoopPhysiologyEngine.evaluateVital(value: tempAbs, bandLow: 35.5, bandHigh: 36.6, hasData: avail.hasTempData)
         let sleepHours = Double(store.currentDaySummary?.asleepMinutes ?? 478) / 60.0
-        let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: avail.hasSleepData ? sleepHours : nil, low: norms.sleepLowHours, high: norms.sleepHighHours, higherIsBetter: true)
+        let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: norms.sleepLowHours, bandHigh: norms.sleepHighHours, higherIsBetter: true, hasData: avail.hasSleepData)
 
         let stressPts = store.currentDaySummary?.stressSeries24h ?? []
         let stressMax = stressPts.map { Int($0.rounded()) }.max() ?? 77
@@ -27,14 +27,14 @@ struct HoyScreen: View {
                 // 1. Top Bar: Date Navigation + Pearl Orb + Profile Avatar
                 HStack {
                     HStack(spacing: 4) {
-                        Button { store.shiftDay(-1) } label: {
+                        Button { store.shiftDay(1) } label: {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(BevelColors.textSecondary)
                                 .frame(width: 28, height: 28)
                         }
                         Button {
-                            if store.selectedDayOffset < 0 { store.shiftDay(1) }
+                            if store.dayOffset > 0 { store.shiftDay(-1) }
                         } label: {
                             HStack(spacing: 4) {
                                 Text(store.dateLabel)
@@ -45,8 +45,8 @@ struct HoyScreen: View {
                                     .foregroundColor(BevelColors.textSecondary)
                             }
                         }
-                        if store.selectedDayOffset < 0 {
-                            Button { store.shiftDay(1) } label: {
+                        if store.dayOffset > 0 {
+                            Button { store.shiftDay(-1) } label: {
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundColor(BevelColors.textSecondary)
@@ -266,7 +266,7 @@ struct HoyScreen: View {
                                     stressStatColumn(val: "\(stressAvg)", label: "Media", color: BevelColors.emeraldEnd)
                                 }
                                 Spacer()
-                                StressRadialDial(score: store.stressScore, size: 108, hasData: avail.hasStressData)
+                                StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 108, isHeroGauge: false, hasData: avail.hasStressData)
                             }
                         }
                         .padding(18)
@@ -274,12 +274,7 @@ struct HoyScreen: View {
                 }
 
                 // Energy Bank Card with 34 Vertical Capsules
-                Button { onNavigate(.energia) } label: {
-                    BevelCard {
-                        EnergyBankBatteryBar(percentage: store.energyPercent, hasData: avail.hasEnergyData)
-                            .padding(16)
-                    }
-                }
+                EnergyBankBatteryBar(percent: store.energyPercent, hasData: avail.hasEnergyData, onClick: { onNavigate(.energia) })
 
                 // 5. Monitor de Salud (2x3 Grid with Vertical Thermometer Pills)
                 HStack {
@@ -294,50 +289,50 @@ struct HoyScreen: View {
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                     HealthMonitorRangeCard(
-                        iconSymbol: "lungs.fill",
-                        label: "Frecuencia respiratoria",
+                        title: "Frecuencia respiratoria",
                         value: avail.hasRespData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.respRateRpm) : "--",
                         unit: "rpm",
+                        systemIcon: "lungs.fill",
                         evaluation: respEval,
                         onClick: { onSelectHealthMetric(.respiratoryRate) }
                     )
                     HealthMonitorRangeCard(
-                        iconSymbol: "heart.fill",
-                        label: "FCR",
+                        title: "FCR",
                         value: avail.hasRestingHrData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.restingHrBpm) : "--",
                         unit: "ppm",
+                        systemIcon: "heart.fill",
                         evaluation: rhrEval,
                         onClick: { onSelectHealthMetric(.restingHeartRate) }
                     )
                     HealthMonitorRangeCard(
-                        iconSymbol: "waveform.path.ecg",
-                        label: "VFC",
+                        title: "VFC",
                         value: avail.hasHrvData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.hrvMs) : "--",
                         unit: "ms",
+                        systemIcon: "waveform.path.ecg",
                         evaluation: hrvEval,
                         onClick: { onSelectHealthMetric(.hrv) }
                     )
                     HealthMonitorRangeCard(
-                        iconSymbol: "drop.fill",
-                        label: "SpO₂",
+                        title: "SpO₂",
                         value: avail.hasSpo2Data ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), Double(store.spo2Percent) + 0.2) : "--",
                         unit: "%",
+                        systemIcon: "drop.fill",
                         evaluation: spo2Eval,
                         onClick: { onSelectHealthMetric(.oxygenSaturation) }
                     )
                     HealthMonitorRangeCard(
-                        iconSymbol: "thermometer.medium",
-                        label: "Temp. muñeca",
+                        title: "Temp. muñeca",
                         value: avail.hasTempData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), tempAbs) : "--",
                         unit: "°C",
+                        systemIcon: "thermometer.medium",
                         evaluation: tempEval,
                         onClick: { onSelectHealthMetric(.wristTemperature) }
                     )
                     HealthMonitorRangeCard(
-                        iconSymbol: "moon.fill",
-                        label: "Sueño",
+                        title: "Sueño",
                         value: store.sleepDurationText.replacingOccurrences(of: " min", with: "m").replacingOccurrences(of: " h ", with: "h "),
                         unit: "",
+                        systemIcon: "moon.fill",
                         evaluation: sleepEval,
                         onClick: { onSelectHealthMetric(.sleepDuration) }
                     )
