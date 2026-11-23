@@ -110,6 +110,21 @@ public struct ProcessedNightlyHRV: Sendable {
     public let weightedHRV: Double
     public let sampleCount: Int
     public let confidence: DataConfidence
+    public let method: String
+
+    public init(
+        medianHRV: Double,
+        weightedHRV: Double,
+        sampleCount: Int,
+        confidence: DataConfidence,
+        method: String = "RMSSD · Todo el sueño"
+    ) {
+        self.medianHRV = medianHRV
+        self.weightedHRV = weightedHRV
+        self.sampleCount = sampleCount
+        self.confidence = confidence
+        self.method = method
+    }
 }
 
 public struct ProcessedNightlyHeartRate: Sendable {
@@ -168,7 +183,8 @@ public final class HealthKitReader: ObservableObject {
         }
 
         var readTypes: Set<HKObjectType> = [
-            HKObjectType.workoutType()
+            HKObjectType.workoutType(),
+            HKSeriesType.heartbeat()
         ]
         let qIds: [HKQuantityTypeIdentifier] = [
             .heartRateVariabilitySDNN,
@@ -356,16 +372,45 @@ public final class HealthKitReader: ObservableObject {
         }
         guard !samples.isEmpty else { return nil }
 
-        // Keep only samples whose wake/end date falls on targetDate (avoiding previous night leakage)
-        let targetEnd = cal.date(byAdding: .day, value: 1, to: targetDate)!
-        let daySamples = samples.filter { $0.endDate >= targetDate && $0.endDate < targetEnd }
+        // Keep sleep belonging to this night:
+        // - Include pre-midnight evening blocks (>= 18:00 prev day)
+        // - Exclude next-night bedtime blocks starting >= 19:30 on targetDate so daytime HRV never leaks in!
+        guard let prevEveningCutoff = cal.date(byAdding: .hour, value: -6, to: targetDate),
+              let nextNightCutoff = cal.date(byAdding: .minute, value: 19 * 60 + 30, to: targetDate) else { return nil }
+        let daySamples = samples.filter { $0.endDate >= prevEveningCutoff && $0.startDate < nextNightCutoff }
         guard !daySamples.isEmpty else { return nil }
 
         let appleWatchSamples = daySamples.filter { s in
             let bundle = s.sourceRevision.source.bundleIdentifier.lowercased()
             return bundle.contains("apple") || s.device?.name?.localizedCaseInsensitiveContains("watch") == true
         }
-        let cleanSamples = appleWatchSamples.isEmpty ? daySamples : appleWatchSamples
+        let sourceFiltered = appleWatchSamples.isEmpty ? daySamples : appleWatchSamples
+
+        // Cluster contiguous sleep blocks (gap <= 90 min) and pick the primary longest overnight session (ignores naps!)
+        let sortedByStart = sourceFiltered.sorted { $0.startDate < $1.startDate }
+        var clusters: [[HKCategorySample]] = []
+        var currentCluster: [HKCategorySample] = []
+        var currentEnd: Date = .distantPast
+        for s in sortedByStart where s.endDate > s.startDate {
+            if currentCluster.isEmpty {
+                currentCluster = [s]
+                currentEnd = s.endDate
+            } else if s.startDate.timeIntervalSince(currentEnd) <= 90 * 60 {
+                currentCluster.append(s)
+                if s.endDate > currentEnd { currentEnd = s.endDate }
+            } else {
+                clusters.append(currentCluster)
+                currentCluster = [s]
+                currentEnd = s.endDate
+            }
+        }
+        if !currentCluster.isEmpty { clusters.append(currentCluster) }
+
+        let cleanSamples: [HKCategorySample] = clusters.max { a, b in
+            let asleepA = mergeMinutes(a.filter { $0.value != HKCategoryValueSleepAnalysis.inBed.rawValue && $0.value != HKCategoryValueSleepAnalysis.awake.rawValue }.map { ($0.startDate, $0.endDate) })
+            let asleepB = mergeMinutes(b.filter { $0.value != HKCategoryValueSleepAnalysis.inBed.rawValue && $0.value != HKCategoryValueSleepAnalysis.awake.rawValue }.map { ($0.startDate, $0.endDate) })
+            return asleepA < asleepB
+        } ?? sourceFiltered
 
         var deepRanges: [(Date, Date)] = []
         var remRanges: [(Date, Date)] = []
@@ -460,18 +505,121 @@ public final class HealthKitReader: ObservableObject {
         return total / 60.0
     }
 
-    // MARK: - 5. Bevel-Aligned Nocturnal HRV (With Full-Day Fallback So HRV Is NEVER Dropped!)
+    // MARK: - 5. Bevel / WHOOP Beat-to-Beat RMSSD HRV Over Entire Sleep ("Todo el sueño")
+
+    private func extractHeartbeatSeriesRmssd(from s: Date, to e: Date) async -> [TimedHealthSample] {
+        let hbType = HKSeriesType.heartbeat()
+        let pred = HKQuery.predicateForSamples(withStart: s, end: e, options: [])
+        let sortAsc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        let seriesSamples: [HKHeartbeatSeriesSample] = await withCheckedContinuation { continuation in
+            let q = HKSampleQuery(sampleType: hbType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortAsc]) { _, res, _ in
+                continuation.resume(returning: (res as? [HKHeartbeatSeriesSample]) ?? [])
+            }
+            healthStore.execute(q)
+        }
+        guard !seriesSamples.isEmpty else { return [] }
+
+        var results: [TimedHealthSample] = []
+        results.reserveCapacity(seriesSamples.count)
+
+        for sample in seriesSamples {
+            let beats: [(TimeInterval, Bool)] = await withCheckedContinuation { continuation in
+                var collected: [(TimeInterval, Bool)] = []
+                var resumed = false
+                let q = HKHeartbeatSeriesQuery(heartbeatSeries: sample) { _, timeSinceStart, precededByGap, done, error in
+                    if error == nil && !(done && collected.isEmpty && timeSinceStart == 0) {
+                        collected.append((timeSinceStart, precededByGap))
+                    }
+                    if (done || error != nil) && !resumed {
+                        resumed = true
+                        continuation.resume(returning: collected)
+                    }
+                }
+                healthStore.execute(q)
+            }
+            if let rmssd = computeBeatSeriesRmssd(beats: beats) {
+                results.append(TimedHealthSample(date: sample.endDate, value: rmssd))
+            }
+        }
+        return results
+    }
+
+    /// Computes true Bevel/WHOOP RMSSD (ms) from raw `HKHeartbeatSeriesQuery` beats,
+    /// splitting across sensor gaps (`precededByGap`) and rejecting ectopic/motion artifacts.
+    private func computeBeatSeriesRmssd(beats: [(TimeInterval, Bool)]) -> Double? {
+        guard beats.count >= 6 else { return nil }
+        var segments: [[Double]] = []
+        var cur: [Double] = []
+        var prevTime: TimeInterval? = nil
+
+        for (t, gap) in beats {
+            if gap {
+                if !cur.isEmpty { segments.append(cur); cur = [] }
+                prevTime = t
+                continue
+            }
+            if let p = prevTime {
+                let rrMs = (t - p) * 1000.0
+                if (300.0...2000.0).contains(rrMs) {
+                    cur.append(rrMs)
+                } else if !cur.isEmpty {
+                    segments.append(cur)
+                    cur = []
+                }
+            }
+            prevTime = t
+        }
+        if !cur.isEmpty { segments.append(cur) }
+
+        let allValid = segments.flatMap { $0 }
+        guard allValid.count >= 5 else { return nil }
+        let sorted = allValid.sorted()
+        let medRR = sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2.0
+        let maxDev = medRR * 0.25
+        let maxJump = min(300.0, medRR * 0.30)
+
+        var sqSum = 0.0
+        var count = 0
+        for seg in segments {
+            var prevClean: Double? = nil
+            for rr in seg {
+                guard abs(rr - medRR) <= maxDev else { prevClean = nil; continue }
+                if let p = prevClean {
+                    let d = abs(rr - p)
+                    if d <= maxJump {
+                        sqSum += d * d
+                        count += 1
+                    }
+                }
+                prevClean = rr
+            }
+        }
+        guard count >= 4 else { return nil }
+        let rmssd = sqrt(sqSum / Double(count))
+        return (3.0...350.0).contains(rmssd) ? rmssd : nil
+    }
+
+    private func aggregateCleanedHrv(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        if values.count < 4 { return values.reduce(0, +) / Double(values.count) }
+        let sorted = values.sorted()
+        let med = sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2.0
+        let absDevs = sorted.map { abs($0 - med) }.sorted()
+        let mad = absDevs.count % 2 == 1 ? absDevs[absDevs.count / 2] : (absDevs[absDevs.count / 2 - 1] + absDevs[absDevs.count / 2]) / 2.0
+        let sigma = max(1.4826 * mad, med * 0.18, 12.0)
+        let cleaned = values.filter { abs($0 - med) <= 3.0 * sigma }
+        let pool = cleaned.isEmpty ? values : cleaned
+        return pool.reduce(0, +) / Double(pool.count)
+    }
 
     private func extractNocturnalHRV(sleepSession: NightlySleepSession?, targetDay: Date) async -> (ProcessedNightlyHRV, [TimedHealthSample]) {
-        guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
-            return (ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low), [])
-        }
-
         let cal = Calendar.current
         let msUnit = HKUnit.secondUnit(with: .milli)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
-        func queryHrv(from s: Date, to e: Date) async -> [TimedHealthSample] {
+        func querySdnn(from s: Date, to e: Date) async -> [TimedHealthSample] {
+            guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else { return [] }
             let pred = HKQuery.predicateForSamples(withStart: s, end: e, options: [])
             let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
                 let q = HKSampleQuery(sampleType: hrvType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDescriptor]) { _, res, _ in
@@ -485,28 +633,66 @@ public final class HealthKitReader: ObservableObject {
             }
         }
 
+        // Priority 1 & 2: STRICTLY Entire Sleep ("Todo el sueño") — Beat-to-Beat RMSSD first, SDNN fallback
         var sleepSamples: [TimedHealthSample] = []
+        var methodLabel = "RMSSD · Todo el sueño"
+
         if let sl = sleepSession {
-            sleepSamples = await queryHrv(from: sl.startDate.addingTimeInterval(-300), to: sl.endDate.addingTimeInterval(300))
+            let winStart = sl.startDate.addingTimeInterval(-300)
+            let winEnd = sl.endDate.addingTimeInterval(300)
+            let rmssdSleep = await extractHeartbeatSeriesRmssd(from: winStart, to: winEnd)
+            if !rmssdSleep.isEmpty {
+                sleepSamples = rmssdSleep
+                methodLabel = "RMSSD · Todo el sueño"
+            } else {
+                let sdnnSleep = await querySdnn(from: winStart, to: winEnd)
+                if !sdnnSleep.isEmpty {
+                    sleepSamples = sdnnSleep
+                    methodLabel = "SDNN · Todo el sueño"
+                }
+            }
         }
 
-        // If no sleeping HRV samples exist, fall back to full day HRV so recorded HRV is never lost!
-        let dayStart = cal.startOfDay(for: targetDay)
-        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
-        let chosen = !sleepSamples.isEmpty ? sleepSamples : await queryHrv(from: dayStart, to: dayEnd)
+        // Priority 3: If no sleep session recorded, check overnight window (22:00 prev day – 11:00) before full-day!
+        var chosen = sleepSamples
+        if chosen.isEmpty {
+            let dayStart = cal.startOfDay(for: targetDay)
+            let noctStart = cal.date(byAdding: .hour, value: -2, to: dayStart) ?? dayStart
+            let noctEnd = cal.date(byAdding: .hour, value: 11, to: dayStart) ?? dayStart
+            let noctRmssd = await extractHeartbeatSeriesRmssd(from: noctStart, to: noctEnd)
+            if !noctRmssd.isEmpty {
+                chosen = noctRmssd
+                methodLabel = "RMSSD · Nocturna"
+            } else {
+                let noctSdnn = await querySdnn(from: noctStart, to: noctEnd)
+                if !noctSdnn.isEmpty {
+                    chosen = noctSdnn
+                    methodLabel = "SDNN · Nocturna"
+                } else {
+                    let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+                    let dayRmssd = await extractHeartbeatSeriesRmssd(from: dayStart, to: dayEnd)
+                    if !dayRmssd.isEmpty {
+                        chosen = dayRmssd
+                        methodLabel = "RMSSD · Día"
+                    } else {
+                        chosen = await querySdnn(from: dayStart, to: dayEnd)
+                        methodLabel = "SDNN · Día"
+                    }
+                }
+            }
+        }
 
         guard !chosen.isEmpty else {
-            return (ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low), [])
+            return (ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low, method: methodLabel), [])
         }
 
         let vals = chosen.map(\.value).sorted()
         let median = vals.count % 2 == 0 ? (vals[vals.count / 2 - 1] + vals[vals.count / 2]) / 2.0 : vals[vals.count / 2]
-        // Bevel displays the mean of sleeping HRV samples
-        let meanVal = vals.reduce(0, +) / Double(vals.count)
+        let cleanedMean = aggregateCleanedHrv(vals)
         let conf: DataConfidence = sleepSamples.count >= 3 ? .high : (!sleepSamples.isEmpty ? .medium : .low)
 
         return (
-            ProcessedNightlyHRV(medianHRV: median, weightedHRV: meanVal, sampleCount: chosen.count, confidence: conf),
+            ProcessedNightlyHRV(medianHRV: median, weightedHRV: cleanedMean, sampleCount: chosen.count, confidence: conf, method: methodLabel),
             sleepSamples
         )
     }

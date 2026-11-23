@@ -1714,9 +1714,10 @@ final class ImprovingStore: ObservableObject {
             var d = realHistory[iso] ?? RealBiometricDaySummary(dateIso: iso)
             var hasReal = false
 
-            // 1. Sleeping HRV (mean of nocturnal HRV, or fallback daytime HRV — NEVER dropped!)
+            // 1. Sleeping HRV (Bevel/WHOOP beat-to-beat RMSSD over Entire Sleep, with clean fallback!)
             if snap.hrv.sampleCount > 0 && snap.hrv.weightedHRV > 2.0 {
                 d.hrvMs = AppleHealthExportImporter.round1(snap.hrv.weightedHRV)
+                d.hrvMethodLabel = snap.hrv.method
                 hasReal = true
             }
 

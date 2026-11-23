@@ -124,6 +124,81 @@ enum WhoopPhysiologyEngine {
         return VitalEvaluation(statusLabel: "Normal", normalizedPosition: pos, severity: .normal, isAboveBand: false, isBelowBand: false)
     }
 
+    // MARK: - Bevel / WHOOP Beat-to-Beat RMSSD & Entire Sleep HRV Engine
+
+    /// Computes true beat-to-beat RMSSD (ms) from contiguous RR interval segments (ms),
+    /// applying Bevel/WHOOP absolute (300–2000 ms) and relative ectopic/artifact beat filtering.
+    static func computeRmssdFromRRSegments(_ segments: [[Double]]) -> Double? {
+        let allValid = segments.flatMap { $0 }.filter { (300.0...2000.0).contains($0) }
+        guard allValid.count >= 5 else { return nil }
+
+        let sorted = allValid.sorted()
+        let medRR = sorted.count % 2 == 1
+            ? sorted[sorted.count / 2]
+            : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2.0
+        guard medRR >= 300.0 && medRR <= 2000.0 else { return nil }
+
+        // Bevel/WHOOP artifact filter: reject beats > 25% away from local median RR or jumps > 300 ms / 30% of median
+        let maxDev = medRR * 0.25
+        let maxJump = min(300.0, medRR * 0.30)
+
+        var sqDiffSum = 0.0
+        var diffCount = 0
+
+        for seg in segments {
+            var prevClean: Double? = nil
+            for rr in seg {
+                guard (300.0...2000.0).contains(rr), abs(rr - medRR) <= maxDev else {
+                    prevClean = nil
+                    continue
+                }
+                if let p = prevClean {
+                    let d = abs(rr - p)
+                    if d <= maxJump {
+                        sqDiffSum += d * d
+                        diffCount += 1
+                    }
+                }
+                prevClean = rr
+            }
+        }
+
+        guard diffCount >= 4 else { return nil }
+        let rmssd = sqrt(sqDiffSum / Double(diffCount))
+        return (3.0...350.0).contains(rmssd) ? rmssd : nil
+    }
+
+    /// Computes true beat-to-beat RMSSD (ms) from Apple Health `<InstantaneousBeatsPerMinute>` BPM readings.
+    static func computeRmssdFromBeatBpms(_ bpms: [Double]) -> Double? {
+        let rr = bpms.compactMap { bpm -> Double? in
+            guard (30.0...200.0).contains(bpm) else { return nil }
+            return 60_000.0 / bpm
+        }
+        return computeRmssdFromRRSegments([rr])
+    }
+
+    /// Aggregates HRV readings across Entire Sleep ("Todo el sueño") using Bevel's outlier-cleaned mean:
+    /// strips extreme motion/artifact spikes (> 3.0 robust MAD sigma from night median) before averaging.
+    static func aggregateEntireSleepHrv(_ samples: [Double]) -> Double? {
+        let valid = samples.filter { (3.0...350.0).contains($0) && $0.isFinite }
+        guard !valid.isEmpty else { return nil }
+        if valid.count < 4 {
+            return valid.reduce(0, +) / Double(valid.count)
+        }
+        let sorted = valid.sorted()
+        let med = sorted.count % 2 == 1
+            ? sorted[sorted.count / 2]
+            : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2.0
+        let absDevs = sorted.map { abs($0 - med) }.sorted()
+        let mad = absDevs.count % 2 == 1
+            ? absDevs[absDevs.count / 2]
+            : (absDevs[absDevs.count / 2 - 1] + absDevs[absDevs.count / 2]) / 2.0
+        let robustSigma = max(1.4826 * mad, med * 0.18, 12.0)
+        let cleaned = valid.filter { abs($0 - med) <= 3.0 * robustSigma }
+        let pool = cleaned.isEmpty ? valid : cleaned
+        return pool.reduce(0, +) / Double(pool.count)
+    }
+
     // MARK: - Causal 60-Day Personal Rolling Baseline (Matches Bevel Personal Normal Range!)
 
     static func computeRollingBaseline(

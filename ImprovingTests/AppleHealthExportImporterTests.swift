@@ -330,4 +330,60 @@ final class AppleHealthExportImporterTests: XCTestCase {
         // Steps "5.420" parsed as 5420 AND duplicate timestamp deduplicated (not 10840!)
         XCTAssertEqual(day.stepsCount, 5420)
     }
+
+    func testBeatToBeatRMSSDPreferredOverSDNNInAppleHealthXml() throws {
+        // Apple Health XML record with BOTH scalar SDNN (value="42.0") AND beat-to-beat <InstantaneousBeatsPerMinute>
+        // (including an ectopic artifact bpm="180" that Bevel/WHOOP artifact filter must reject!).
+        // Alternating RR: 56 bpm (1071.4ms), 60 bpm (1000.0ms), 55 bpm (1090.9ms), 61 bpm (983.6ms), 57 bpm (1052.6ms), 60 bpm (1000.0ms) -> RMSSD ~82ms >> SDNN 42ms!
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <HealthData locale="es_ES">
+          <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Apple Watch" value="HKCategoryValueSleepAnalysisAsleepCore" startDate="2026-11-23 01:00:00 +0100" endDate="2026-11-23 07:30:00 +0100"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" sourceName="Apple Watch" startDate="2026-11-23 03:30:00 +0100" endDate="2026-11-23 03:31:00 +0100" value="42.0">
+            <HeartRateVariabilityMetadataList>
+              <InstantaneousBeatsPerMinute bpm="56" time="03:30:01"/>
+              <InstantaneousBeatsPerMinute bpm="60" time="03:30:02"/>
+              <InstantaneousBeatsPerMinute bpm="180" time="03:30:03"/>
+              <InstantaneousBeatsPerMinute bpm="55" time="03:30:04"/>
+              <InstantaneousBeatsPerMinute bpm="61" time="03:30:05"/>
+              <InstantaneousBeatsPerMinute bpm="57" time="03:30:06"/>
+              <InstantaneousBeatsPerMinute bpm="60" time="03:30:07"/>
+              <InstantaneousBeatsPerMinute bpm="56" time="03:30:08"/>
+            </HeartRateVariabilityMetadataList>
+          </Record>
+        </HealthData>
+        """
+        let res = AppleHealthExportImporter.parseXmlData(try XCTUnwrap(xml.data(using: .utf8)))
+        let day = try XCTUnwrap(res.days["2026-11-23"])
+        XCTAssertEqual(day.hrvMethodLabel, "RMSSD · Todo el sueño")
+        // Must compute true beat-to-beat RMSSD (~70-95 ms), NOT Apple's 42.0 SDNN!
+        XCTAssertGreaterThan(day.hrvMs ?? 0, 65.0)
+        XCTAssertLessThan(day.hrvMs ?? 999, 105.0)
+    }
+
+    func testEntireSleepClusteringExcludesDaytimeHRVAndNextNightBedtime() throws {
+        // Pre-midnight sleep (23:15-23:55 prev day) + overnight sleep (00:00-07:30)
+        // + LOW daytime stress HRV (26 ms, 31 ms at 14:00 & 17:00)
+        // + next-night bedtime block (23:20-23:55 today) which previously stretched the sleep window across the whole day!
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <HealthData locale="es_ES">
+          <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Apple Watch" value="HKCategoryValueSleepAnalysisAsleepCore" startDate="2026-11-22 23:15:00 +0100" endDate="2026-11-22 23:55:00 +0100"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" startDate="2026-11-22 23:30:00 +0100" endDate="2026-11-22 23:31:00 +0100" value="72.0"/>
+          <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Apple Watch" value="HKCategoryValueSleepAnalysisAsleepDeep" startDate="2026-11-23 00:00:00 +0100" endDate="2026-11-23 02:30:00 +0100"/>
+          <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Apple Watch" value="HKCategoryValueSleepAnalysisAsleepREM" startDate="2026-11-23 02:30:00 +0100" endDate="2026-11-23 07:30:00 +0100"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" startDate="2026-11-23 02:00:00 +0100" endDate="2026-11-23 02:01:00 +0100" value="68.0"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" startDate="2026-11-23 05:00:00 +0100" endDate="2026-11-23 05:01:00 +0100" value="78.0"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" startDate="2026-11-23 07:00:00 +0100" endDate="2026-11-23 07:01:00 +0100" value="70.0"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" startDate="2026-11-23 14:00:00 +0100" endDate="2026-11-23 14:01:00 +0100" value="26.0"/>
+          <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" unit="ms" startDate="2026-11-23 17:00:00 +0100" endDate="2026-11-23 17:01:00 +0100" value="31.0"/>
+          <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Apple Watch" value="HKCategoryValueSleepAnalysisInBed" startDate="2026-11-23 23:20:00 +0100" endDate="2026-11-23 23:55:00 +0100"/>
+        </HealthData>
+        """
+        let res = AppleHealthExportImporter.parseXmlData(try XCTUnwrap(xml.data(using: .utf8)))
+        let day = try XCTUnwrap(res.days["2026-11-23"])
+        // Must average ONLY the 4 Entire Sleep readings: (72 + 68 + 78 + 70) / 4 = 72.0 ms (daytime 26 & 31 MUST be excluded!)
+        XCTAssertEqual(day.hrvMs ?? 0, 72.0, accuracy: 0.2)
+        XCTAssertEqual(day.sleepSession?.sleepHrvSamples.count, 4)
+    }
 }

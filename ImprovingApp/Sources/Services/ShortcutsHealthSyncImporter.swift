@@ -125,8 +125,8 @@ enum ShortcutsHealthSyncImporter {
         let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
         let sz = vals?.fileSize ?? 0
-        // v2 prefix forces automatic re-parse of existing inbox files after the 3-decimal kcal/HRV parser fix
-        return "v2#\(url.lastPathComponent)#\(sz)#\(mtime)"
+        // v3 prefix forces automatic re-parse with Entire Sleep clustering + Bevel RMSSD engine
+        return "v3#\(url.lastPathComponent)#\(sz)#\(mtime)"
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)
@@ -287,7 +287,7 @@ enum ShortcutsHealthSyncImporter {
     // MARK: - Metric Kind Classification (Spanish & English)
 
     private enum SyncMetricKind {
-        case hr, hrv, rhr, resp, spo2, temp, steps, kcal, vo2, hrr, weight, bodyFat, leanMass, daylight, audio
+        case hr, hrv, hrvRmssd, rhr, resp, spo2, temp, steps, kcal, vo2, hrr, weight, bodyFat, leanMass, daylight, audio
     }
 
     private static func classifyMetricKey(_ rawKey: String) -> SyncMetricKind? {
@@ -297,6 +297,7 @@ enum ShortcutsHealthSyncImporter {
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
 
+        if k.contains("rmssd") || k.contains("recovery hrv") { return .hrvRmssd }
         if k == "hrv" || k == "vfc" || k.contains("variabil") || k.contains("sdnn") { return .hrv }
         if k == "rhr" || k == "fcr" || k.contains("resting heart") || k.contains("en reposo") { return .rhr }
         if k == "hr" || k == "fc" || k.contains("heart rate") || k.contains("frecuencia cardiaca") || k.contains("ritmo cardiaco") || k.contains("pulso") {
@@ -428,6 +429,7 @@ enum ShortcutsHealthSyncImporter {
         // 3. Parallel-list keys inside a Shortcut Dictionary (e.g. hr_values + hr_dates, sleep_values + sleep_starts + sleep_ends)
         let parallelPrefixes: [(prefix: String, kind: SyncMetricKind)] = [
             ("hr", .hr), ("fc", .hr),
+            ("rmssd", .hrvRmssd), ("hrv_rmssd", .hrvRmssd), ("vfc_rmssd", .hrvRmssd),
             ("hrv", .hrv), ("vfc", .hrv),
             ("rhr", .rhr), ("fcr", .rhr),
             ("resp", .resp), ("fr", .resp),
@@ -717,6 +719,11 @@ enum ShortcutsHealthSyncImporter {
             let ms = (num >= 0.003 && num < 2.0) ? num * 1000.0 : num
             if (3.0...350.0).contains(ms) {
                 day.hrvSamples.append((ep, ms))
+            }
+        case .hrvRmssd:
+            let ms = (num >= 0.003 && num < 2.0) ? num * 1000.0 : num
+            if (3.0...350.0).contains(ms) {
+                day.hrvRmssdSamples.append((ep, ms))
             }
         case .rhr:
             if (28.0...130.0).contains(num) {

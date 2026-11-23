@@ -297,6 +297,18 @@ struct DispositivosScreen: View {
                         Divider().background(BevelColors.divider)
 
                         HStack {
+                            Text("Método VFC").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)
+                            Spacer()
+                            Text("RMSSD (Bevel / WHOOP)").font(ImprovingFont.cardTitle(13.5)).foregroundColor(BevelColors.greenPrimary)
+                        }
+                        HStack {
+                            Text("Fuente VFC").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)
+                            Spacer()
+                            Text(store.currentDaySummary?.hrvMethodLabel ?? "Todo el sueño")
+                                .font(ImprovingFont.cardTitle(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
+                        HStack {
                             Text("FC máx. Tanaka").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)
                             Spacer()
                             Text("\(norms.maxHrBpm) ppm").font(ImprovingFont.cardTitle(14)).monospacedDigit().foregroundColor(BevelColors.textPrimary)
