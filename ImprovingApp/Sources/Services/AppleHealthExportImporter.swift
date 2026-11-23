@@ -883,8 +883,25 @@ enum AppleHealthExportImporter {
             return appleFormatterNoTz.date(from: raw)
         }
 
-        private func dayEntry(for date: Date) -> MutableAppleDay {
-            let iso = dayFormatter.string(from: date)
+        /// Extracts the exact wall-clock local date ("yyyy-MM-dd") and minute of day (0..1439)
+        /// written by Apple Health at recording time so DST / timezone changes NEVER shift 00:00-00:59 readings into the wrong day!
+        private func extractWallClock(_ raw: String?) -> (iso: String, minuteOfDay: Int)? {
+            guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+            let b = Array(s.utf8)
+            guard b.count >= 16,
+                  b[4] == 0x2D, b[7] == 0x2D, // '-'
+                  (b[10] == 0x20 || b[10] == 0x54), // ' ' or 'T'
+                  b[13] == 0x3A else { return nil } // ':'
+            guard let iso = String(bytes: b[0..<10], encoding: .utf8),
+                  let hStr = String(bytes: b[11..<13], encoding: .utf8),
+                  let mStr = String(bytes: b[14..<16], encoding: .utf8),
+                  let hh = Int(hStr), let mm = Int(mStr),
+                  (0...23).contains(hh), (0...59).contains(mm) else { return nil }
+            return (iso, hh * 60 + mm)
+        }
+
+        private func dayEntry(for date: Date, rawTimestamp: String? = nil) -> MutableAppleDay {
+            let iso = extractWallClock(rawTimestamp)?.iso ?? dayFormatter.string(from: date)
             if let existing = days[iso] { return existing }
             let created = MutableAppleDay(dateIso: iso)
             days[iso] = created
@@ -892,15 +909,17 @@ enum AppleHealthExportImporter {
         }
 
         private func handleRecord(_ attrs: [String: String], isSelfClosing: Bool) {
+            let rawEnd = attrs["endDate"] ?? attrs["startDate"]
             guard let type = attrs["type"],
-                  let endDate = parseDate(attrs["endDate"] ?? attrs["startDate"]) else { return }
+                  let endDate = parseDate(rawEnd) else { return }
             let startDate = parseDate(attrs["startDate"]) ?? endDate
             let valStr = (attrs["value"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let unitStr = attrs["unit"] ?? ""
             let endEp = Int64(endDate.timeIntervalSince1970)
+            let wallClock = extractWallClock(rawEnd)
 
             if type == "HKCategoryTypeIdentifierSleepAnalysis" {
-                let day = dayEntry(for: endDate)
+                let day = dayEntry(for: endDate, rawTimestamp: rawEnd)
                 let s = Int64(startDate.timeIntervalSince1970)
                 let e = endEp
                 guard e > s else { return }
@@ -930,7 +949,7 @@ enum AppleHealthExportImporter {
             }
 
             if type == "HKQuantityTypeIdentifierHeartRateVariabilitySDNN" {
-                let day = dayEntry(for: endDate)
+                let day = dayEntry(for: endDate, rawTimestamp: rawEnd)
                 let parsedNum = Double(valStr.replacingOccurrences(of: ",", with: "."))
                 var addedScalar = false
                 if let num = parsedNum, num.isFinite {
@@ -951,14 +970,14 @@ enum AppleHealthExportImporter {
             }
 
             guard let num = Double(valStr.replacingOccurrences(of: ",", with: ".")), num.isFinite else { return }
-            let day = dayEntry(for: endDate)
+            let day = dayEntry(for: endDate, rawTimestamp: rawEnd)
 
             switch type {
             case "HKQuantityTypeIdentifierRestingHeartRate":
                 if (28.0...130.0).contains(num) { day.rhrValues.append(num) }
             case "HKQuantityTypeIdentifierHeartRate":
                 if (28.0...235.0).contains(num) {
-                    let mOfDay = AppleHealthExportImporter.minuteOfDay(epochSec: endEp)
+                    let mOfDay = wallClock?.minuteOfDay ?? AppleHealthExportImporter.minuteOfDay(epochSec: endEp)
                     day.hrSamples.append((endEp, mOfDay, num))
                 }
             case "HKQuantityTypeIdentifierRespiratoryRate":
@@ -1016,7 +1035,7 @@ enum AppleHealthExportImporter {
         private func handleWorkout(_ attrs: [String: String]) {
             guard let startDate = parseDate(attrs["startDate"]) else { return }
             let endDate = parseDate(attrs["endDate"]) ?? startDate
-            let day = dayEntry(for: startDate)
+            let day = dayEntry(for: startDate, rawTimestamp: attrs["startDate"])
 
             let (title, category, isStrength) = mapWorkoutName(attrs["workoutActivityType"] ?? "")
             let durRaw = attrs["duration"].flatMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
