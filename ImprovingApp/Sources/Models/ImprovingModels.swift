@@ -50,6 +50,41 @@ enum OverlayRoute: String, Equatable, Hashable, Identifiable {
     var id: String { rawValue }
 }
 
+enum CoachingSection: String, CaseIterable, Codable, Identifiable {
+    case hoy
+    case esfuerzo
+    case recuperacion
+    case sueno
+    case estres
+    case energia
+    case fitness
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .hoy: return "Resumen del día"
+        case .esfuerzo: return "Esfuerzo"
+        case .recuperacion: return "Recuperación"
+        case .sueno: return "Sueño"
+        case .estres: return "Estrés"
+        case .energia: return "Energía"
+        case .fitness: return "Fitness"
+        }
+    }
+}
+
+struct SectionCoachingCard: Codable, Equatable {
+    let section: CoachingSection
+    let emoji: String
+    let headline: String
+    let body: String
+    let slotKey: String
+    let generatedAtLabel: String
+    let nextUpdateLabel: String
+    let isLiveAI: Bool
+}
+
 enum HealthMetricKind: String, CaseIterable, Codable, Identifiable {
     case respiratoryRate = "RESP_RATE"
     case restingHeartRate = "RHR"
@@ -129,7 +164,7 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
 }
 
 struct TimedBiometricPoint: Codable, Equatable, Hashable {
-    let minuteOfDay: Int // 0...1439 (or offset minutes for overnight sleep)
+    let minuteOfDay: Int // 0...1439
     let value: Double
     var epochSec: Int64? = nil
 }
@@ -150,10 +185,10 @@ struct SleepStageBlock: Identifiable, Codable, Equatable, Hashable {
 struct SleepSessionDetail: Codable, Equatable {
     var startEpochSec: Int64? = nil
     var endEpochSec: Int64? = nil
-    var startTimeLabel: String? = nil      // e.g. "3:15"
-    var endTimeLabel: String? = nil        // e.g. "11:07"
-    var startDateTimeLabel: String? = nil  // e.g. "22/11/26 a las 3:15"
-    var sourceName: String? = nil          // e.g. "Apple Watch de Unai"
+    var startTimeLabel: String? = nil
+    var endTimeLabel: String? = nil
+    var startDateTimeLabel: String? = nil
+    var sourceName: String? = nil
     var awakeSeconds: Int? = nil
     var remSeconds: Int? = nil
     var coreSeconds: Int? = nil
@@ -190,8 +225,14 @@ struct JournalHabitImpactItem: Identifiable, Equatable {
     let impactPct: Int
     let yesCount: Int
     let noCount: Int
+    let loggedDaysCount: Int
+    let daysSpanCount: Int
     let reliability: JournalReliabilityTier
     let isAutomatic: Bool
+
+    var daysRemainingFor30d: Int {
+        max(30 - max(loggedDaysCount, daysSpanCount), 0)
+    }
 }
 
 struct NutritionMealItem: Identifiable, Codable, Hashable {
@@ -287,11 +328,11 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var leanMassKg: Double?
     var systolicBp: Int?
     var diastolicBp: Int?
-    var hrZoneMinutes: [Int] // 5 elements Z1..Z5
-    var stressSeries24h: [Double] // legacy hourly fallback if needed
+    var hrZoneMinutes: [Int]
+    var stressSeries24h: [Double]
     var energySeries24h: [Double]
-    var stressSamples5m: [TimedBiometricPoint] // high-resolution 5-minute intraday stress
-    var energySamples5m: [TimedBiometricPoint] // high-resolution 5-minute intraday energy
+    var stressSamples5m: [TimedBiometricPoint]
+    var energySamples5m: [TimedBiometricPoint]
     var strengthMinutes: Int
     var workouts: [EffortEventItem]
 

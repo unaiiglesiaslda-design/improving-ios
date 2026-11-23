@@ -147,10 +147,14 @@ struct AskBevelScreen: View {
                                                 }
 
                                                 if let model = msg.modelUsed, !model.isEmpty {
-                                                    Text(model)
-                                                        .font(ImprovingFont.caption(10.5))
-                                                        .foregroundColor(BevelColors.textMuted)
-                                                        .padding(.top, 2)
+                                                    HStack(spacing: 6) {
+                                                        Text(msg.timestampLabel)
+                                                        Text("·")
+                                                        Text(model)
+                                                    }
+                                                    .font(ImprovingFont.caption(10.5))
+                                                    .foregroundColor(BevelColors.textMuted)
+                                                    .padding(.top, 2)
                                                 }
                                             }
                                             .padding(.horizontal, 15)
@@ -174,7 +178,7 @@ struct AskBevelScreen: View {
                                         BevelMascotOrb(size: 26)
                                         HStack(spacing: 8) {
                                             ProgressView().scaleEffect(0.85)
-                                            Text("Pensando con tus datos reales...")
+                                            Text("Escribiendo con tus datos reales...")
                                                 .font(ImprovingFont.caption(12.5))
                                                 .foregroundColor(BevelColors.textSecondary)
                                         }
@@ -187,9 +191,23 @@ struct AskBevelScreen: View {
                             }
                             .padding(16)
                         }
+                        .scrollDismissesKeyboard(.interactively)
                         .onChange(of: store.coachMessages.count) { _, _ in
-                            if let last = store.coachMessages.last {
-                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                            DispatchQueue.main.async {
+                                if store.isCoachThinking {
+                                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("thinking_indicator", anchor: .bottom) }
+                                } else if let last = store.coachMessages.last {
+                                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                                }
+                            }
+                        }
+                        .onChange(of: store.isCoachThinking) { _, thinking in
+                            DispatchQueue.main.async {
+                                if thinking {
+                                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("thinking_indicator", anchor: .bottom) }
+                                } else if let last = store.coachMessages.last {
+                                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                                }
                             }
                         }
                     }

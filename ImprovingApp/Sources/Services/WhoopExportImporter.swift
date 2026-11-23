@@ -117,7 +117,7 @@ enum WhoopExportImporter {
                 }
                 merged[iso] = RealBiometricDaySummary(
                     dateIso: iso,
-                    liveHrBpm: cur.liveHrBpm ?? imp.liveHrBpm,
+                    liveHrBpm: imp.liveHrBpm ?? cur.liveHrBpm,
                     restingHrBpm: imp.restingHrBpm ?? cur.restingHrBpm,
                     hrvMs: imp.hrvMs ?? cur.hrvMs,
                     respRateRpm: imp.respRateRpm ?? cur.respRateRpm,
@@ -165,7 +165,7 @@ enum WhoopExportImporter {
         return merged
     }
 
-    // MARK: - CSV Helpers
+    // MARK: - CSV Helpers (Strictly Zero Fabricated Values)
 
     private static func ingestCycles(headers: [String], rows: [[String]], into days: inout [String: RealBiometricDaySummary]) {
         let dateCol = col(headers, "cycle start time", "fecha", "date")
@@ -191,11 +191,6 @@ enum WhoopExportImporter {
             d.respRateRpm = parseNum(cell(r, respCol)) ?? d.respRateRpm
             if let sl = parseNum(cell(r, sleepCol)) {
                 if sl > 100 { d.asleepMinutes = Int(sl.rounded()) } else { d.sleepPct = Int(sl.rounded()) }
-            }
-            if let rec = d.recoveryPct {
-                let st = d.strainPct ?? 35
-                d.energyBankPercent = min(max(rec - Int(Double(st) * 0.45) + 15, 10), 99)
-                d.stressScore = min(max(Int((Double(100 - rec) * 0.45 + Double(st) * 0.35).rounded()), 8), 92)
             }
             days[iso] = d
         }
@@ -234,21 +229,22 @@ enum WhoopExportImporter {
             guard let iso = extractDateIso(cell(r, dateCol)) else { continue }
             var d = days[iso] ?? RealBiometricDaySummary(dateIso: iso)
             let title = cell(r, nameCol).isEmpty ? "Entrenamiento" : cell(r, nameCol)
-            let dur = Int((parseNum(cell(r, durCol)) ?? 40).rounded())
-            let avgHr = Int((parseNum(cell(r, hrCol)) ?? 138).rounded())
-            let s21 = parseNum(cell(r, strainCol)) ?? 9.5
-            let kcal = Int((parseNum(cell(r, kcalCol)) ?? Double(dur * 8)).rounded())
+            let dur = Int((parseNum(cell(r, durCol)) ?? 0).rounded())
+            let avgHr = Int((parseNum(cell(r, hrCol)) ?? 0).rounded())
+            let kcal = Int((parseNum(cell(r, kcalCol)) ?? 0).rounded())
+            let s21 = parseNum(cell(r, strainCol)) ?? WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: max(dur, 1), kcal: kcal, avgHrBpm: avgHr).strain21
             d.workouts.append(
                 EffortEventItem(
                     id: "wh_wk_\(iso)_\(d.workouts.count)",
                     title: title,
                     timeRange: "Sesión",
-                    durationMin: dur,
+                    durationMin: max(dur, 1),
                     avgHrBpm: avgHr,
                     strainScore: s21,
                     strainPct: min(max(Int(((s21 / 21.0) * 100.0).rounded()), 2), 99),
                     categoryLabel: "WHOOP",
-                    kcal: kcal
+                    kcal: kcal,
+                    dateIso: iso
                 )
             )
             days[iso] = d

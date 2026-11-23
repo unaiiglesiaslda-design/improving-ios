@@ -10,10 +10,10 @@ struct GeminiCoachResult {
     let modelUsed: String
 }
 
-/// Exact 1:1 Swift port of Android's `GeminiCoachService.kt`:
-/// 1. Gemini Interactions API (`POST /v1/interactions`) + Gemini `v1beta/models/<model>:generateContent` when a Gemini API key is configured.
-/// 2. Keyless Live Cloud LLM (`POST https://text.pollinations.ai/openai`) with full multi-turn history & biometric JSON context so ANY question gets a direct, human answer out of the box.
-/// 3. Offline physiological fallback strictly grounded in verified available data (ZERO hallucinated numbers, ZERO parentheses `()`).
+/// 3-Tier Live AI Engine for Improving iOS:
+/// 1. True multi-turn conversational human chat (unlimited back-and-forth turns, strictly normalized roles, natural prose, remembers context).
+/// 2. 4-hour time-aware, section-specific Live AI Coaching (non-generic, non-repetitive, strictly grounded in real measured user data).
+/// 3. Tiered cloud transport: User Gemini API Key (`v1beta/models/<model>:generateContent` + `v1/interactions`) -> Keyless Live Cloud LLM -> Honest zero-fabrication offline fallback.
 actor GeminiCoachService {
     static let shared = GeminiCoachService()
 
@@ -28,12 +28,13 @@ actor GeminiCoachService {
     private let apiRevision = "2026-05-20"
     private let keylessEndpoint = "https://text.pollinations.ai/openai"
 
-    private let humanAngles = [
-        "Enfoca tu razonamiento desde el tono vagal y la respuesta del sistema nervioso autónomo para decidir la orientación exacta.",
-        "Enfoca tu razonamiento desde la eficiencia metabólica, el gasto calórico sobre la tasa basal y la reserva de energía disponible.",
-        "Enfoca tu razonamiento desde el equilibrio entre carga aguda y crónica ACWR y la frescura de las fibras musculares.",
-        "Enfoca tu razonamiento desde la arquitectura cardiorrespiratoria, las zonas de pulso de Tanaka y la deuda de sueño acumulada.",
-        "Enfoca tu razonamiento como un entrenador personal cercano y sincero: ve directo a responder lo que pregunta con datos reales y consejos prácticos.",
+    private let coachingStyles = [
+        "Abre con una observación fisiológica concreta conectando dos números reales del usuario y cierra con una decisión táctica para las próximas 4 horas.",
+        "Habla como un entrenador de élite revisando el parte a esta hora exacta del día: directo, cálido, específico y orientado a la acción inmediata.",
+        "Empieza señalando qué está respondiendo mejor o peor en su cuerpo ahora mismo y explica brevemente el porqué fisiológico antes de dar el paso práctico.",
+        "Adopta un tono conversacional cercano y humano, poniendo el foco en cómo gestionar el ritmo desde esta hora hasta la siguiente ventana de 4 horas.",
+        "Enfócate en el impacto práctico sobre la energía, el sistema nervioso y la noche que viene, sin sonar jamás a informe automático ni plantilla.",
+        "Destaca el contraste entre los datos de hoy y cómo conviene dosificar esfuerzos, comida, hidratación o descanso justo en esta franja horaria."
     ]
 
     private var variationCounter: Int = 0
@@ -44,7 +45,7 @@ actor GeminiCoachService {
         return variationCounter
     }
 
-    // MARK: - Human Speech Sanitizer (1:1 Android `sanitizeDirectHumanText`)
+    // MARK: - Human Speech Sanitizer (Zero Parentheses, Zero Robotic Prefixes)
 
     nonisolated static func sanitizeDirectHumanText(_ raw: String) -> String {
         var cleaned = raw
@@ -52,11 +53,9 @@ actor GeminiCoachService {
             .replacingOccurrences(of: "__", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Strip robotic prefixes
         if let regex = try? NSRegularExpression(pattern: "^(Opini[oó]n\\s*(de\\s*)?(IA)?\\s*(\\([^)]*\\))?\\s*:\\s*)", options: [.caseInsensitive]) {
             cleaned = regex.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: "")
         }
-        // Eliminate parentheses seamlessly like Android
         if let parenRegex = try? NSRegularExpression(pattern: "\\s*\\(([^)]*)\\)") {
             cleaned = parenRegex.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: ", $1,")
         }
@@ -79,70 +78,157 @@ actor GeminiCoachService {
         return cleaned
     }
 
-    // MARK: - System Instruction (Exact Android Personality + Zero-Fabrication Contract)
+    // MARK: - Time-of-Day Spanish Context Helper
 
-    private func buildSystemInstruction(
+    private func describeLocalMoment(_ date: Date) -> (hhmm: String, periodName: String, guidance: String, blockIndex: Int) {
+        let cal = Calendar.current
+        let hour = cal.component(.hour, from: date)
+        let minute = cal.component(.minute, from: date)
+        let hhmm = String(format: "%02d:%02d", hour, minute)
+        let block = hour / 4
+        switch block {
+        case 0:
+            return (hhmm, "madrugada", "Es plena madrugada. Si el usuario sigue despierto o acaba de acostarse, prioriza higiene del sueño, calma del sistema nervioso y cero pantallas.", block)
+        case 1:
+            return (hhmm, "primera hora de la mañana", "Está amaneciendo o recién despertado. Enfócate en cómo ha amanecido su cuerpo, hidratación inicial, luz natural y cómo plantear la mañana.", block)
+        case 2:
+            return (hhmm, "mañana", "Es por la mañana. Enfócate en la ventana de rendimiento matinal, gestión de cafeína, trabajo/entrenamiento y ritmo de energía para antes de comer.", block)
+        case 3:
+            return (hhmm, "mediodía y sobremesa", "Es mediodía o primera hora de la tarde. Evalúa cómo evoluciona el día a mitad de jornada, comidas, bajón postprandial y planificación del entrenamiento de tarde.", block)
+        case 4:
+            return (hhmm, "tarde", "Es media/última tarde. Enfócate en el balance entre el esfuerzo ya acumulado y la batería restante, corte de cafeína y cierre productivo sin quemar la noche.", block)
+        default:
+            return (hhmm, "noche", "Es de noche. Enfócate en desacelerar el sistema nervioso, cena ligera, preparar la hora de dormir y maximizar la recuperación nocturna de mañana.", block)
+        }
+    }
+
+    // MARK: - 1. Multi-Turn Conversational System Instruction
+
+    private func buildChatSystemInstruction(
         userName: String,
+        currentDate: Date,
         biometricContextJson: String,
         availableHighlights: [String],
         missingCategories: [String],
-        seed: Int
+        isFollowUp: Bool
     ) -> String {
         let name = userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "el usuario" : userName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let angle = humanAngles[abs(seed) % humanAngles.count]
+        let moment = describeLocalMoment(currentDate)
 
         let dataConnection = availableHighlights.isEmpty
-            ? "ATENCIÓN: Hoy NO hay datos biométricos recopilados del reloj para este día. NO tienes lecturas de recuperación, sueño, VFC, pulso, esfuerzo, estrés ni energía hoy."
-            : "A continuación, conecta tu respuesta ÚNICAMENTE con los datos que sí estén disponibles hoy: \(availableHighlights.joined(separator: ", "))."
+            ? "ATENCIÓN: En la fecha consultada NO hay métricas biométricas recopiladas del reloj ni de Apple Health."
+            : "Lecturas reales confirmadas del usuario: \(availableHighlights.joined(separator: ", "))."
 
         let missingWarning = missingCategories.isEmpty
-            ? "Todos los sensores principales tienen lectura válida."
-            : "DATOS NO DISPONIBLES AHORA MISMO: \(missingCategories.joined(separator: ", "))."
+            ? "Todos los sensores principales tienen lectura real."
+            : "Métricas SIN lectura hoy: \(missingCategories.joined(separator: ", "))."
+
+        let continuityRule = isFollowUp
+            ? "Estás en medio de una conversación activa con \(name). Continúa de forma totalmente natural a partir del hilo anterior: NO repitas saludos ni vuelvas a recitar todas sus métricas si ya las mencionaste, responde exactamente a su nuevo mensaje, pregunta de vuelta si ayuda a afinar, y mantén el hilo como un entrenador real hablando por WhatsApp."
+            : "Responde desde la primera frase de forma directa, cercana y humana a exactamente lo que te pregunta \(name)."
 
         return """
-        Eres el entrenador personal, nutricionista y fisiólogo humano de \(name) en Improving.
-        TU REGLA #1 MÁS IMPORTANTE:
-        Responde SIEMPRE de forma directa, específica y exacta a la pregunta que te acaba de hacer \(name) desde la primera frase.
-        - Si te pregunta si puede tomarse un cubata, comer pizza, salir de fiesta, por qué le duele algo, qué es un suplemento, o CUALQUIER otra pregunta cotidiana, médica, deportiva o general, respóndele DIRECTAMENTE a esa pregunta concreta con naturalidad humana.
+        Eres el entrenador personal, fisiólogo y nutricionista humano de \(name) dentro de Improving.
+        HORA LOCAL ACTUAL: \(moment.hhmm), franja de \(moment.periodName). \(moment.guidance)
+
+        CÓMO CONVERSAR:
+        - \(continuityRule)
+        - Si te pregunta sobre entrenamiento, sueño, comida, salir de fiesta, suplementos, molestias, horarios o cualquier tema cotidiano o deportivo, responde con naturalidad, criterio real y cercanía.
+        - Puedes hacer repreguntas breves si necesitas contexto adicional para ayudarle mejor, exactamente como haría una persona real.
+        - Escribe en texto natural fluido en español de tú a tú, en 1 a 3 párrafos cortos y claros, o viñetas simples con guion solo si el usuario pide un plan o lista.
+        - NO respondas en JSON, NO uses llaves {}, NO uses markdown con asteriscos ** ni paréntesis (). Integra las cifras de forma natural en la frase.
+        - NO empieces con prefijos robóticos como "Análisis:", "Veredicto:" ni "Opinión IA:".
+
+        VERACIDAD ABSOLUTA Y CERO INVENCIÓN DE DATOS:
         - \(dataConnection)
-        - NUNCA sueltes un resumen genérico del día que ignore su pregunta.
-
-        REGLA INQUEBRANTABLE DE VERACIDAD Y CERO INVENCIÓN DE DATOS:
         - \(missingWarning)
-        - PROHIBIDO TERMINANTEMENTE inventar, suponer, estimar o rellenar cualquier cifra o estado de una métrica que figure como "NO_DISPONIBLE" en el JSON.
-        - Si \(name) te pregunta por un dato que no está disponible porque no se midió o no está en su archivo de Apple Health, acéptalo y díselo de forma directa y transparente sin inventar ningún número.
-        - Si te hace una pregunta general cuando faltan los datos del reloj, responde con criterio técnico general y aclara honestamente que hoy no dispones de sus lecturas para afinarlo.
+        - PROHIBIDO inventar, estimar o rellenar ninguna cifra marcada como "NO_DISPONIBLE". Si pregunta por una métrica ausente, díselo con total naturalidad sin inventar ningún número.
 
-        REGLAS DE PERSONALIDAD Y ESTILO:
-        1. Personalidad humana, directa, sincera, cercana y con criterio propio en español natural. Habla a \(name) de tú a tú.
-        2. PROHIBIDO usar paréntesis () en ningún lugar del texto, títulos o viñetas. Integra todos los números reales de forma fluida dentro de las frases.
-        3. PROHIBIDO empezar con etiquetas robóticas como "Opinión IA:" o "Análisis:".
-        4. Cada respuesta debe ser única y pensada como un humano en este instante. \(angle)
-
-        CONTEXTO COMPLETO DE DATOS REALES DE \(name.uppercased()):
+        DATOS REALES DE \(name.uppercased()):
         \(biometricContextJson)
-
-        Responde SIEMPRE con un único objeto JSON válido sin bloques markdown con esta estructura:
-        {
-          "verdictTitle": "RESPUESTA DIRECTA EN MAYÚSCULAS SOBRE LO QUE PREGUNTA SIN PARÉNTESIS",
-          "text": "Respuesta directa, humana y específica de 2 a 4 frases contestando exactamente a lo que ha preguntado \(name), usando solo datos reales disponibles y sin inventar nada faltante ni usar paréntesis.",
-          "bullets": [
-            "Dato o criterio clave: Solo información verificada o explicación clara si falta el dato sin paréntesis",
-            "Orientación práctica: Qué hacer ahora de forma realista sin paréntesis",
-            "Estado de tus registros: Qué métricas sí tenemos hoy o qué falta medir sin paréntesis"
-          ],
-          "actionLabel": null
-        }
         """
     }
 
-    // MARK: - Live Coach Reply (3-Tier Android Engine)
+    // MARK: - Multi-Turn Role Normalization (Prevents Gemini HTTP 400 on Turn 2+!)
+
+    private func buildNormalizedGeminiContents(history: [CoachChatMessage], currentPrompt: String) -> [[String: Any]] {
+        var turns: [(role: String, text: String)] = []
+
+        for msg in history.suffix(16) {
+            let role = msg.isUser ? "user" : "model"
+            var pieces: [String] = []
+            if let t = msg.verdictTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+                pieces.append(t)
+            }
+            let body = msg.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !body.isEmpty { pieces.append(body) }
+            if !msg.bullets.isEmpty {
+                pieces.append(msg.bullets.joined(separator: " "))
+            }
+            let combined = pieces.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !combined.isEmpty else { continue }
+
+            // Drop leading model messages so Gemini always begins with a user turn
+            if turns.isEmpty && role == "model" { continue }
+
+            if let last = turns.last, last.role == role {
+                turns[turns.count - 1].text = last.text + "\n\n" + combined
+            } else {
+                turns.append((role, combined))
+            }
+        }
+
+        let cleanPrompt = currentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let last = turns.last, last.role == "user" {
+            turns[turns.count - 1].text = last.text + "\n\n" + cleanPrompt
+        } else {
+            turns.append(("user", cleanPrompt))
+        }
+
+        return turns.map { turn in
+            ["role": turn.role, "parts": [["text": turn.text]]]
+        }
+    }
+
+    private func buildNormalizedOpenAIMessages(sysPrompt: String, history: [CoachChatMessage], currentPrompt: String) -> [[String: String]] {
+        var messages: [[String: String]] = [["role": "system", "content": sysPrompt]]
+        var turns: [(role: String, text: String)] = []
+
+        for msg in history.suffix(16) {
+            let role = msg.isUser ? "user" : "assistant"
+            let combined = ([msg.verdictTitle, msg.text].compactMap { $0 }.filter { !$0.isEmpty } + msg.bullets)
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !combined.isEmpty else { continue }
+            if turns.isEmpty && role == "assistant" { continue }
+            if let last = turns.last, last.role == role {
+                turns[turns.count - 1].text = last.text + "\n\n" + combined
+            } else {
+                turns.append((role, combined))
+            }
+        }
+
+        let cleanPrompt = currentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let last = turns.last, last.role == "user" {
+            turns[turns.count - 1].text = last.text + "\n\n" + cleanPrompt
+        } else {
+            turns.append(("user", cleanPrompt))
+        }
+
+        for t in turns {
+            messages.append(["role": t.role, "content": t.text])
+        }
+        return messages
+    }
+
+    // MARK: - Live Multi-Turn Coach Reply
 
     func askLiveCoach(
         prompt: String,
         apiKey: String,
         selectedModel: String,
         userName: String,
+        currentDate: Date = Date(),
         biometricContextJson: String,
         availableHighlights: [String],
         missingCategories: [String],
@@ -150,42 +236,71 @@ actor GeminiCoachService {
         previousInteractionId: String? = nil
     ) async -> GeminiCoachResult {
         let seed = nextSeed()
-        let sysPrompt = buildSystemInstruction(
+        let isFollowUp = !history.isEmpty
+        let sysPrompt = buildChatSystemInstruction(
             userName: userName,
+            currentDate: currentDate,
             biometricContextJson: biometricContextJson,
             availableHighlights: availableHighlights,
             missingCategories: missingCategories,
-            seed: seed
+            isFollowUp: isFollowUp
         )
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
 
-        // Tier 1: User's Gemini API Key (Interactions API for gemini-4*, plus standard generateContent fallback!)
+        // Tier 1: User's Gemini API Key
         if !cleanKey.isEmpty {
+            // For gemini-4* try Interactions API first, always falling back to multi-turn generateContent if unavailable
             if model.hasPrefix("gemini-4"),
-               let res = await callGeminiInteractions(prompt: prompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: model, previousInteractionId: previousInteractionId) {
+               let res = await callGeminiInteractionsChat(
+                prompt: prompt,
+                sysPrompt: sysPrompt,
+                history: history,
+                apiKey: cleanKey,
+                model: model,
+                previousInteractionId: previousInteractionId
+               ) {
                 return res
             }
-            let candidates = model.hasPrefix("gemini-4") ? ["gemini-2.5-flash", "gemini-2.0-flash"] : [model, "gemini-2.5-flash", "gemini-2.0-flash"]
+
+            let candidates: [String]
+            if model.hasPrefix("gemini-4") {
+                candidates = ["gemini-2.5-flash", "gemini-2.0-flash"]
+            } else {
+                candidates = Array(NSOrderedSet(array: [model, "gemini-2.5-flash", "gemini-2.0-flash"]) as? [String] ?? [model])
+            }
             for m in candidates {
-                if let res = await callGeminiGenerateContent(prompt: prompt, sysPrompt: sysPrompt, history: history, apiKey: cleanKey, model: m) {
+                if let res = await callGeminiChatGenerateContent(
+                    prompt: prompt,
+                    sysPrompt: sysPrompt,
+                    history: history,
+                    apiKey: cleanKey,
+                    model: m
+                ) {
                     return res
                 }
             }
         }
 
-        // Tier 2: Out-of-the-box Keyless Cloud LLM (exact same Pollinations OpenAI endpoint as Android!)
-        if let cloudRes = await callKeylessCloudLlm(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
+        // Tier 2: Out-of-the-box Keyless Cloud LLM with full multi-turn history
+        if let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
             return cloudRes
         }
 
-        // Tier 3: Honest offline fallback
-        return buildOfflineFallback(prompt: prompt, userName: userName, availableHighlights: availableHighlights, missingCategories: missingCategories)
+        // Tier 3: Honest offline conversational fallback
+        return buildOfflineChatFallback(
+            prompt: prompt,
+            userName: userName,
+            currentDate: currentDate,
+            availableHighlights: availableHighlights,
+            missingCategories: missingCategories
+        )
     }
 
-    private func callGeminiInteractions(
+    private func callGeminiInteractionsChat(
         prompt: String,
         sysPrompt: String,
+        history: [CoachChatMessage],
         apiKey: String,
         model: String,
         previousInteractionId: String?
@@ -193,15 +308,22 @@ actor GeminiCoachService {
         guard let url = URL(string: interactionsEndpoint) else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 22
+        req.timeoutInterval = 25
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         req.setValue(apiRevision, forHTTPHeaderField: "Api-Revision")
 
+        // Include recent conversation recap when previous_interaction_id isn't available
+        var inputText = prompt
+        if previousInteractionId == nil && !history.isEmpty {
+            let recap = history.suffix(8).map { ($0.isUser ? "Usuario: " : "Coach: ") + $0.text }.joined(separator: "\n")
+            inputText = "Contexto de la conversación previa:\n\(recap)\n\nNuevo mensaje del usuario:\n\(prompt)"
+        }
+
         var body: [String: Any] = [
             "model": model,
             "system_instruction": sysPrompt,
-            "input": prompt,
+            "input": inputText
         ]
         if let prev = previousInteractionId, !prev.isEmpty {
             body["previous_interaction_id"] = prev
@@ -224,13 +346,13 @@ actor GeminiCoachService {
                 }
             }
             guard !outText.isEmpty else { return nil }
-            return parseStructuredReply(modelText: outText, interactionId: newId, modelUsed: model)
+            return parseConversationalReply(rawText: outText, interactionId: newId, modelUsed: model)
         } catch {
             return nil
         }
     }
 
-    private func callGeminiGenerateContent(
+    private func callGeminiChatGenerateContent(
         prompt: String,
         sysPrompt: String,
         history: [CoachChatMessage],
@@ -240,26 +362,16 @@ actor GeminiCoachService {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 22
+        req.timeoutInterval = 25
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
 
-        var contents: [[String: Any]] = []
-        for msg in history.suffix(6) {
-            let role = msg.isUser ? "user" : "model"
-            let combined = ([msg.verdictTitle, msg.text].compactMap { $0 } + msg.bullets).joined(separator: ". ")
-            if !combined.trimmingCharacters(in: .whitespaces).isEmpty {
-                contents.append(["role": role, "parts": [["text": combined]]])
-            }
-        }
-        contents.append(["role": "user", "parts": [["text": prompt]]])
-
+        let contents = buildNormalizedGeminiContents(history: history, currentPrompt: prompt)
         let body: [String: Any] = [
             "system_instruction": ["parts": [["text": sysPrompt]]],
             "contents": contents,
             "generationConfig": [
-                "temperature": 0.72,
-                "maxOutputTokens": 650,
-                "responseMimeType": "application/json",
+                "temperature": 0.78,
+                "maxOutputTokens": 1200
             ]
         ]
         guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
@@ -271,16 +383,16 @@ actor GeminiCoachService {
                   let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
                   let candidates = json["candidates"] as? [[String: Any]],
                   let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]],
-                  let text = parts.first?["text"] as? String,
-                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return parseStructuredReply(modelText: text, interactionId: nil, modelUsed: model)
+                  let parts = content["parts"] as? [[String: Any]] else { return nil }
+            let joined = parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !joined.isEmpty else { return nil }
+            return parseConversationalReply(rawText: joined, interactionId: nil, modelUsed: model)
         } catch {
             return nil
         }
     }
 
-    private func callKeylessCloudLlm(
+    private func callKeylessCloudChat(
         prompt: String,
         sysPrompt: String,
         history: [CoachChatMessage],
@@ -289,22 +401,15 @@ actor GeminiCoachService {
         guard let url = URL(string: keylessEndpoint) else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 24
+        req.timeoutInterval = 26
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        var messages: [[String: String]] = [["role": "system", "content": sysPrompt]]
-        for msg in history.suffix(6) {
-            let content = ([msg.verdictTitle, msg.text].compactMap { $0 } + msg.bullets).joined(separator: ". ")
-            if !content.trimmingCharacters(in: .whitespaces).isEmpty {
-                messages.append(["role": msg.isUser ? "user" : "assistant", "content": content])
-            }
-        }
-        messages.append(["role": "user", "content": prompt])
-
+        let messages = buildNormalizedOpenAIMessages(sysPrompt: sysPrompt, history: history, currentPrompt: prompt)
         let body: [String: Any] = [
             "model": "openai",
             "messages": messages,
+            "temperature": 0.8,
             "seed": seed + Int(Date().timeIntervalSince1970) % 10000
         ]
         guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
@@ -318,41 +423,47 @@ actor GeminiCoachService {
                   let msg = choices.first?["message"] as? [String: Any],
                   let content = msg["content"] as? String,
                   !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return parseStructuredReply(modelText: content, interactionId: root["id"] as? String, modelUsed: "improving-live-ai")
+            return parseConversationalReply(rawText: content, interactionId: root["id"] as? String, modelUsed: "improving-live-ai")
         } catch {
             return nil
         }
     }
 
-    private func parseStructuredReply(modelText: String, interactionId: String?, modelUsed: String) -> GeminiCoachResult {
-        var cleaned = modelText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func parseConversationalReply(rawText: String, interactionId: String?, modelUsed: String) -> GeminiCoachResult {
+        var cleaned = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip accidental code fences or JSON if a model still emitted JSON
         for prefix in ["```json", "```JSON", "```"] {
             if cleaned.hasPrefix(prefix) { cleaned = String(cleaned.dropFirst(prefix.count)) }
         }
         if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let s = cleaned.firstIndex(of: "{"), let e = cleaned.lastIndex(of: "}"), e > s,
-           let data = String(cleaned[s...e]).data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let title = Self.sanitizeDirectHumanText((obj["verdictTitle"] as? String) ?? "RESPUESTA DIRECTA")
-            let text = Self.sanitizeDirectHumanText((obj["text"] as? String) ?? cleaned)
+        if cleaned.hasPrefix("{"), cleaned.hasSuffix("}"),
+           let data = cleaned.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let text = obj["text"] as? String, !text.isEmpty {
             let bullets = ((obj["bullets"] as? [String]) ?? []).map { Self.sanitizeDirectHumanText($0) }.filter { !$0.isEmpty }
-            let action = (obj["actionLabel"] as? String).flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
             return GeminiCoachResult(
-                verdictTitle: title.isEmpty ? "RESPUESTA DIRECTA" : title,
-                text: text,
+                verdictTitle: "",
+                text: Self.sanitizeDirectHumanText(text),
                 bullets: bullets,
-                actionLabel: action,
+                actionLabel: nil,
                 interactionId: interactionId,
                 usedLiveCloud: true,
                 modelUsed: modelUsed
             )
         }
 
+        // Preserve natural paragraph breaks while sanitizing each paragraph cleanly
+        let paragraphs = cleaned
+            .components(separatedBy: "\n\n")
+            .map { Self.sanitizeDirectHumanText($0) }
+            .filter { !$0.isEmpty }
+        let finalText = paragraphs.isEmpty ? Self.sanitizeDirectHumanText(cleaned) : paragraphs.joined(separator: "\n\n")
+
         return GeminiCoachResult(
-            verdictTitle: "RESPUESTA DIRECTA",
-            text: Self.sanitizeDirectHumanText(cleaned),
+            verdictTitle: "",
+            text: finalText,
             bullets: [],
             actionLabel: nil,
             interactionId: interactionId,
@@ -361,21 +472,20 @@ actor GeminiCoachService {
         )
     }
 
-    private func buildOfflineFallback(
+    private func buildOfflineChatFallback(
         prompt: String,
         userName: String,
+        currentDate: Date,
         availableHighlights: [String],
         missingCategories: [String]
     ) -> GeminiCoachResult {
         let namePrefix = userName.trimmingCharacters(in: .whitespaces).isEmpty ? "" : "\(userName.trimmingCharacters(in: .whitespaces)), "
+        let moment = describeLocalMoment(currentDate)
         if availableHighlights.isEmpty {
             return GeminiCoachResult(
-                verdictTitle: "SIN CONEXIÓN Y SIN LECTURAS HOY",
-                text: "\(namePrefix)ahora mismo estoy sin conexión a internet y además no tengo métricas registradas hoy en tu reloj o archivo de Salud para responder con tus números exactos. Revisa tu conexión o importa tus datos de Apple Health para darte una respuesta a medida.",
-                bullets: [
-                    "Estado de tus registros: Faltan \(missingCategories.prefix(5).joined(separator: ", "))",
-                    "Consejo general: Prioriza hidratación, descanso regular y escucha tus sensaciones físicas hasta sincronizar."
-                ],
+                verdictTitle: "",
+                text: "\(namePrefix)son las \(moment.hhmm) y ahora mismo estoy sin conexión a internet; además no tengo mediciones reales registradas en esta fecha para afinar la respuesta a «\(prompt)». Cuando recuperes conexión o sincronices Apple Health seguimos la charla con tus datos exactos.",
+                bullets: [],
                 actionLabel: nil,
                 interactionId: nil,
                 usedLiveCloud: false,
@@ -383,12 +493,9 @@ actor GeminiCoachService {
             )
         }
         return GeminiCoachResult(
-            verdictTitle: "RESPUESTA OFFLINE CON TUS DATOS",
-            text: "\(namePrefix)no he podido conectar con Gemini en este instante, pero mirando tus lecturas reales de hoy — \(availableHighlights.joined(separator: ", ")) — mantén un enfoque equilibrado y ajusta el esfuerzo a cómo responde tu sistema nervioso.",
-            bullets: [
-                "Datos reales activos hoy: \(availableHighlights.joined(separator: ", "))",
-                "Para preguntas abiertas libres verifica tu conexión a internet o tu clave de Gemini en Ajustes."
-            ],
+            verdictTitle: "",
+            text: "\(namePrefix)ahora mismo a las \(moment.hhmm) no puedo conectar con la nube de Gemini para responder en detalle a «\(prompt)», pero viendo tus lecturas reales activas — \(availableHighlights.joined(separator: ", ")) — ajusta la intensidad a lo que te queda de jornada y vuelve a escribirme en cuanto tengas señal.",
+            bullets: [],
             actionLabel: nil,
             interactionId: nil,
             usedLiveCloud: false,
@@ -396,7 +503,384 @@ actor GeminiCoachService {
         )
     }
 
-    // MARK: - Short Click-to-Expand Metric Floating Insight (Zero Fabricated Numbers)
+    // MARK: - 2. Time-Aware, 4-Hour-Refreshing, Section-Specific Live AI Coaching
+
+    func generateSectionCoaching(
+        section: CoachingSection,
+        currentDate: Date,
+        selectedDateIso: String,
+        isViewingToday: Bool,
+        userName: String,
+        biometricContextJson: String,
+        sectionFacts: [String],
+        missingCategories: [String],
+        previousHeadline: String?,
+        hasSectionData: Bool,
+        slotKey: String,
+        generatedAtLabel: String,
+        nextUpdateLabel: String,
+        apiKey: String,
+        selectedModel: String
+    ) async -> SectionCoachingCard {
+        let seed = nextSeed()
+        let moment = describeLocalMoment(currentDate)
+        let defaultEmoji = Self.defaultEmoji(for: section)
+
+        // Strictly honest no-data card (ZERO invention!)
+        if !hasSectionData {
+            let noDataBody: String
+            switch section {
+            case .sueno:
+                noDataBody = "No hay registros reales de sueño para esta fecha en Apple Health ni en tu reloj. En cuanto sincronices una noche medida verás aquí tu análisis detallado de fases, eficiencia y constantes."
+            case .esfuerzo:
+                noDataBody = "Todavía no constan lecturas de esfuerzo, zonas de pulso ni entrenamientos para esta fecha. Cuando registres actividad o importes tu historial, este coaching se adaptará a tu carga real."
+            case .recuperacion:
+                noDataBody = "No se ha registrado VFC ni frecuencia cardíaca en reposo en esta fecha, así que prefiero no inventar tu recuperación. Usa las flechas o el calendario para ver un día con lecturas."
+            case .estres:
+                noDataBody = "No existen muestras intradía de frecuencia cardíaca para calcular el estrés en esta fecha. En cuanto haya mediciones reales verás la lectura cada 5 minutos y su consejo horario."
+            case .energia:
+                noDataBody = "No hay curva de energía disponible para esta fecha porque faltan lecturas continuas del reloj. Sincroniza Apple Health o navega a un día con datos."
+            case .fitness:
+                noDataBody = "Sin sesiones ni carga cardiovascular registrada todavía en esta ventana. Cuando entrenes o importes tu historial verás tu recomendación personalizada de carga."
+            case .hoy:
+                noDataBody = "No constan mediciones recopiladas en Apple Health ni en tu reloj para esta fecha. Usa las flechas o el calendario para consultar días con registros, o sincroniza en Ajustes."
+            }
+            return SectionCoachingCard(
+                section: section,
+                emoji: defaultEmoji,
+                headline: "Sin lecturas de \(section.displayName.lowercased())",
+                body: noDataBody,
+                slotKey: slotKey,
+                generatedAtLabel: generatedAtLabel,
+                nextUpdateLabel: nextUpdateLabel,
+                isLiveAI: false
+            )
+        }
+
+        let name = userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "el usuario" : userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sectionIndex = CoachingSection.allCases.firstIndex(of: section) ?? 0
+        let styleAngle = coachingStyles[(moment.blockIndex * 7 + sectionIndex + seed) % coachingStyles.count]
+        let focusDirective = Self.sectionFocusDirective(for: section)
+        let avoidRepeat = previousHeadline.map { "PROHIBIDO repetir la idea, estructura ni frases del titular previo: «\($0)». Escribe algo totalmente distinto y fresco." } ?? "Crea un titular y un análisis completamente originales, jamás genéricos."
+        let dayFrame = isViewingToday
+            ? "Estás analizando el día de HOY y son exactamente las \(moment.hhmm) de la \(moment.periodName). \(moment.guidance) Adapta tu consejo específicamente a esta hora exacta y a lo que conviene hacer en las próximas 4 horas hasta las \(nextUpdateLabel)."
+            : "El usuario está revisando una fecha histórica del \(selectedDateIso), aunque ahora mismo en su reloj son las \(moment.hhmm). Analiza los datos reales de aquel día en profundidad y extrae una lección útil aplicable hoy."
+
+        let sysPrompt = """
+        Eres el entrenador personal y fisiólogo de \(name) en Improving.
+        APARTADO ACTUAL: \(section.displayName.uppercased()).
+        ENFOQUE EXCLUSIVO DEL APARTADO: \(focusDirective)
+
+        CONSCIENCIA HORARIA:
+        - \(dayFrame)
+
+        REGLAS DE CALIDAD Y ANTI-GENÉRICOS:
+        1. Cita al menos 2 cifras REALES concretas del usuario del bloque de datos de este apartado y explica qué implican para su cuerpo ahora mismo.
+        2. \(styleAngle)
+        3. \(avoidRepeat)
+        4. PROHIBIDO usar frases vacías como "escucha a tu cuerpo", "mantén un enfoque equilibrado", "lectura real del día:" ni paréntesis ().
+        5. PROHIBIDO inventar o suponer cualquier métrica que aparezca como "NO_DISPONIBLE".
+        6. Habla a \(name) en español natural, directo, cercano y humano.
+
+        DATOS ESPECÍFICOS REALES DE \(section.displayName.uppercased()):
+        - \(sectionFacts.joined(separator: "\n- "))
+
+        MÉTRICAS NO DISPONIBLES HOY: \(missingCategories.isEmpty ? "Ninguna" : missingCategories.joined(separator: ", "))
+
+        CONTEXTO BIOMÉTRICO COMPLETO:
+        \(biometricContextJson)
+
+        Devuelve ÚNICAMENTE un JSON válido sin bloques markdown con este formato exacto:
+        {
+          "emoji": "1 emoji relevante para \(section.displayName)",
+          "headline": "Titular fresco y específico de 3 a 6 palabras sin paréntesis",
+          "body": "Mensaje único y detallado de 2 a 4 frases adaptado a las \(moment.hhmm) y enfocado principalmente en \(section.displayName.lowercased()), citando los números reales del usuario sin paréntesis."
+        }
+        """
+
+        let userPrompt = "Genera el mensaje de coaching de las \(moment.hhmm) para el apartado \(section.displayName) de \(name). Semilla de variación: \(seed)-\(moment.blockIndex)-\(sectionIndex)."
+
+        let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
+
+        // Tier 1: User's Gemini API Key
+        if !cleanKey.isEmpty {
+            let candidates: [String] = model.hasPrefix("gemini-4")
+                ? ["gemini-2.5-flash", "gemini-2.0-flash"]
+                : Array(NSOrderedSet(array: [model, "gemini-2.5-flash", "gemini-2.0-flash"]) as? [String] ?? [model])
+
+            for m in candidates {
+                if let raw = await callGeminiJsonOneShot(prompt: userPrompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: m),
+                   let card = parseSectionCoachingJson(
+                    raw: raw,
+                    section: section,
+                    fallbackEmoji: defaultEmoji,
+                    slotKey: slotKey,
+                    generatedAtLabel: generatedAtLabel,
+                    nextUpdateLabel: nextUpdateLabel
+                   ) {
+                    return card
+                }
+            }
+        }
+
+        // Tier 2: Keyless Live Cloud LLM
+        if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: seed + moment.blockIndex * 19),
+           let card = parseSectionCoachingJson(
+            raw: raw,
+            section: section,
+            fallbackEmoji: defaultEmoji,
+            slotKey: slotKey,
+            generatedAtLabel: generatedAtLabel,
+            nextUpdateLabel: nextUpdateLabel
+           ) {
+            return card
+        }
+
+        // Tier 3: Rich time-aware, section-specific local engine (rotates by 4-hour block & cites real user facts)
+        return buildLocalTimeAwareSectionCoaching(
+            section: section,
+            userName: name,
+            moment: moment,
+            isViewingToday: isViewingToday,
+            selectedDateIso: selectedDateIso,
+            sectionFacts: sectionFacts,
+            slotKey: slotKey,
+            generatedAtLabel: generatedAtLabel,
+            nextUpdateLabel: nextUpdateLabel,
+            seed: seed
+        )
+    }
+
+    private func callGeminiJsonOneShot(prompt: String, sysPrompt: String, apiKey: String, model: String) async -> String? {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "system_instruction": ["parts": [["text": sysPrompt]]],
+            "contents": [["role": "user", "parts": [["text": prompt]]]],
+            "generationConfig": [
+                "temperature": 0.92,
+                "maxOutputTokens": 480,
+                "responseMimeType": "application/json"
+            ]
+        ]
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = httpBody
+
+        do {
+            let (respData, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let content = candidates.first?["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]] else { return nil }
+            let joined = parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            return joined.isEmpty ? nil : joined
+        } catch {
+            return nil
+        }
+    }
+
+    private func callKeylessCloudOneShot(prompt: String, sysPrompt: String, seed: Int) async -> String? {
+        guard let url = URL(string: keylessEndpoint) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 22
+        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let body: [String: Any] = [
+            "model": "openai",
+            "temperature": 0.92,
+            "seed": seed + Int(Date().timeIntervalSince1970) % 10000,
+            "messages": [
+                ["role": "system", "content": sysPrompt],
+                ["role": "user", "content": prompt]
+            ]
+        ]
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = httpBody
+
+        do {
+            let (respData, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                  let choices = root["choices"] as? [[String: Any]],
+                  let msg = choices.first?["message"] as? [String: Any],
+                  let content = msg["content"] as? String,
+                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return content
+        } catch {
+            return nil
+        }
+    }
+
+    private func parseSectionCoachingJson(
+        raw: String,
+        section: CoachingSection,
+        fallbackEmoji: String,
+        slotKey: String,
+        generatedAtLabel: String,
+        nextUpdateLabel: String
+    ) -> SectionCoachingCard? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["```json", "```JSON", "```"] {
+            if cleaned.hasPrefix(prefix) { cleaned = String(cleaned.dropFirst(prefix.count)) }
+        }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let s = cleaned.firstIndex(of: "{"), let e = cleaned.lastIndex(of: "}"), e > s,
+              let data = String(cleaned[s...e]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawBody = obj["body"] as? String else {
+            return nil
+        }
+        let body = Self.sanitizeDirectHumanText(rawBody)
+        guard body.count >= 25 else { return nil }
+        let rawHead = (obj["headline"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let headline = rawHead.isEmpty ? "Pulso de \(section.displayName.lowercased())" : Self.sanitizeDirectHumanText(rawHead)
+        let rawEmoji = (obj["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let emoji = rawEmoji.isEmpty ? fallbackEmoji : String(rawEmoji.prefix(2))
+
+        return SectionCoachingCard(
+            section: section,
+            emoji: emoji,
+            headline: headline,
+            body: body,
+            slotKey: slotKey,
+            generatedAtLabel: generatedAtLabel,
+            nextUpdateLabel: nextUpdateLabel,
+            isLiveAI: true
+        )
+    }
+
+    private func buildLocalTimeAwareSectionCoaching(
+        section: CoachingSection,
+        userName: String,
+        moment: (hhmm: String, periodName: String, guidance: String, blockIndex: Int),
+        isViewingToday: Bool,
+        selectedDateIso: String,
+        sectionFacts: [String],
+        slotKey: String,
+        generatedAtLabel: String,
+        nextUpdateLabel: String,
+        seed: Int
+    ) -> SectionCoachingCard {
+        let lead = (userName == "el usuario" || userName.isEmpty) ? "" : "\(userName), "
+        let factsJoined = sectionFacts.prefix(3).joined(separator: ", ")
+        let idx = (moment.blockIndex + seed) % 3
+
+        let timeAction: String = switch moment.blockIndex {
+        case 0: "A estas horas de madrugada tu única prioridad es apagar estímulos y proteger el sueño profundo."
+        case 1: "Recién arrancada la mañana, hidrátate bien y busca luz natural en la próxima hora."
+        case 2: "Aprovecha esta franja matinal hasta las \(nextUpdateLabel) para tus tareas o bloque físico principal."
+        case 3: "A mitad de jornada conviene vigilar la comida ligera y dosificar el pulso de cara a la tarde."
+        case 4: "En esta recta de la tarde corta la cafeína y decide si toca rematar carga o bajar revoluciones."
+        default: "De cara a la noche, cena ligero y ve bajando el ritmo nervioso para cuidar las lecturas de mañana."
+        }
+
+        let (emoji, headline, body): (String, String, String)
+        switch section {
+        case .sueno:
+            let heads = ["Arquitectura nocturna a las \(moment.hhmm)", "Cómo rindió tu descanso", "Balance real de tu noche"]
+            emoji = "🌙"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)viendo tu descanso real — \(factsJoined) — el impacto se nota justo ahora en la \(moment.periodName). \(timeAction)"
+                : "\(lead)el \(selectedDateIso) tu noche dejó estas señales reales: \(factsJoined). Compara esa estructura de fases con tus noches más frescas para detectar qué rutina te funciona mejor."
+        case .esfuerzo:
+            let heads = ["Carga física en esta franja", "Ritmo de esfuerzo a las \(moment.hhmm)", "Dosificación de tu carga"]
+            emoji = "🔥"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)a las \(moment.hhmm) tu parte real de carga marca \(factsJoined). \(timeAction)"
+                : "\(lead)el \(selectedDateIso) acumulaste \(factsJoined). Úsalo como referencia para calibrar cuánto volumen asimila bien tu corazón sin disparar fatiga."
+        case .recuperacion:
+            let heads = ["Estado autonómico a las \(moment.hhmm)", "Lectura de tu sistema nervioso", "Margen real de recuperación"]
+            emoji = "🌿"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)tu sistema nervioso refleja hoy \(factsJoined). Con ese margen real a las \(moment.hhmm), \(timeAction.lowercased())"
+                : "\(lead)el \(selectedDateIso) tu recuperación se apoyó en \(factsJoined), mostrando cómo responde tu tono vagal tras la carga previa."
+        case .estres:
+            let heads = ["Pulso del estrés a las \(moment.hhmm)", "Activación simpática actual", "Gestión de tensión hoy"]
+            emoji = "🧠"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)a las \(moment.hhmm) tu curva real de estrés marca \(factsJoined). Introduce 3 minutos de respiración lenta si notas picos sostenidos antes de las \(nextUpdateLabel)."
+                : "\(lead)durante el \(selectedDateIso) tu estrés registró \(factsJoined). Revisa en el gráfico de 5 minutos qué momentos elevaron más tu pulso."
+        case .energia:
+            let heads = ["Batería disponible a las \(moment.hhmm)", "Balance real de energía", "Reserva corporal en vivo"]
+            emoji = "⚡"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)tu curva continua de energía muestra \(factsJoined) a las \(moment.hhmm). \(timeAction)"
+                : "\(lead)el \(selectedDateIso) tu batería evolucionó con \(factsJoined), reflejando exactamente cuánto recargaste dormido frente al gasto diurno."
+        case .fitness:
+            let heads = ["Ventana de entrenamiento \(moment.hhmm)", "Carga cardio y muscular", "Estrategia de sesión hoy"]
+            emoji = "🏋️"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)con \(factsJoined) en tu historial reciente, a las \(moment.hhmm) conviene decidir si toca sesión exigente o estímulo técnico limpio. \(timeAction)"
+                : "\(lead)en torno al \(selectedDateIso) tu bloque de fitness sumaba \(factsJoined). Vigila la progresión semanal para seguir sumando sin sobreentrenar."
+        case .hoy:
+            let heads = ["Hoja de ruta a las \(moment.hhmm)", "Tu pulso de la \(moment.periodName)", "Prioridad hasta las \(nextUpdateLabel)"]
+            emoji = "✨"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)a las \(moment.hhmm) tus señales reales del día combinan \(factsJoined). \(timeAction)"
+                : "\(lead)en la jornada del \(selectedDateIso) registraste \(factsJoined). Navega a cada apartado para revisar la relación entre descanso, pulso y carga."
+        }
+
+        return SectionCoachingCard(
+            section: section,
+            emoji: emoji,
+            headline: Self.sanitizeDirectHumanText(headline),
+            body: Self.sanitizeDirectHumanText(body),
+            slotKey: slotKey,
+            generatedAtLabel: generatedAtLabel,
+            nextUpdateLabel: nextUpdateLabel,
+            isLiveAI: false
+        )
+    }
+
+    private static func defaultEmoji(for section: CoachingSection) -> String {
+        switch section {
+        case .hoy: return "✨"
+        case .esfuerzo: return "🔥"
+        case .recuperacion: return "🌿"
+        case .sueno: return "🌙"
+        case .estres: return "🧠"
+        case .energia: return "⚡"
+        case .fitness: return "🏋️"
+        }
+    }
+
+    private static func sectionFocusDirective(for section: CoachingSection) -> String {
+        switch section {
+        case .hoy:
+            return "Visión integradora del día: conecta recuperación, esfuerzo, sueño y batería de energía para darle la prioridad exacta para las próximas 4 horas."
+        case .esfuerzo:
+            return "HABLA PRINCIPALMENTE DE ESFUERZO Y CARGA FÍSICA: porcentaje de esfuerzo frente a su rango objetivo óptimo, entrenamientos realizados, pulso medio, zonas cardíacas, pasos y calorías activas. No divagues sobre otros temas."
+        case .recuperacion:
+            return "HABLA PRINCIPALMENTE DE RECUPERACIÓN Y SISTEMA NERVIOSO AUTÓNOMO: porcentaje de recuperación, VFC nocturna frente a su línea base personal, FC en reposo durmiendo, frecuencia respiratoria, SpO2 y temperatura de muñeca."
+        case .sueno:
+            return "HABLA PRINCIPALMENTE DE SUEÑO: duración real, hora de acostarse y despertar, eficiencia, sueño profundo y MOR, latencia, disminución de la FC nocturna y cómo proteger el descanso de la próxima noche."
+        case .estres:
+            return "HABLA PRINCIPALMENTE DE ESTRÉS FISIOLÓGICO: media, pico máximo, mínimo, tiempo en estrés alto frente a bajo, estrés nocturno y estrategias prácticas concretas para bajar activación simpática."
+        case .energia:
+            return "HABLA PRINCIPALMENTE DE LA BATERÍA DE ENERGÍA CONTINUA: con qué porcentaje arrancó el día desde la noche anterior, cuánto recargó al dormir, cuánto lleva gastado hasta esta hora y cómo dosificar la batería restante."
+        case .fitness:
+            return "HABLA PRINCIPALMENTE DE FITNESS Y ENTRENAMIENTO: carga cardiovascular y muscular de 7 días, volumen de los últimos 30 días, VO2 máx., recuperación de FC, zonas cardíacas y qué tipo de sesión conviene hoy."
+        }
+    }
+
+    // MARK: - 3. Click-to-Expand Metric Floating Insight (Zero Fabricated Numbers)
 
     func buildMetricFloatingInsight(
         metricId: String,

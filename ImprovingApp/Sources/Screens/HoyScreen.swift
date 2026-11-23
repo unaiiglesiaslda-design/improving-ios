@@ -202,18 +202,12 @@ struct HoyScreen: View {
 
                         Divider().background(BevelColors.divider)
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("COACHING")
-                                .font(ImprovingFont.microLabel(11))
-                                .foregroundColor(BevelColors.textMuted)
-                            Text(store.activeCoachingSummary)
-                                .font(ImprovingFont.body(13.5))
-                                .foregroundColor(BevelColors.textPrimary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .background(BevelColors.cardSubtle.opacity(0.65))
+                        LiveAiCoachingCard(
+                            section: .hoy,
+                            store: store,
+                            embedded: true,
+                            onAskMore: { onNavigate(.askBevel) }
+                        )
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }

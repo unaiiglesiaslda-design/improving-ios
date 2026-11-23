@@ -1300,3 +1300,110 @@ extension View {
         modifier(VerticalScrollDetector(onVerticalScroll: action))
     }
 }
+
+// MARK: - 4-Hour Time-Aware, Section-Specific Live AI Coaching Card
+
+struct LiveAiCoachingCard: View {
+    let section: CoachingSection
+    @ObservedObject var store: ImprovingStore
+    var backgroundColor: Color? = nil
+    var embedded: Bool = false
+    var onAskMore: (() -> Void)? = nil
+
+    @State private var clockTick: Int = 0
+
+    var body: some View {
+        let card = store.coachingCard(for: section)
+        let loading = store.isLoadingCoaching(for: section)
+        let taskKey = "\(store.coachingSlotKey(for: section))_\(clockTick)"
+
+        let innerContent = VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                BevelMascotOrb(size: 20)
+                if let c = card {
+                    Text("\(c.emoji) \(c.headline)")
+                        .font(ImprovingFont.cardTitle(14.5))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .lineLimit(2)
+                } else {
+                    Text("COACHING · \(section.displayName.uppercased())")
+                        .font(ImprovingFont.microLabel(11))
+                        .foregroundColor(BevelColors.textMuted)
+                }
+                Spacer(minLength: 4)
+                if loading {
+                    ProgressView()
+                        .scaleEffect(0.72)
+                        .tint(BevelColors.periwinkleStart)
+                } else {
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        store.refreshCoachingIfNeeded(for: section, force: true)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(BevelColors.textMuted)
+                            .frame(width: 26, height: 26)
+                            .background(Circle().fill(Color.white.opacity(0.06)))
+                    }
+                    .accessibilityLabel("Actualizar mensaje de coaching")
+                }
+            }
+
+            if let c = card {
+                Text(c.body)
+                    .font(ImprovingFont.body(13.5))
+                    .foregroundColor(BevelColors.textPrimary.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 6) {
+                    Image(systemName: c.isLiveAI ? "sparkles" : "clock")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(c.isLiveAI ? BevelColors.greenPrimary : BevelColors.textMuted)
+                    Text("Act. \(c.generatedAtLabel) · Próx. \(c.nextUpdateLabel) (cada 4h)")
+                        .font(ImprovingFont.caption(11))
+                        .foregroundColor(BevelColors.textMuted)
+                    Spacer()
+                    if let ask = onAskMore {
+                        Button(action: ask) {
+                            HStack(spacing: 3) {
+                                Text("Hablar con IA")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .fontWeight(.semibold)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9.5, weight: .bold))
+                            }
+                            .foregroundColor(BevelColors.skyBlue)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.8)
+                    Text("Preparando tu análisis personalizado de \(section.displayName.lowercased()) para esta hora...")
+                        .font(ImprovingFont.caption(12.5))
+                        .foregroundColor(BevelColors.textSecondary)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .task(id: taskKey) {
+            store.refreshCoachingIfNeeded(for: section)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            clockTick += 1
+        }
+
+        if embedded {
+            innerContent
+                .background((backgroundColor ?? BevelColors.cardSubtle).opacity(0.65))
+        } else {
+            BevelCard(cornerRadius: 20, backgroundColor: backgroundColor ?? BevelColors.card) {
+                innerContent
+            }
+        }
+    }
+}

@@ -169,7 +169,7 @@ struct DiarioScreen: View {
                     }
                 }
 
-                // Dynamic 7-day strip with real dates & checkmarks only on days with logged entries
+                // Dynamic 7-day strip: Checkmark ONLY when >= 20 MANUAL (non-automatic) items are completed!
                 HStack(spacing: 4) {
                     ForEach(stripOffsets, id: \.self) { offset in
                         let dt = cal.date(byAdding: .day, value: offset, to: todayStart) ?? todayStart
@@ -179,7 +179,9 @@ struct DiarioScreen: View {
                         let dayNum = cal.component(.day, from: dt)
                         let dayName = wdFmt.string(from: dt).replacingOccurrences(of: ".", with: "").prefix(3)
                         let iso = store.isoFormatter.string(from: dt)
-                        let hasLogged = (store.journalCheckinsByDate[iso]?.values.contains { $0 != .unset } ?? false)
+                        let manualDone = store.manualCompletedCount(for: iso)
+                        let isCompleted = store.isDiarioDayCompleted(for: iso)
+                        let progressFrac = min(Double(manualDone) / Double(ImprovingStore.diarioRequiredManualCount), 1.0)
 
                         Button {
                             if !isFuture { store.selectDayOffset(pastOffset) }
@@ -197,13 +199,26 @@ struct DiarioScreen: View {
                                         Circle()
                                             .strokeBorder(BevelColors.trackGroove, lineWidth: 1.2)
                                             .frame(width: 24, height: 24)
-                                    } else if hasLogged {
+                                    } else if isCompleted {
                                         Circle()
                                             .fill(isSelected ? BevelColors.greenPrimary : Color(hex: 0xBA923A))
                                             .frame(width: 24, height: 24)
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 11, weight: .bold))
                                             .foregroundColor(.white)
+                                    } else if manualDone > 0 {
+                                        Circle()
+                                            .stroke(BevelColors.trackGroove, lineWidth: 2.0)
+                                            .frame(width: 24, height: 24)
+                                        Circle()
+                                            .trim(from: 0, to: CGFloat(progressFrac))
+                                            .stroke(isSelected ? BevelColors.greenPrimary : BevelColors.amberStart, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                                            .rotationEffect(.degrees(-90))
+                                            .frame(width: 24, height: 24)
+                                        Text("\(manualDone)")
+                                            .font(.system(size: 8.5, weight: .bold))
+                                            .monospacedDigit()
+                                            .foregroundColor(BevelColors.textSecondary)
                                     } else {
                                         Circle()
                                             .strokeBorder(isSelected ? BevelColors.greenPrimary : BevelColors.trackGroove, lineWidth: 1.5)
@@ -228,14 +243,33 @@ struct DiarioScreen: View {
 
             Divider().background(BevelColors.divider)
 
+            let todayManualDone = store.manualCompletedCount(for: store.selectedDateIso)
+            let todayCompleted = store.isDiarioDayCompleted(for: store.selectedDateIso)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(store.dayOffset == 0 ? "Entradas de hoy" : "Entradas · \(store.dateLabel)")
-                        .font(ImprovingFont.sectionTitle(18))
-                        .foregroundColor(BevelColors.textPrimary)
-                        .padding(.top, 12)
+                    HStack(alignment: .center) {
+                        Text(store.dayOffset == 0 ? "Entradas de hoy" : "Entradas · \(store.dateLabel)")
+                            .font(ImprovingFont.sectionTitle(18))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Spacer()
+                        HStack(spacing: 5) {
+                            Image(systemName: todayCompleted ? "checkmark.circle.fill" : "circle.dashed")
+                                .font(.system(size: 12, weight: .bold))
+                            Text("\(todayManualDone)/\(ImprovingStore.diarioRequiredManualCount) manuales")
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.semibold)
+                                .monospacedDigit()
+                        }
+                        .foregroundColor(todayCompleted ? BevelColors.greenPrimary : BevelColors.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(todayCompleted ? BevelColors.greenSoftBg : BevelColors.card))
+                        .overlay(Capsule().strokeBorder(todayCompleted ? BevelColors.greenSoftBorder : BevelColors.cardBorder, lineWidth: 0.8))
+                    }
+                    .padding(.top, 12)
 
-                    Text("Las casillas en el centro (—) no se tienen en cuenta. Marca ✓ en verde o ✕ en rojo para analizar su impacto en tu sueño y recuperación.")
+                    Text("Completa al menos \(ImprovingStore.diarioRequiredManualCount) apartados manuales (sin contar los automáticos) para dar el día por completado. Las casillas en el centro (—) no se tienen en cuenta.")
                         .font(ImprovingFont.caption(12))
                         .foregroundColor(BevelColors.textSecondary)
 
@@ -558,8 +592,72 @@ struct JournalInsightsScreen: View {
                     .padding(.bottom, 18)
                 }
 
+                let hasUserFilledForm = store.totalManualDiarioDaysLogged > 0
+                let manualSpan = store.manualDiarioSpanDays
+                let daysLogged = store.totalManualDiarioDaysLogged
+
                 VStack(alignment: .leading, spacing: 14) {
-                    // 1. High Reliability Section (when ≥5 ✓ and ≥5 ✕ in last 90 days)
+                    if !hasUserFilledForm {
+                        // Strict zero-metric empty state when user hasn't filled out the Diario form yet!
+                        BevelCard(cornerRadius: 20) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "checklist")
+                                        .font(.system(size: 18, weight: .semibold))
+                                        .foregroundColor(BevelColors.skyBlue)
+                                        .frame(width: 40, height: 40)
+                                        .background(Circle().fill(BevelColors.skySoftBg))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Sin hábitos registrados todavía")
+                                            .font(ImprovingFont.cardTitle(15.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("0 / 30 días de seguimiento real")
+                                            .font(ImprovingFont.caption(12))
+                                            .foregroundColor(BevelColors.textMuted)
+                                    }
+                                }
+                                Text("No aparece ninguna métrica calculada porque todavía no has rellenado el formulario de tu Diario. Marca ✓ en verde o ✕ en rojo en tus hábitos cada día; al completar 30 días reales calcularemos el impacto exacto de cada hábito sobre tu \(target == .sleep ? "sueño" : "recuperación").")
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(16)
+                        }
+                        .padding(.top, 6)
+                    } else if highItems.isEmpty && lowItems.isEmpty {
+                        // User has started logging but hasn't reached the 30-day threshold yet!
+                        let progressDays = min(max(manualSpan, daysLogged), ImprovingStore.diarioRequiredTrackingDays)
+                        let frac = Double(progressDays) / Double(ImprovingStore.diarioRequiredTrackingDays)
+                        BevelCard(cornerRadius: 20) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("Recopilando tus datos reales")
+                                        .font(ImprovingFont.cardTitle(15.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Spacer()
+                                    Text("\(progressDays)/30 días")
+                                        .font(ImprovingFont.cardTitle(13.5))
+                                        .monospacedDigit()
+                                        .foregroundColor(BevelColors.skyBlue)
+                                }
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        Capsule().fill(Color.white.opacity(0.08)).frame(height: 8)
+                                        Capsule().fill(BevelColors.skyBlue).frame(width: max(8, geo.size.width * CGFloat(frac)), height: 8)
+                                    }
+                                }
+                                .frame(height: 8)
+                                Text("Llevas \(daysLogged) día(s) registrado(s). Para evitar correlaciones falsas, los porcentajes de impacto se desbloquean al cumplir 30 días de seguimiento real con positivos (✓) y negativos (✕).")
+                                    .font(ImprovingFont.body(13))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(16)
+                        }
+                        .padding(.top, 6)
+                    }
+
+                    // 1. High Reliability Section (when >=30d tracked AND >=5 ✓ and >=5 ✕)
                     if !highItems.isEmpty {
                         impactAxisHeader
                         ForEach(highItems) { item in
@@ -567,7 +665,7 @@ struct JournalInsightsScreen: View {
                         }
                     }
 
-                    // 2. Fiabilidad baja Section (when ≥1 ✓ and ≥1 ✕, but < 5 on either side)
+                    // 2. Fiabilidad baja Section (when >=30d tracked AND >=1 ✓ and >=1 ✕, but < 5 on either side)
                     if !lowItems.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Fiabilidad baja")
@@ -590,7 +688,7 @@ struct JournalInsightsScreen: View {
                         Text("Etiquetas bloqueadas")
                             .font(ImprovingFont.sectionTitle(18))
                             .foregroundColor(BevelColors.textPrimary)
-                        Text("Registra al menos 5 positivos y 5 negativos para los últimos 90 días para desbloquear el análisis de fiabilidad alta.")
+                        Text("Completa al menos 30 días de seguimiento en tu Diario y registra positivos (✓) y negativos (✕) para desbloquear cada etiqueta con datos reales.")
                             .font(ImprovingFont.body(13.5))
                             .foregroundColor(BevelColors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -617,7 +715,10 @@ struct JournalInsightsScreen: View {
                                             .font(ImprovingFont.cardTitle(14))
                                             .foregroundColor(BevelColors.textPrimary)
                                             .lineLimit(1)
-                                        Text("✓ \(item.yesCount)/5 positivos  ·  ✕ \(item.noCount)/5 negativos")
+                                        let progressText = item.daysRemainingFor30d > 0
+                                            ? "Faltan \(item.daysRemainingFor30d) d (regla 30 d)  ·  ✓ \(item.yesCount)  ·  ✕ \(item.noCount)"
+                                            : "✓ \(item.yesCount)/5 positivos  ·  ✕ \(item.noCount)/5 negativos"
+                                        Text(progressText)
                                             .font(ImprovingFont.caption(11.5))
                                             .foregroundColor(BevelColors.textMuted)
                                     }

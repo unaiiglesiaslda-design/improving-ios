@@ -96,17 +96,7 @@ struct EsfuerzoScreen: View {
                         HeaderedMetricCard(icon: "clock.fill", title: "Tiempo activo", value: activeTimeText)
                     }
 
-                    BevelCard(cornerRadius: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(avail.hasStrainData ? "🔥 Lectura de carga diaria" : "Sin registros de esfuerzo")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.textPrimary)
-                            Text(store.activeCoachingSummary)
-                                .font(ImprovingFont.body(13.5))
-                                .foregroundColor(BevelColors.textSecondary)
-                        }
-                        .padding(16)
-                    }
+                    LiveAiCoachingCard(section: .esfuerzo, store: store)
 
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Cronología del esfuerzo")
@@ -228,17 +218,7 @@ struct RecuperacionScreen: View {
                         )
                     }
 
-                    BevelCard(cornerRadius: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(avail.hasRecoveryData ? "🌿 Análisis real de recuperación" : "Sin registros de recuperación")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.textPrimary)
-                            Text(store.activeCoachingSummary)
-                                .font(ImprovingFont.body(13.5))
-                                .foregroundColor(BevelColors.textSecondary)
-                        }
-                        .padding(16)
-                    }
+                    LiveAiCoachingCard(section: .recuperacion, store: store)
 
                     // Cronología de la recuperación (only when sleep exists)
                     if avail.hasSleepData {
@@ -347,31 +327,12 @@ struct SuenoDetailScreen: View {
                         HeaderedMetricCard(icon: "clock.fill", title: "Duración del sueño", value: store.sleepDurationText)
                     }
 
-                    // Coaching Card (strictly real numbers)
-                    BevelCard(cornerRadius: 20, backgroundColor: BevelColors.isDarkMode ? Color(hex: 0x202741) : BevelColors.card) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(avail.hasSleepData ? "🌙 Resumen real de la noche" : "Sin registros de sueño")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.textPrimary)
-                            if avail.hasSleepData {
-                                let summaryLine: String = {
-                                    var bits: [String] = ["Dormiste \(store.sleepDurationText) (\(store.sleepPercent)%)"]
-                                    if let eff = sess?.efficiencyPct { bits.append("eficiencia del \(eff)%") }
-                                    if let deep = store.currentDaySummary?.deepMinutes, deep > 0 { bits.append("sueño profundo de \(deep) min") }
-                                    if let rem = store.currentDaySummary?.remMinutes, rem > 0 { bits.append("MOR de \(rem) min") }
-                                    return bits.joined(separator: ", ") + ". Pulsa en «Sueño principal» debajo para inspeccionar tus fases y constantes nocturnas."
-                                }()
-                                Text(summaryLine)
-                                    .font(ImprovingFont.body(13.5))
-                                    .foregroundColor(BevelColors.textSecondary)
-                            } else {
-                                Text("No constan registros de sueño para el \(store.fullDateLabel) en Apple Health.")
-                                    .font(ImprovingFont.body(13.5))
-                                    .foregroundColor(BevelColors.textSecondary)
-                            }
-                        }
-                        .padding(16)
-                    }
+                    // 4-Hour Time-Aware Sleep-Focused AI Coaching Card
+                    LiveAiCoachingCard(
+                        section: .sueno,
+                        store: store,
+                        backgroundColor: BevelColors.isDarkMode ? Color(hex: 0x202741) : BevelColors.card
+                    )
 
                     // Cronología del sueño -> Taps directly into Sueño principal!
                     VStack(alignment: .leading, spacing: 2) {
@@ -422,14 +383,16 @@ struct SuenoDetailScreen: View {
                         }
                     }
 
-                    // 24h Sleep Schedule
-                    SleepSchedule24hDial(
-                        windDownText: "23:45",
-                        bedtimeText: "0:15",
-                        wakeTimeText: "7:40",
-                        sleepNeedText: needText,
-                        onOpenSleepNeed: onOpenSleepNeed
-                    )
+                    // 24h Sleep Schedule (ONLY shown from user's real recorded sleep schedule — zero hardcoded times!)
+                    if let realSched = store.realSleepScheduleLabels {
+                        SleepSchedule24hDial(
+                            windDownText: realSched.windDown,
+                            bedtimeText: realSched.bedtime,
+                            wakeTimeText: realSched.wakeTime,
+                            sleepNeedText: needText,
+                            onOpenSleepNeed: onOpenSleepNeed
+                        )
+                    }
 
                     Text("Tendencias")
                         .font(ImprovingFont.sectionTitle(18))
@@ -1017,9 +980,13 @@ struct SleepNeedDetailScreen: View {
     let onBack: () -> Void
 
     var body: some View {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
+        let baseNeedMin = Int((norms.sleepTargetHours * 60.0).rounded())
         let debt = store.currentDaySummary?.sleepDebtMinutes ?? 0
-        let strainExtra = store.dataAvailability.hasStrainData && store.strainPercent > 70 ? 28 : 10
-        let totalNeed = 465 + debt + strainExtra
+        let strainExtra = store.dataAvailability.hasStrainData ? (store.strainPercent > 70 ? 25 : (store.strainPercent > 45 ? 10 : 0)) : 0
+        let totalNeed = baseNeedMin + debt + strainExtra
+        let wakeHint = store.realSleepScheduleLabels.map { "Despertar habitual sobre las \($0.wakeTime) en fase de sueño ligero" }
+            ?? "Despertar inteligente en fase de sueño ligero según tu horario"
 
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -1034,14 +1001,14 @@ struct SleepNeedDetailScreen: View {
                             .font(ImprovingFont.displayLarge(32))
                             .monospacedDigit()
                             .foregroundColor(BevelColors.textPrimary)
-                        Text("Calculado a partir de tu necesidad basal y tus datos reales registrados.")
+                        Text("Calculado a partir de tu perfil fisiológico y tus lecturas reales registradas.")
                             .font(ImprovingFont.caption(12.5))
                             .foregroundColor(BevelColors.textSecondary)
 
                         Divider().background(BevelColors.divider)
 
-                        planRow("Necesidad basal fisiológica", "7 h 45 m", BevelColors.textPrimary)
-                        if store.dataAvailability.hasStrainData {
+                        planRow("Necesidad basal fisiológica", "\(baseNeedMin / 60) h \(String(format: "%02d", baseNeedMin % 60)) m", BevelColors.textPrimary)
+                        if store.dataAvailability.hasStrainData && strainExtra > 0 {
                             planRow("+ Esfuerzo físico (\(store.strainPercent)%)", "+ 0 h \(String(format: "%02d", strainExtra)) m", BevelColors.orangeEnd)
                         }
                         if debt > 0 {
@@ -1058,7 +1025,7 @@ struct SleepNeedDetailScreen: View {
                             Text("Alarma Háptica Inteligente")
                                 .font(ImprovingFont.cardTitle(15))
                                 .foregroundColor(BevelColors.textPrimary)
-                            Text("Despertar óptimo a las 7:40 en fase de sueño ligero")
+                            Text(wakeHint)
                                 .font(ImprovingFont.caption(12))
                                 .foregroundColor(BevelColors.textSecondary)
                         }
@@ -1138,23 +1105,7 @@ struct EstresScreen: View {
                         )
                     }
 
-                    BevelCard(cornerRadius: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(avail.hasStressData ? "🧠 Resumen real del estrés" : "Sin mediciones de estrés")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.textPrimary)
-                            if avail.hasStressData && !samples.isEmpty {
-                                Text("Media de \(store.stressScore) sobre 100 a partir de \(samples.count) lecturas reales (\(highMin) min alto, \(medMin / 60) h \(medMin % 60) min medio y \(lowMin / 60) h \(lowMin % 60) min bajo). Desliza sobre el gráfico para ver cada lectura de 5 en 5 minutos.")
-                                    .font(ImprovingFont.body(13.5))
-                                    .foregroundColor(BevelColors.textSecondary)
-                            } else {
-                                Text("No hay lecturas de frecuencia cardíaca intradía recopiladas para este día.")
-                                    .font(ImprovingFont.body(13.5))
-                                    .foregroundColor(BevelColors.textSecondary)
-                            }
-                        }
-                        .padding(16)
-                    }
+                    LiveAiCoachingCard(section: .estres, store: store)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(store.fullDateLabel)
@@ -1382,6 +1333,8 @@ struct EnergiaScreen: View {
                             .padding(.vertical, 16)
                         }
                     }
+
+                    LiveAiCoachingCard(section: .energia, store: store)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(store.fullDateLabel)

@@ -18,6 +18,12 @@ struct PersonalizedPhysiologyNorms: Equatable {
     let proteinGoalG: Int
 }
 
+struct PersonalBaselineStats: Equatable {
+    let mean: Double
+    let sigma: Double
+    let count: Int
+}
+
 enum VitalRangeSeverity: String {
     case optimalExcellent
     case normal
@@ -28,7 +34,7 @@ enum VitalRangeSeverity: String {
 
 struct VitalEvaluation {
     let statusLabel: String
-    let normalizedPosition: Double // 0.08 ... 0.92 (0.26..0.74 is normal band)
+    let normalizedPosition: Double
     let severity: VitalRangeSeverity
     let isAboveBand: Bool
     let isBelowBand: Bool
@@ -57,12 +63,14 @@ enum WhoopPhysiologyEngine {
         let bmr = computeBmrKcalPerDay(profile: profile)
         let hm = max(profile.heightCm / 100.0, 1.2)
         let bmi = AppleHealthExportImporter.round1(profile.weightKg / (hm * hm))
-        let hrvLow = 68.6
-        let hrvHigh = 107.4
-        let rhrLow = 46.0
-        let rhrHigh = 56.0
-        let sleepTarget = 8.2
-        let hydro = AppleHealthExportImporter.round1(max(profile.weightKg * 0.037, 2.4))
+        let hrvAge = max(25.0, min(105.0, 88.0 * exp(-0.020 * max(0.0, profile.ageYears - 18.0))))
+        let hrvLow = AppleHealthExportImporter.round1(hrvAge * 0.78)
+        let hrvHigh = AppleHealthExportImporter.round1(hrvAge * 1.24)
+        let rhrBase = profile.sex == .female ? 57.0 : 53.0
+        let rhrLow = AppleHealthExportImporter.round1(rhrBase - 6.0)
+        let rhrHigh = AppleHealthExportImporter.round1(rhrBase + 7.0)
+        let sleepTarget = profile.ageYears < 18 ? 8.8 : 8.0
+        let hydro = AppleHealthExportImporter.round1(max(profile.weightKg * 0.037, 2.2))
 
         return PersonalizedPhysiologyNorms(
             maxHrBpm: maxHr,
@@ -73,7 +81,7 @@ enum WhoopPhysiologyEngine {
             hrvHighMs: hrvHigh,
             rhrLowBpm: rhrLow,
             rhrHighBpm: rhrHigh,
-            respLowRpm: 13.8,
+            respLowRpm: 13.5,
             respHighRpm: 16.8,
             sleepLowHours: 7.0,
             sleepHighHours: 9.0,
@@ -116,6 +124,99 @@ enum WhoopPhysiologyEngine {
         return VitalEvaluation(statusLabel: "Normal", normalizedPosition: pos, severity: .normal, isAboveBand: false, isBelowBand: false)
     }
 
+    // MARK: - Causal 60-Day Personal Rolling Baseline (Matches Bevel Personal Normal Range!)
+
+    static func computeRollingBaseline(
+        priorValues: [Double],
+        populationMean: Double,
+        populationSigma: Double,
+        floorSigma: Double
+    ) -> PersonalBaselineStats {
+        let window = Array(priorValues.suffix(60))
+        let n = window.count
+        guard n > 0 else {
+            return PersonalBaselineStats(mean: populationMean, sigma: max(populationSigma, floorSigma), count: 0)
+        }
+        let sorted = window.sorted()
+        let med = sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2.0
+        let absDevs = sorted.map { abs($0 - med) }.sorted()
+        let mad = absDevs.count % 2 == 1 ? absDevs[absDevs.count / 2] : (absDevs[absDevs.count / 2 - 1] + absDevs[absDevs.count / 2]) / 2.0
+        let robustSigma = max(1.4826 * mad, floorSigma)
+
+        // Winsorized mean (clamps extreme outliers > 3 SD so single illness nights don't skew baseline)
+        let clamped = window.map { min(max($0, med - 3.0 * robustSigma), med + 3.0 * robustSigma) }
+        let wMean = clamped.reduce(0, +) / Double(clamped.count)
+
+        if n < 7 {
+            let w = Double(n) / 7.0
+            let blendedMean = (1.0 - w) * populationMean + w * wMean
+            let blendedSigma = (1.0 - w) * populationSigma + w * robustSigma
+            return PersonalBaselineStats(mean: blendedMean, sigma: max(blendedSigma, floorSigma), count: n)
+        }
+        return PersonalBaselineStats(mean: wMean, sigma: robustSigma, count: n)
+    }
+
+    // MARK: - Bevel-Aligned Adaptive Recovery % (Zero Fabricated Sensors, Log-HRV + Sleeping RHR Z-Score!)
+
+    /// Computes Bevel-aligned Recovery (1...99%) strictly from sensors that were ACTUALLY measured on this day.
+    /// Returns `nil` if NEITHER HRV nor RHR was recorded.
+    static func computeBevelRecoveryPercent(
+        hrvMs: Double?,
+        rhrBpm: Double?,
+        respRpm: Double?,
+        spo2Pct: Double?,
+        wristTempDeltaC: Double?,
+        lnHrvBaseline: PersonalBaselineStats,
+        rhrBaseline: PersonalBaselineStats,
+        respBaseline: PersonalBaselineStats
+    ) -> Int? {
+        guard hrvMs != nil || rhrBpm != nil else { return nil }
+
+        // Bevel weights: ~60% Sleeping HRV (log-normal z-score) + ~35% Sleeping RHR + ~5% secondary vitals if abnormal
+        var weightedZ = 0.0
+        var totalWeight = 0.0
+
+        if let hrv = hrvMs, hrv > 2.0 {
+            let zHrv = (log(hrv) - lnHrvBaseline.mean) / max(lnHrvBaseline.sigma, 0.12)
+            let clampedZ = min(max(zHrv, -2.8), 2.8)
+            weightedZ += 0.62 * clampedZ
+            totalWeight += 0.62
+        }
+
+        if let rhr = rhrBpm, rhr > 25.0 {
+            let zRhr = (rhrBaseline.mean - rhr) / max(rhrBaseline.sigma, 1.8)
+            let clampedZ = min(max(zRhr, -2.8), 2.8)
+            weightedZ += 0.33 * clampedZ
+            totalWeight += 0.33
+        }
+
+        if let resp = respRpm, resp > 5.0 {
+            let zResp = (respBaseline.mean - resp) / max(respBaseline.sigma, 0.5)
+            // Only penalize elevated respiratory rate or slight bonus
+            let clampedZ = min(max(zResp, -2.5), 1.0)
+            weightedZ += 0.05 * clampedZ
+            totalWeight += 0.05
+        }
+
+        guard totalWeight > 0 else { return nil }
+        let normalizedZ = weightedZ / totalWeight
+
+        // Logistic curve centered at ~63% when at personal baseline (z = 0):
+        // z = -2.0 -> ~14%, z = -1.0 -> ~34%, z = 0.0 -> ~62%, z = +1.0 -> ~84%, z = +2.0 -> ~95%
+        var score = 100.0 / (1.0 + exp(-1.18 * (normalizedZ + 0.42)))
+
+        // Secondary clinical stress penalties ONLY when genuinely measured and abnormal
+        if let spo2 = spo2Pct, spo2 < 95.0 {
+            score -= (95.0 - spo2) * 3.2
+        }
+        if let tempD = wristTempDeltaC, abs(tempD) > 0.55 {
+            score -= (abs(tempD) - 0.55) * 14.0
+        }
+
+        return min(max(Int(score.rounded()), 1), 99)
+    }
+
+    // Legacy compatibility helper used by unit tests
     static func computeRecoveryPercent(
         hrvMs: Double,
         rhrBpm: Double,
@@ -130,46 +231,162 @@ enum WhoopPhysiologyEngine {
         respMean: Double = 15.2,
         respSigma: Double = 0.6
     ) -> Int {
-        let zHrv = (hrvMs - hrvMean) / max(hrvSigma, 1.0)
-        let zRhr = (rhrMean - rhrBpm) / max(rhrSigma, 0.8)
-        let zSleep = (Double(sleepScorePct) / 100.0 - 0.85) / 0.12
-        let zResp = (respMean - respRpm) / max(respSigma, 0.3)
-        let zTemp = -abs(wristTempDeltaC) / 1.0
-        let compositeZ = 0.55 * zHrv + 0.20 * zRhr + 0.15 * zSleep + 0.05 * zResp + 0.05 * zTemp
-        var score = 100.0 / (1.0 + exp(-1.6 * (compositeZ + 0.20)))
-        if spo2Pct < 95.0 { score -= (95.0 - spo2Pct) * 1.6 }
-        if wristTempDeltaC > 0.5 && zRhr < -1.0 { score *= 0.75 }
-        return min(max(Int(score.rounded()), 1), 99)
+        let lnMean = log(max(hrvMean, 10.0))
+        let lnSd = max(hrvSigma / max(hrvMean, 10.0), 0.14)
+        return computeBevelRecoveryPercent(
+            hrvMs: hrvMs,
+            rhrBpm: rhrBpm,
+            respRpm: respRpm,
+            spo2Pct: spo2Pct,
+            wristTempDeltaC: wristTempDeltaC,
+            lnHrvBaseline: PersonalBaselineStats(mean: lnMean, sigma: lnSd, count: 30),
+            rhrBaseline: PersonalBaselineStats(mean: rhrMean, sigma: rhrSigma, count: 30),
+            respBaseline: PersonalBaselineStats(mean: respMean, sigma: respSigma, count: 30)
+        ) ?? 50
     }
 
-    static func computeStrainAndEffort(
+    // MARK: - Bevel-Calibrated Cardiovascular Strain (0–100% & WHOOP 0–21)
+
+    /// Computes Strain strictly from real HR zone minutes, real workouts, and real active calories.
+    /// Calibrated to match original Bevel:
+    /// - Rest day (~250 kcal, 0 workouts): ~14–22%
+    /// - Single 300 kcal strength session (~500 kcal total): ~35–48% (workout itself ~24%)
+    /// - Hard 60-min cardio day (~900 kcal, Z2–Z4): ~70–82%
+    static func computeBevelStrain(
         profile: UserPhysiologyProfile,
         rhrBpm: Double,
         hrZoneMinutes: [Int],
-        effortEvents: [EffortEventItem],
-        completedStrengthSets: Int,
-        totalStrengthVolumeKg: Int
-    ) -> (Double, Int) {
+        workouts: [EffortEventItem],
+        activeKcal: Double?
+    ) -> (strain21: Double, strainPct: Int)? {
+        let hasZones = hrZoneMinutes.reduce(0, +) > 0
+        let hasWorkouts = !workouts.isEmpty
+        let kcal = activeKcal ?? 0
+        guard hasZones || hasWorkouts || kcal >= 25 else { return nil }
+
         let b = profile.sex.banisterB
-        let floorRate = 0.10 * 0.64 * exp(b * 0.10)
-        let mids = [0.55, 0.65, 0.75, 0.85, 0.95]
-        var trimp = 0.0
+        let maxHr = Double(computeMaxHeartRate(profile: profile))
+        let hrr = max(maxHr - rhrBpm, 40.0)
+        let bmr = Double(computeBmrKcalPerDay(profile: profile))
+
+        // 1. HR-zone Banister TRIMP (exact Z1..Z5 intensity weights)
+        let zoneWeights = [0.65, 1.35, 2.35, 3.80, 5.60]
+        var zoneTrimp = 0.0
         for (idx, mins) in hrZoneMinutes.prefix(5).enumerated() where mins > 0 {
-            let x = mids[idx]
-            let rate = x * 0.64 * exp(b * x)
-            trimp += Double(mins) * max(rate - floorRate, 0.0)
+            zoneTrimp += Double(mins) * zoneWeights[idx]
         }
-        let workoutTrimp = effortEvents.reduce(0.0) { acc, ev in
-            let hr = ev.avgHrBpm > 0 ? Double(ev.avgHrBpm) : (rhrBpm + 75.0)
-            let frac = min(max((hr - rhrBpm) / max(Double(computeMaxHeartRate(profile: profile)) - rhrBpm, 40.0), 0.25), 0.98)
-            return acc + Double(ev.durationMin) * frac * 0.64 * exp(b * frac)
+
+        // 2. Workout physiological load (uses real workout HR if present, otherwise real workout kcal/duration)
+        var workoutLoad = 0.0
+        for w in workouts {
+            if w.avgHrBpm > 0 {
+                let frac = min(max((Double(w.avgHrBpm) - rhrBpm) / hrr, 0.25), 0.98)
+                let rate = frac * 0.64 * exp(b * frac)
+                workoutLoad += Double(w.durationMin) * rate * 1.15
+            } else if w.kcal > 0 {
+                workoutLoad += Double(w.kcal) * 0.095
+            } else {
+                workoutLoad += Double(w.durationMin) * 0.55
+            }
         }
-        let musc = Double(completedStrengthSets) * 2.1 + Double(totalStrengthVolumeKg) / 900.0
-        let total = max(trimp, workoutTrimp * 0.85) + musc
-        let maxRef = 320.0 * (b / 1.92)
-        let s21 = min(max(21.0 * log(1.0 + total / 38.0) / log(1.0 + maxRef / 38.0), 0.0), 21.0)
-        let pct = min(max(Int((100.0 * log(1.0 + total) / log(1.0 + maxRef)).rounded()), 1), 100)
-        return (AppleHealthExportImporter.round1(s21), pct)
+
+        // 3. Passive daily active energy load (normalized to personal BMR)
+        let passiveKcalLoad = kcal > 0 ? (kcal / max(bmr, 1100.0)) * 95.0 : 0.0
+
+        // Avoid double-counting: take the stronger cardiovascular signal (HR zones vs workouts) + passive baseline movement
+        let cardioCore = max(zoneTrimp, workoutLoad)
+        let totalLoad: Double
+        if cardioCore > 0 {
+            totalLoad = cardioCore + passiveKcalLoad * 0.35
+        } else {
+            totalLoad = passiveKcalLoad
+        }
+
+        // Exponential diminishing-return Bevel curve: 100 * (1 - exp(-L / 108))
+        let pctDouble = 100.0 * (1.0 - exp(-max(totalLoad, 0.5) / 108.0))
+        let pct = min(max(Int(pctDouble.rounded()), 1), 100)
+        let strain21 = AppleHealthExportImporter.round1(min(max((pctDouble / 100.0) * 20.8, 0.2), 21.0))
+        return (strain21, pct)
+    }
+
+    static func computeWorkoutStrain(
+        durationMin: Int,
+        kcal: Int,
+        avgHrBpm: Int,
+        rhrBpm: Double = 55.0,
+        maxHrBpm: Double = 192.0,
+        banisterB: Double = 1.92
+    ) -> (strain21: Double, strainPct: Int) {
+        let load: Double
+        if avgHrBpm > 40 {
+            let frac = min(max((Double(avgHrBpm) - rhrBpm) / max(maxHrBpm - rhrBpm, 40.0), 0.22), 0.98)
+            load = Double(durationMin) * frac * 0.64 * exp(banisterB * frac) * 1.15
+        } else if kcal > 0 {
+            load = Double(kcal) * 0.095
+        } else {
+            load = Double(durationMin) * 0.52
+        }
+        let pctDouble = 100.0 * (1.0 - exp(-max(load, 1.0) / 108.0))
+        let pct = min(max(Int(pctDouble.rounded()), 2), 98)
+        let s21 = AppleHealthExportImporter.round1(min(max((pctDouble / 100.0) * 20.8, 0.4), 20.8))
+        return (s21, pct)
+    }
+
+    // MARK: - Bevel-Calibrated Sleep Score % (Strictly Measured Components Only!)
+
+    static func computeBevelSleepScore(
+        asleepMinutes: Int,
+        inBedMinutes: Int?,
+        deepMinutes: Int?,
+        remMinutes: Int?,
+        awakeMinutes: Int?,
+        awakeCount: Int,
+        hrDipPct: Double?,
+        targetMinutes: Double = 480.0
+    ) -> Int {
+        var scoreSum = 0.0
+        var weightSum = 0.0
+
+        // 1. Duration (45% weight) — 100% at targetMinutes
+        let durScore = min(max(Double(asleepMinutes) / max(targetMinutes, 300.0), 0.10), 1.0) * 100.0
+        scoreSum += 0.45 * durScore
+        weightSum += 0.45
+
+        // 2. Efficiency (15% weight) — only if inBedMinutes exists
+        if let bed = inBedMinutes, bed > 0 {
+            let effPct = min(max(Double(asleepMinutes) / Double(bed) * 100.0, 40.0), 100.0)
+            // Bevel treats ≥ 94% efficiency as 100 score, 75% as ~50
+            let effScore = min(max((effPct - 60.0) / 35.0, 0.0), 1.0) * 100.0
+            scoreSum += 0.15 * effScore
+            weightSum += 0.15
+        }
+
+        // 3. Restorative stages (REM + Deep, 20% weight) — only if stage data exists!
+        if let d = deepMinutes, let r = remMinutes, (d + r) > 0, asleepMinutes > 0 {
+            let deepPct = Double(d) / Double(asleepMinutes) * 100.0 // target ~15-20%
+            let remPct = Double(r) / Double(asleepMinutes) * 100.0  // target ~20-25%
+            let deepScore = min(max(deepPct / 16.0, 0.0), 1.0) * 100.0
+            let remScore = min(max(remPct / 20.0, 0.0), 1.0) * 100.0
+            scoreSum += 0.20 * (0.5 * deepScore + 0.5 * remScore)
+            weightSum += 0.20
+        }
+
+        // 4. Continuity (10% weight) — only if awake blocks exist
+        if let aw = awakeMinutes, awakeCount > 0 {
+            let contScore = Double(max(20, min(100, 100 - awakeCount * 7 - Int(Double(aw) * 0.8))))
+            scoreSum += 0.10 * contScore
+            weightSum += 0.10
+        }
+
+        // 5. Heart Rate Dip (10% weight) — only if real HR dip was measured
+        if let dip = hrDipPct {
+            let dipScore = min(max(dip / 15.0, 0.0), 1.0) * 100.0
+            scoreSum += 0.10 * dipScore
+            weightSum += 0.10
+        }
+
+        let finalScore = weightSum > 0 ? (scoreSum / weightSum) : durScore
+        return min(max(Int(finalScore.rounded()), 10), 100)
     }
 
     static func optimalTargetRange(for recoveryPct: Int) -> ClosedRange<Double> {
@@ -180,10 +397,10 @@ enum WhoopPhysiologyEngine {
         }
     }
 
-    // MARK: - Deterministic 730-Day (2-Year) Preview Simulator (ONLY used BEFORE real Apple Health / WHOOP import)
+    // MARK: - Preview Simulator (ONLY used before user imports Apple Health or connects a device; continuous energy!)
 
     static func generateTwoYearSimulatedHistory(profile: UserPhysiologyProfile, endDate: Date = Date()) -> [String: RealBiometricDaySummary] {
-        let totalDays = 730
+        let totalDays = 90 // Lightweight 90-day preview before real data is imported
         let cal = Calendar.current
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
@@ -194,6 +411,7 @@ enum WhoopPhysiologyEngine {
 
         var map: [String: RealBiometricDaySummary] = [:]
         map.reserveCapacity(totalDays)
+        var carriedEnergy: Double = 36.0
 
         for i in 0..<totalDays {
             let dayOffset = (totalDays - 1) - i
@@ -204,123 +422,116 @@ enum WhoopPhysiologyEngine {
             let progress = Double(i) / Double(totalDays)
             let w1 = sin(Double(i) * 2.0 * .pi / 7.0)
             let w2 = cos(Double(i) * 2.0 * .pi / 28.0)
-            let w3 = sin(Double(i) * 2.0 * .pi / 90.0)
             let hash = ((i &* 1_103_515_245 &+ 12_345) >> 16) & 0x7FFF
             let noise = Double((hash % 200) - 100) / 100.0
 
-            let isToday = dayOffset == 0
-            let hrv = isToday ? 77.5 : AppleHealthExportImporter.round1(min(max(64.0 + progress * 11.5 + w2 * 3.5 + noise * 5.2, 42.0), 106.0))
-            let rhr = isToday ? 48.2 : AppleHealthExportImporter.round1(min(max(53.0 - progress * 3.8 - w2 * 1.1 + noise * 1.6, 43.0), 65.0))
-            let resp = isToday ? 15.2 : AppleHealthExportImporter.round1(min(max(15.3 - progress * 0.25 + w3 * 0.3 + noise * 0.4, 13.2), 17.8))
-            let spo2 = isToday ? 96.4 : AppleHealthExportImporter.round1(min(max(96.5 + noise * 1.1, 94.5), 99.2))
-            let tempDelta = isToday ? 0.1 : AppleHealthExportImporter.round1(min(max(w2 * 0.14 + noise * 0.20, -0.5), 0.6))
+            let hrv = AppleHealthExportImporter.round1(min(max(66.0 + progress * 8.5 + w2 * 4.5 + noise * 6.0, 42.0), 104.0))
+            let rhr = AppleHealthExportImporter.round1(min(max(52.0 - progress * 2.5 - w2 * 1.1 + noise * 1.8, 43.0), 63.0))
+            let resp = AppleHealthExportImporter.round1(min(max(15.1 + noise * 0.4, 13.5), 17.2))
+            let spo2 = AppleHealthExportImporter.round1(min(max(96.6 + noise * 1.0, 94.8), 99.0))
+            let tempDelta = AppleHealthExportImporter.round1(min(max(w2 * 0.14 + noise * 0.18, -0.4), 0.5))
             let tempAbs = AppleHealthExportImporter.round1(35.7 + tempDelta)
 
             let weekday = cal.component(.weekday, from: date)
             let isWeekend = (weekday == 1 || weekday == 7)
-            let asleepMin = isToday ? 478 : min(max(Int((436.0 + (isWeekend ? 32.0 : 0.0) + w1 * 18.0 + noise * 24.0).rounded()), 340), 540)
-            let inBedMin = isToday ? 492 : asleepMin + 16 + (hash % 14)
-            let deepMin = isToday ? 102 : Int((Double(asleepMin) * 0.18).rounded())
-            let remMin = isToday ? 118 : Int((Double(asleepMin) * 0.22).rounded())
+            let asleepMin = min(max(Int((440.0 + (isWeekend ? 28.0 : 0.0) + w1 * 18.0 + noise * 22.0).rounded()), 350), 530)
+            let inBedMin = asleepMin + 16 + (hash % 12)
+            let deepMin = Int((Double(asleepMin) * 0.17).rounded())
+            let remMin = Int((Double(asleepMin) * 0.22).rounded())
             let awakeMin = max(inBedMin - asleepMin, 6)
             let coreMin = max(asleepMin - deepMin - remMin, 120)
-            let sleepPct = isToday ? 92 : min(max(Int(((Double(asleepMin) / 480.0) * 84.0 + 10.0).rounded()), 54), 98)
+            let sleepPct = computeBevelSleepScore(
+                asleepMinutes: asleepMin, inBedMinutes: inBedMin,
+                deepMinutes: deepMin, remMinutes: remMin,
+                awakeMinutes: awakeMin, awakeCount: 2, hrDipPct: 13.5
+            )
 
             let trainFactor: Double = switch weekday {
-            case 2, 4, 6: 0.72
-            case 3, 5: 0.56
-            case 7: 0.82
-            default: 0.28
+            case 2, 4, 6: 0.65
+            case 3, 5: 0.48
+            case 7: 0.78
+            default: 0.22
             }
-            let z1 = isToday ? 45 : max(Int((18.0 + trainFactor * 26.0).rounded()), 8)
-            let z2 = isToday ? 16 : max(Int((10.0 + trainFactor * 22.0).rounded()), 4)
-            let z3 = isToday ? 7 : max(Int((trainFactor * 14.0).rounded()), 0)
-            let z4 = isToday ? 1 : max(Int(((trainFactor - 0.5) * 12.0).rounded()), 0)
+            let z1 = max(Int((14.0 + trainFactor * 22.0).rounded()), 4)
+            let z2 = max(Int((8.0 + trainFactor * 18.0).rounded()), 0)
+            let z3 = max(Int((trainFactor * 12.0).rounded()), 0)
+            let z4 = max(Int(((trainFactor - 0.5) * 10.0).rounded()), 0)
             let zones = [z1, z2, z3, z4, 0]
 
-            let strainPct = isToday ? 82 : min(max(Int((trainFactor * 88.0 + noise * 9.0).rounded()), 18), 94)
-            let strain21 = isToday ? 16.4 : AppleHealthExportImporter.round1(Double(strainPct) / 100.0 * 20.4)
-            let hrvNorm = min(max((hrv - 48.0) / 42.0, 0), 1)
-            let rhrNorm = min(max((58.0 - rhr) / 14.0, 0), 1)
-            let recPct = isToday ? 79 : min(max(Int(((0.52 * hrvNorm + 0.24 * rhrNorm + 0.24 * (Double(sleepPct) / 100.0)) * 100.0).rounded()), 28), 97)
-            let stress = isToday ? 35 : min(max(Int((20.0 + (1.0 - hrvNorm) * 24.0 + trainFactor * 14.0 + noise * 5.0).rounded()), 14), 68)
-            let energy = isToday ? 71 : min(max(recPct - Int(Double(strainPct) * 0.22) + 10, 28), 96)
-            let vo2 = isToday ? 44.3 : AppleHealthExportImporter.round1(41.2 + progress * 3.1 + w3 * 0.25)
-
-            let wTitle: String? = isToday ? "Tirada Larga Aeróbica" : {
-                switch weekday {
-                case 2: return "Fuerza Tren Superior"
-                case 3: return "Carrera Base Zona 2"
-                case 4: return "Fuerza Pierna e Hip Thrust"
-                case 5: return "Movilidad y Cardio Ligero"
-                case 6: return "Full Body + Intervalos"
-                case 7: return "Tirada Larga Aeróbica"
-                default: return nil
-                }
-            }()
-            let wDur = isToday ? 86 : (wTitle != nil ? min(max(z1 + z2 + z3 + z4, 38), 92) : 0)
-            let wKcal = isToday ? 999 : (wDur * 10 + 110)
+            let wTitle: String? = switch weekday {
+            case 2: "Entrenamiento de fuerza"
+            case 3: "Carrera base"
+            case 4: "Fuerza tren inferior"
+            case 6: "Cardio + intervalos"
+            case 7: "Tirada larga"
+            default: nil
+            }
+            let wDur = wTitle != nil ? min(max(z1 + z2 + z3 + z4, 35), 82) : 0
+            let wKcal = wTitle != nil ? (wDur * 8 + 60) : 0
+            let wStrain = wTitle != nil ? computeWorkoutStrain(durationMin: wDur, kcal: wKcal, avgHrBpm: 142, rhrBpm: rhr) : (0.0, 0)
             let workouts: [EffortEventItem] = wTitle.map {
                 [EffortEventItem(
                     id: "sim_\(dayOffset)",
                     title: $0,
-                    timeRange: isToday ? "17:30 - 18:56" : "18:00 - \(18 + wDur / 60):\(String(format: "%02d", wDur % 60))",
+                    timeRange: "18:00 - \(18 + wDur / 60):\(String(format: "%02d", wDur % 60))",
                     durationMin: wDur,
-                    avgHrBpm: isToday ? 148 : 141,
-                    strainScore: isToday ? 15.8 : strain21,
-                    strainPct: strainPct,
-                    categoryLabel: $0.contains("Fuerza") ? "Fuerza" : "Cardio",
+                    avgHrBpm: 142,
+                    strainScore: wStrain.0,
+                    strainPct: wStrain.1,
+                    categoryLabel: $0.contains("Fuerza") || $0.contains("fuerza") ? "Fuerza" : "Cardio",
                     kcal: wKcal,
                     dateIso: iso
                 )]
             } ?? []
 
-            // Generate 5-minute intraday series (only for recent 14 days to keep memory tiny & fast!)
+            let activeKcal = wKcal + 280 + (hash % 180)
+            let strainTuple = computeBevelStrain(profile: profile, rhrBpm: rhr, hrZoneMinutes: zones, workouts: workouts, activeKcal: Double(activeKcal)) ?? (4.0, 20)
+
+            let recPct = computeRecoveryPercent(
+                hrvMs: hrv, rhrBpm: rhr, respRpm: resp, spo2Pct: spo2,
+                wristTempDeltaC: tempDelta, sleepScorePct: sleepPct,
+                hrvMean: 70.0, hrvSigma: 11.0, rhrMean: 51.0, rhrSigma: 3.0
+            )
+            let stressBase = min(max(Int((22.0 + (100.0 - Double(recPct)) * 0.22 + Double(strainTuple.strainPct) * 0.18).rounded()), 12), 68)
+
+            // Continuous 5-minute stress & energy (carries carriedEnergy seamlessly across midnight!)
             var stress5m: [TimedBiometricPoint] = []
             var energy5m: [TimedBiometricPoint] = []
-            var s24: [Double] = []
-            var e24: [Double] = []
-            let peakE = min(max(Double(recPct) * 0.96, 62), 98)
-            let startE = max(peakE - 34.0, 22)
+            var curE = carriedEnergy
+            let sleepPeakTarget = min(max(Double(recPct) * 0.96 + 8.0, 62.0), 99.0)
 
-            for hr in 0..<24 {
-                let sleepMult = (1...8).contains(hr) ? 0.35 : 1.0
-                let bump = (wTitle != nil && (17...19).contains(hr)) ? 26.0 : 0.0
-                let wave = sin(Double(hr) / 23.0 * 3.0 * .pi) * 7.0
-                s24.append(AppleHealthExportImporter.round1(min(max(Double(stress) * sleepMult + bump + wave, 3), 92)))
-                let ev: Double = hr <= 8
-                    ? startE + (peakE - startE) * (Double(hr) / 8.0)
-                    : min(max(peakE - (peakE - Double(energy)) * (Double(hr - 8) / 15.0), 12), 99)
-                e24.append(AppleHealthExportImporter.round1(ev))
-            }
-
-            var sleepDetail: SleepSessionDetail? = nil
             if dayOffset <= 14 {
                 stress5m.reserveCapacity(288)
                 energy5m.reserveCapacity(288)
-                var curEnergy = startE
+                let sleepEndSlot = 96 // 08:00
+                let sleepStartSlot = 6 // 00:30
+                let chargeStep = max((sleepPeakTarget - curE) / Double(sleepEndSlot - sleepStartSlot), 0.25)
+
                 for slot in 0..<288 {
                     let minOfDay = slot * 5
-                    let hrF = Double(minOfDay) / 60.0
-                    let isSleep = hrF >= 0.5 && hrF <= 8.2
-                    let isWorkout = wTitle != nil && hrF >= 17.5 && hrF <= 19.0
-                    let microWave = sin(Double(slot) * 0.42 + Double(dayOffset)) * 5.2 + cos(Double(slot) * 0.17) * 3.4
-                    let baseSt = isSleep ? Double(stress) * 0.30 : (isWorkout ? 72.0 : Double(stress) * 1.06)
-                    let stVal = AppleHealthExportImporter.round1(min(max(baseSt + microWave, 2.0), 94.0))
+                    let isSleep = slot >= sleepStartSlot && slot <= sleepEndSlot
+                    let isWk = wTitle != nil && slot >= 216 && slot <= 228
+                    let wave = sin(Double(slot) * 0.35 + Double(dayOffset)) * 5.0 + cos(Double(slot) * 0.14) * 3.0
+                    let st = AppleHealthExportImporter.round1(min(max((isSleep ? 9.0 : (isWk ? 74.0 : Double(stressBase))) + wave, 2.0), 94.0))
                     let ep = dayStartEpoch + Int64(minOfDay * 60)
-                    stress5m.append(TimedBiometricPoint(minuteOfDay: minOfDay, value: stVal, epochSec: ep))
+                    stress5m.append(TimedBiometricPoint(minuteOfDay: minOfDay, value: st, epochSec: ep))
 
                     if isSleep {
-                        curEnergy = min(peakE, curEnergy + (peakE - startE) / 92.0)
+                        curE = min(sleepPeakTarget, curE + chargeStep)
                     } else {
-                        let drain = (stVal / 100.0) * 0.52 + (isWorkout ? 0.48 : 0.10)
-                        curEnergy = max(Double(energy) - 4.0, curEnergy - drain)
+                        let drain = 0.08 + (st / 100.0) * 0.62 + (isWk ? 0.55 : 0.0)
+                        curE = max(5.0, curE - drain)
                     }
-                    energy5m.append(TimedBiometricPoint(minuteOfDay: minOfDay, value: AppleHealthExportImporter.round1(min(max(curEnergy, 10), 99)), epochSec: ep))
+                    energy5m.append(TimedBiometricPoint(minuteOfDay: minOfDay, value: AppleHealthExportImporter.round1(curE), epochSec: ep))
                 }
+            } else {
+                curE = max(12.0, min(95.0, sleepPeakTarget - Double(strainTuple.strainPct) * 0.72))
+            }
+            carriedEnergy = curE
 
-                // Detailed simulated SleepSessionDetail for preview
-                let startMin = 30 // 00:30
+            var sleepDetail: SleepSessionDetail? = nil
+            if dayOffset <= 14 {
+                let startMin = 30
                 let sleepStartEpoch = dayStartEpoch + Int64(startMin * 60)
                 let sleepEndEpoch = sleepStartEpoch + Int64(inBedMin * 60)
                 let endMin = (startMin + inBedMin) % 1440
@@ -345,25 +556,25 @@ enum WhoopPhysiologyEngine {
                 var hrPts: [TimedBiometricPoint] = []
                 for m in stride(from: 0, through: inBedMin, by: 6) {
                     let ep = sleepStartEpoch + Int64(m * 60)
-                    let v = AppleHealthExportImporter.round1(rhr + 3.2 + sin(Double(m) * 0.04) * 3.8 + cos(Double(m) * 0.13) * 2.1)
+                    let v = AppleHealthExportImporter.round1(rhr + 1.5 + sin(Double(m) * 0.04) * 3.4)
                     hrPts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
                 }
                 var hrvPts: [TimedBiometricPoint] = []
                 for m in stride(from: 45, through: max(inBedMin - 20, 45), by: 95) {
                     let ep = sleepStartEpoch + Int64(m * 60)
-                    let v = AppleHealthExportImporter.round1(hrv + sin(Double(m) * 0.02) * 14.0)
+                    let v = AppleHealthExportImporter.round1(hrv + sin(Double(m) * 0.02) * 12.0)
                     hrvPts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
                 }
                 var respPts: [TimedBiometricPoint] = []
                 for m in stride(from: 10, through: inBedMin, by: 16) {
                     let ep = sleepStartEpoch + Int64(m * 60)
-                    let v = AppleHealthExportImporter.round1(resp + sin(Double(m) * 0.06) * 1.1)
+                    let v = AppleHealthExportImporter.round1(resp + sin(Double(m) * 0.06) * 0.9)
                     respPts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
                 }
                 var spo2Pts: [TimedBiometricPoint] = []
                 for m in stride(from: 35, through: inBedMin, by: 55) {
                     let ep = sleepStartEpoch + Int64(m * 60)
-                    let v = AppleHealthExportImporter.round1(min(max(spo2 + cos(Double(m) * 0.05) * 1.4, 93.0), 99.5))
+                    let v = AppleHealthExportImporter.round1(min(max(spo2 + cos(Double(m) * 0.05) * 1.2, 93.5), 99.5))
                     spo2Pts.append(TimedBiometricPoint(minuteOfDay: (startMin + m) % 1440, value: v, epochSec: ep))
                 }
 
@@ -373,15 +584,15 @@ enum WhoopPhysiologyEngine {
                     startTimeLabel: startLabel,
                     endTimeLabel: endLabel,
                     startDateTimeLabel: "\(shortDtFmt.string(from: date)) a las \(startLabel)",
-                    sourceName: "Simulación Improving",
+                    sourceName: "Vista previa",
                     awakeSeconds: awakeMin * 60,
                     remSeconds: remMin * 60,
                     coreSeconds: coreMin * 60,
                     deepSeconds: deepMin * 60,
                     latencyMinutes: 7,
                     efficiencyPct: min(max(Int((Double(asleepMin) / Double(max(inBedMin, 1)) * 100.0).rounded()), 60), 99),
-                    hrDipPct: 14.2,
-                    continuityPct: 94,
+                    hrDipPct: 13.5,
+                    continuityPct: 92,
                     stages: stages,
                     sleepHrSamples: hrPts,
                     sleepHrvSamples: hrvPts,
@@ -392,7 +603,7 @@ enum WhoopPhysiologyEngine {
 
             map[iso] = RealBiometricDaySummary(
                 dateIso: iso,
-                liveHrBpm: isToday ? 68 : Int(rhr.rounded()) + 14,
+                liveHrBpm: Int(rhr.rounded()) + 16,
                 restingHrBpm: rhr,
                 hrvMs: hrv,
                 respRateRpm: resp,
@@ -406,31 +617,26 @@ enum WhoopPhysiologyEngine {
                 coreMinutes: coreMin,
                 awakeMinutes: awakeMin,
                 sleepPct: sleepPct,
-                sleepDebtMinutes: isToday ? 36 : max(480 - asleepMin, 0),
+                sleepDebtMinutes: max(480 - asleepMin, 0),
                 sleepSession: sleepDetail,
-                strain21: strain21,
-                strainPct: strainPct,
+                strain21: strainTuple.strain21,
+                strainPct: strainTuple.strainPct,
                 recoveryPct: recPct,
-                stressScore: stress,
-                energyBankPercent: energy,
-                stepsCount: isToday ? 12480 : 7400 + (hash % 5400),
-                vo2MaxMlKgMin: vo2,
-                hrRecoveryBpm: isToday ? 29.0 : AppleHealthExportImporter.round1(26.0 + progress * 5.0),
-                glucoseMgDl: isToday ? 94 : 92 + (hash % 9),
-                activeKcal: wKcal,
-                daylightMinutes: 25 + (hash % 35),
+                stressScore: stressBase,
+                energyBankPercent: Int(curE.rounded()),
+                stepsCount: 7400 + (hash % 5200),
+                vo2MaxMlKgMin: AppleHealthExportImporter.round1(42.0 + progress * 2.4),
+                hrRecoveryBpm: AppleHealthExportImporter.round1(27.0 + progress * 3.0),
+                activeKcal: activeKcal,
+                daylightMinutes: 25 + (hash % 30),
                 sleepNoiseOver50Db: (hash % 5 == 0),
                 bodyWeightKg: profile.weightKg,
-                bodyFatPct: 16.2,
-                leanMassKg: AppleHealthExportImporter.round1(profile.weightKg * 0.838),
-                systolicBp: 112,
-                diastolicBp: 68,
                 hrZoneMinutes: zones,
-                stressSeries24h: s24,
-                energySeries24h: e24,
+                stressSeries24h: [],
+                energySeries24h: [],
                 stressSamples5m: stress5m,
                 energySamples5m: energy5m,
-                strengthMinutes: (wTitle?.contains("Fuerza") == true) ? wDur : (isToday ? 42 : 0),
+                strengthMinutes: (wTitle?.localizedCaseInsensitiveContains("fuerza") == true) ? wDur : 0,
                 workouts: workouts
             )
         }

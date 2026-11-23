@@ -32,6 +32,7 @@ final class ImprovingStore: ObservableObject {
         var wakeOffsetMinutes: Int
         var sleepGoalPct: Int
         var visibleTabs: [MainTab]
+        var sectionCoachingCache: [String: SectionCoachingCard]?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -77,12 +78,14 @@ final class ImprovingStore: ObservableObject {
     @Published var isCoachThinking: Bool = false
     private var activeCoachInteractionId: String? = nil
 
-    @Published var strengthSets: [(id: String, exercise: String, reps: Int, weightKg: Double, completed: Bool)] = [
-        ("s1", "Press banca inclinado", 8, 70, true),
-        ("s2", "Press banca inclinado", 8, 72.5, true),
-        ("s3", "Remo con barra", 10, 65, false),
-        ("s4", "Sentadilla búlgara", 10, 40, false),
-    ]
+    // 4-Hour Time-Aware Section Coaching Cache
+    @Published var sectionCoachingCache: [String: SectionCoachingCard] = [:]
+    @Published var loadingCoachingSections: Set<CoachingSection> = []
+    @Published var dataRevision: Int = 0
+    private var coachingTasks: [CoachingSection: Task<Void, Never>] = [:]
+    private var lastHeadlineBySection: [CoachingSection: String] = [:]
+
+    @Published var strengthSets: [(id: String, exercise: String, reps: Int, weightKg: Double, completed: Bool)] = []
     @Published var restTimerRunning: Bool = false
     @Published var restTimerSeconds: Int = 90
 
@@ -110,7 +113,7 @@ final class ImprovingStore: ObservableObject {
         if !hasImportedOrPairedRealData && simulatedHistory.isEmpty {
             simulatedHistory = WhoopPhysiologyEngine.generateTwoYearSimulatedHistory(profile: userProfile)
         }
-        seedDefaultMealsIfNeeded()
+        seedPreviewOnlyItemsIfNeeded()
         bindWhoopBle()
         bindHealthKit()
     }
@@ -118,10 +121,15 @@ final class ImprovingStore: ObservableObject {
     deinit {
         bleStreamTask?.cancel()
         timerTask?.cancel()
+        for task in coachingTasks.values { task.cancel() }
     }
 
-    private func seedDefaultMealsIfNeeded() {
-        guard !hasImportedOrPairedRealData else { return }
+    private func seedPreviewOnlyItemsIfNeeded() {
+        guard !hasImportedOrPairedRealData else {
+            // Zero fabricated strength sets when user has real data
+            strengthSets = []
+            return
+        }
         let todayIso = isoFormatter.string(from: Date())
         if mealsByDate[todayIso] == nil {
             mealsByDate[todayIso] = [
@@ -129,7 +137,27 @@ final class ImprovingStore: ObservableObject {
                 NutritionMealItem(id: "m2", title: "Salmón a la plancha con arroz jazmín y aguacate", timeLabel: "14:15", kcal: 680, proteinG: 52, carbsG: 62, fatG: 22, qualityScore: 86),
                 NutritionMealItem(id: "m3", title: "Pechuga de pavo, boniato asado y verduras", timeLabel: "20:45", kcal: 450, proteinG: 38, carbsG: 42, fatG: 12, qualityScore: 84),
             ]
-            hydrationGlassesByDate[todayIso] = 8
+        }
+        if strengthSets.isEmpty {
+            strengthSets = [
+                ("s1", "Press banca inclinado", 8, 70, true),
+                ("s2", "Press banca inclinado", 8, 72.5, true),
+                ("s3", "Remo con barra", 10, 65, false),
+                ("s4", "Sentadilla búlgara", 10, 40, false),
+            ]
+        }
+    }
+
+    private func clearPreviewSeededArtifactsOnRealData() {
+        strengthSets = []
+        // Strip only seeded preview meal IDs ("m1", "m2", "m3") while keeping any meals the user manually logged!
+        for (iso, list) in mealsByDate {
+            let filtered = list.filter { !["m1", "m2", "m3"].contains($0.id) }
+            if filtered.isEmpty {
+                mealsByDate.removeValue(forKey: iso)
+            } else {
+                mealsByDate[iso] = filtered
+            }
         }
     }
 
@@ -148,7 +176,6 @@ final class ImprovingStore: ObservableObject {
         isoFormatter.string(from: selectedDate)
     }
 
-    /// STRICT ZERO-FABRICATION: When real data is imported/paired, returns ONLY the exact selected date's record (nil if nothing was recorded that day).
     var currentDaySummary: RealBiometricDaySummary? {
         if hasImportedOrPairedRealData {
             return realHistory[selectedDateIso]
@@ -213,7 +240,7 @@ final class ImprovingStore: ObservableObject {
         )
     }
 
-    // MARK: - Strict Real Metrics (No Fabricated Defaults)
+    // MARK: - Strict Real Metrics (Zero Fabricated Defaults)
 
     var strainPercent: Int { currentDaySummary?.strainPct ?? 0 }
     var strain21: Double { currentDaySummary?.strain21 ?? 0 }
@@ -363,6 +390,36 @@ final class ImprovingStore: ObservableObject {
         return clampedStart...max(em, clampedStart + 30)
     }
 
+    /// Computes real average bedtime / wind-down / wake time from the user's last 30 days of actual sleep sessions (nil if no sleep data!).
+    var realSleepScheduleLabels: (windDown: String, bedtime: String, wakeTime: String)? {
+        let recent = trailingCalendarSummaries(days: 30)
+        var bedMins: [Int] = []
+        var wakeMins: [Int] = []
+        let parseMin: (String) -> Int? = { txt in
+            let parts = txt.split(separator: ":")
+            guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+            return h * 60 + m
+        }
+        for item in recent {
+            guard let sess = item.summary?.sleepSession else { continue }
+            if let s = sess.startTimeLabel.flatMap(parseMin) {
+                // Shift early-morning bedtimes (00:00..08:00) past 24:00 for circular averaging around midnight
+                bedMins.append(s < 480 ? s + 1440 : s)
+            }
+            if let e = sess.endTimeLabel.flatMap(parseMin) {
+                wakeMins.append(e)
+            }
+        }
+        guard !bedMins.isEmpty, !wakeMins.isEmpty else { return nil }
+        let avgBedRaw = Int((Double(bedMins.reduce(0, +)) / Double(bedMins.count)).rounded())
+        let avgBed = ((avgBedRaw % 1440) + 1440) % 1440
+        let avgWind = (((avgBedRaw - 30) % 1440) + 1440) % 1440
+        let avgWake = Int((Double(wakeMins.reduce(0, +)) / Double(wakeMins.count)).rounded()) % 1440
+
+        let fmt: (Int) -> String = { String(format: "%d:%02d", $0 / 60, $0 % 60) }
+        return (fmt(avgWind), fmt(avgBed), fmt(avgWake))
+    }
+
     var strainStatusText: String {
         guard dataAvailability.hasStrainData else { return "Sin datos" }
         let target = optimalEffortRange
@@ -401,27 +458,222 @@ final class ImprovingStore: ObservableObject {
         return "\(Int((r.lowerBound * 100).rounded()))%–\(Int((r.upperBound * 100).rounded()))%"
     }
 
-    var activeCoachingSummary: String {
-        let av = dataAvailability
-        if !av.hasAnyRecordedData {
-            if hasImportedOrPairedRealData {
-                return "No hay mediciones recopiladas en Apple Health ni en tu reloj para el \(fullDateLabel). Usa las flechas o el calendario para ver los días con registros."
-            }
-            return "Conecta Apple Health, tu pulsera WHOOP o importa tu archivo exportar.zip para ver tu lectura diaria real."
-        }
-        var parts: [String] = []
-        if av.hasRecoveryData { parts.append("recuperación del \(recoveryPercent)%") }
-        if av.hasStrainData { parts.append("esfuerzo en \(strainPercent)%") }
-        if av.hasSleepData { parts.append("sueño de \(sleepDurationText)") }
-        if av.hasHrvData { parts.append(String(format: "VFC de %.1f ms", locale: Locale(identifier: "es_ES"), hrvMs)) }
-        if av.hasEnergyData { parts.append("energía al \(energyPercent)%") }
+    // MARK: - 4-Hour Time-Aware Section Coaching Engine
 
-        let joined = parts.joined(separator: ", ")
-        if let debt = currentDaySummary?.sleepDebtMinutes, debt > 0 {
-            let needMin = 480 + debt + (strainPercent > 75 ? 25 : 10)
-            return "Lectura real del día: \(joined). Para recuperar los \(debt) min de deuda acumulada, apunta a dormir \(needMin / 60) h \(String(format: "%02d", needMin % 60)) min esta noche."
+    func currentFourHourBlockInfo(for date: Date = Date()) -> (blockIndex: Int, slotId: String, generatedAtLabel: String, nextUpdateLabel: String) {
+        let cal = Calendar.current
+        let hour = cal.component(.hour, from: date)
+        let minute = cal.component(.minute, from: date)
+        let blockIdx = hour / 4 // 0..5 -> 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+        let todayIso = isoFormatter.string(from: date)
+        let generatedAt = String(format: "%02d:%02d", hour, minute)
+        let nextHour = ((blockIdx + 1) * 4) % 24
+        let nextUpdate = String(format: "%02d:00", nextHour)
+        return (blockIdx, "\(todayIso)_b\(blockIdx)", generatedAt, nextUpdate)
+    }
+
+    func coachingSlotKey(for section: CoachingSection, now: Date = Date()) -> String {
+        let info = currentFourHourBlockInfo(for: now)
+        return "\(section.rawValue)_\(info.slotId)_\(selectedDateIso)_r\(dataRevision)"
+    }
+
+    func coachingCard(for section: CoachingSection) -> SectionCoachingCard? {
+        sectionCoachingCache[coachingSlotKey(for: section)]
+    }
+
+    func isLoadingCoaching(for section: CoachingSection) -> Bool {
+        loadingCoachingSections.contains(section)
+    }
+
+    private func buildSectionFacts(for section: CoachingSection) -> (facts: [String], hasData: Bool) {
+        let av = dataAvailability
+        let d = currentDaySummary
+        var facts: [String] = []
+
+        switch section {
+        case .hoy:
+            if av.hasRecoveryData { facts.append("Recuperación \(recoveryPercent)% (\(recoveryStatusText))") }
+            if av.hasStrainData { facts.append("Esfuerzo \(strainPercent)% (Strain \(String(format: "%.1f", strain21))/21, objetivo \(effortTargetRangeText))") }
+            if av.hasSleepData { facts.append("Sueño \(sleepDurationText) con puntuación \(sleepPercent)%") }
+            if av.hasHrvData { facts.append(String(format: "VFC nocturna %.1f ms", locale: Locale(identifier: "es_ES"), hrvMs)) }
+            if av.hasRestingHrData { facts.append(String(format: "FCR durmiendo %.1f ppm", locale: Locale(identifier: "es_ES"), restingHrBpm)) }
+            if av.hasEnergyData { facts.append("Batería de energía al \(energyPercent)%") }
+            if av.hasStressData { facts.append("Estrés medio \(stressScore)/100 (\(stressStatusLabel))") }
+            if let steps = stepsCount { facts.append("\(steps) pasos acumulados") }
+            return (facts, av.hasAnyRecordedData)
+
+        case .esfuerzo:
+            if av.hasStrainData { facts.append("Esfuerzo diario \(strainPercent)% (Strain \(String(format: "%.1f", strain21))/21, estado \(strainStatusText))") }
+            if av.hasRecoveryData { facts.append("Rango objetivo óptimo según recuperación \(recoveryPercent)%: \(effortTargetRangeText)") }
+            if let kcal = d?.activeKcal { facts.append("Calorías activas: \(kcal) kcal") }
+            if let steps = stepsCount { facts.append("Pasos: \(steps)") }
+            if let hr = liveHrBpm { facts.append("FC diurna media: \(hr) ppm") }
+            if !workoutsToday.isEmpty {
+                let wDesc = workoutsToday.map { w in
+                    var s = "\(w.title) de \(w.durationMin) min (\(w.strainPct)% esfuerzo"
+                    if w.kcal > 0 { s += ", \(w.kcal) kcal" }
+                    if w.avgHrBpm > 0 { s += ", FC media \(w.avgHrBpm) ppm" }
+                    s += ")"
+                    return s
+                }.joined(separator: "; ")
+                facts.append("Entrenamientos: \(wDesc)")
+            }
+            let z = d?.hrZoneMinutes ?? []
+            if z.reduce(0, +) > 0 {
+                facts.append("Minutos por zonas de FC Z1-Z5: \(z.enumerated().map { "Z\($0.offset + 1) \($0.element)m" }.joined(separator: ", "))")
+            }
+            return (facts, av.hasStrainData || av.hasWorkoutData)
+
+        case .recuperacion:
+            if av.hasRecoveryData { facts.append("Recuperación \(recoveryPercent)% (\(recoveryStatusText))") }
+            if av.hasHrvData {
+                let recentHrv = trailingCalendarSummaries(days: 30).compactMap { $0.summary?.hrvMs }
+                let avg30 = recentHrv.isEmpty ? nil : (recentHrv.reduce(0, +) / Double(recentHrv.count))
+                if let a = avg30 {
+                    facts.append(String(format: "VFC nocturna %.1f ms frente a tu media de 30 días de %.1f ms", locale: Locale(identifier: "es_ES"), hrvMs, a))
+                } else {
+                    facts.append(String(format: "VFC nocturna %.1f ms", locale: Locale(identifier: "es_ES"), hrvMs))
+                }
+            }
+            if av.hasRestingHrData {
+                let recentRhr = trailingCalendarSummaries(days: 30).compactMap { $0.summary?.restingHrBpm }
+                let avg30 = recentRhr.isEmpty ? nil : (recentRhr.reduce(0, +) / Double(recentRhr.count))
+                if let a = avg30 {
+                    facts.append(String(format: "FC en reposo durmiendo %.1f ppm frente a tu media de 30 días de %.1f ppm", locale: Locale(identifier: "es_ES"), restingHrBpm, a))
+                } else {
+                    facts.append(String(format: "FC en reposo durmiendo %.1f ppm", locale: Locale(identifier: "es_ES"), restingHrBpm))
+                }
+            }
+            if av.hasRespData { facts.append(String(format: "Frecuencia respiratoria %.1f rpm", locale: Locale(identifier: "es_ES"), respRateRpm)) }
+            if let sp = spo2Value { facts.append(String(format: "SpO2 nocturna %.1f%%", locale: Locale(identifier: "es_ES"), sp)) }
+            if let t = wristTempAbsoluteC {
+                let dStr = d?.wristTempDeltaC.map { String(format: " (desviación %+.1f °C)", locale: Locale(identifier: "es_ES"), $0) } ?? ""
+                facts.append(String(format: "Temperatura muñeca %.1f °C%@", locale: Locale(identifier: "es_ES"), t, dStr))
+            }
+            return (facts, av.hasRecoveryData || av.hasHrvData || av.hasRestingHrData)
+
+        case .sueno:
+            let sess = d?.sleepSession
+            if av.hasSleepData { facts.append("Puntuación del sueño \(sleepPercent)% (\(sleepStatusText)), duración real dormida \(sleepDurationText)") }
+            if let bed = d?.inBedMinutes, bed > 0 { facts.append("Tiempo en cama \(sleepInBedText)") }
+            if let s = sess?.startTimeLabel, let e = sess?.endTimeLabel { facts.append("Horario real: acostado \(s) hasta despertar \(e)") }
+            if let eff = sess?.efficiencyPct { facts.append("Eficiencia del sueño \(eff)%") }
+            if let deep = d?.deepMinutes, deep > 0 { facts.append("Sueño profundo \(deep) min") }
+            if let rem = d?.remMinutes, rem > 0 { facts.append("Sueño MOR \(rem) min") }
+            if let lat = sess?.latencyMinutes { facts.append("Latencia para dormirse \(lat) min") }
+            if let dip = sess?.hrDipPct { facts.append(String(format: "Disminución nocturna de FC %.1f%%", locale: Locale(identifier: "es_ES"), dip)) }
+            if let debt = d?.sleepDebtMinutes, debt > 0 { facts.append("Deuda de sueño acumulada \(debt) min") }
+            return (facts, av.hasSleepData)
+
+        case .estres:
+            let samples = stressSamplesToday
+            if av.hasStressData { facts.append("Estrés medio \(stressScore)/100 (\(stressStatusLabel)) con \(samples.count) muestras reales") }
+            if let mx = stressMax, let mn = stressMin { facts.append("Rango del día: mínimo \(mn) y pico máximo \(mx)") }
+            if let peak = samples.max(by: { $0.value < $1.value }) {
+                let hhmm = String(format: "%02d:%02d", (peak.minuteOfDay / 60) % 24, peak.minuteOfDay % 60)
+                facts.append("Pico más alto alrededor de las \(hhmm) con \(Int(peak.value.rounded()))/100")
+            }
+            let stepMin = samples.count > 40 ? 5 : 60
+            let highMin = samples.filter { $0.value >= 65 }.count * stepMin
+            let lowMin = samples.filter { $0.value < 35 }.count * stepMin
+            if !samples.isEmpty {
+                facts.append("Tiempo en estrés alto: \(highMin) min; en estrés bajo: \(lowMin / 60) h \(lowMin % 60) min")
+            }
+            return (facts, av.hasStressData)
+
+        case .energia:
+            let samples = energySamplesToday
+            if av.hasEnergyData { facts.append("Nivel actual de batería de energía: \(energyPercent)%") }
+            if let first = samples.first {
+                let t = String(format: "%02d:%02d", (first.minuteOfDay / 60) % 24, first.minuteOfDay % 60)
+                facts.append("Inicio continuo a las \(t) desde \(Int(first.value.rounded()))% heredado de la jornada previa")
+            }
+            if let peak = samples.max(by: { $0.value < $1.value }) {
+                let t = String(format: "%02d:%02d", (peak.minuteOfDay / 60) % 24, peak.minuteOfDay % 60)
+                facts.append("Pico de recarga de \(Int(peak.value.rounded()))% a las \(t)")
+                if let first = samples.first, let last = samples.last {
+                    let charged = max(Int((peak.value - first.value).rounded()), 0)
+                    let drained = max(Int((peak.value - last.value).rounded()), 0)
+                    facts.append("Balance del día: +\(charged)% cargado y -\(drained)% gastado")
+                }
+            }
+            return (facts, av.hasEnergyData)
+
+        case .fitness:
+            let last30 = trailingCalendarSummaries(days: 30)
+            let w30 = last30.flatMap { $0.summary?.workouts ?? [] }
+            let last7 = trailingCalendarSummaries(days: 7)
+            let strain7 = last7.compactMap { $0.summary?.strainPct }
+            let strMin7 = last7.compactMap { $0.summary?.strengthMinutes }.reduce(0, +)
+            if !w30.isEmpty {
+                let mins30 = w30.reduce(0) { $0 + $1.durationMin }
+                let kcal30 = w30.reduce(0) { $0 + $1.kcal }
+                facts.append("Últimos 30 días: \(w30.count) sesiones, \(mins30 / 60) h \(mins30 % 60) min y \(kcal30) kcal")
+            }
+            if !strain7.isEmpty {
+                let avg7 = Int((Double(strain7.reduce(0, +)) / Double(strain7.count)).rounded())
+                facts.append("Esfuerzo medio 7 días: \(avg7)%; fuerza 7 días: \(strMin7) min")
+            }
+            if let vo2 = latestVo2Max { facts.append(String(format: "VO2 máx. %.1f mL/kg·min", locale: Locale(identifier: "es_ES"), vo2)) }
+            if let hrr = latestHrRecoveryBpm { facts.append("Recuperación de FC 1 min: \(Int(hrr.rounded())) ppm") }
+            if av.hasRecoveryData { facts.append("Recuperación actual para entrenar: \(recoveryPercent)%") }
+            if !workoutsToday.isEmpty {
+                facts.append("Entrenamientos hoy: \(workoutsToday.map { "\($0.title) \($0.durationMin)m" }.joined(separator: ", "))")
+            }
+            return (facts, !facts.isEmpty)
         }
-        return "Lectura real del día: \(joined). Ajusta la intensidad y el descanso en función de tus señales registradas."
+    }
+
+    func refreshCoachingIfNeeded(for section: CoachingSection, force: Bool = false) {
+        let now = Date()
+        let info = currentFourHourBlockInfo(for: now)
+        let key = coachingSlotKey(for: section, now: now)
+        if !force && sectionCoachingCache[key] != nil { return }
+
+        coachingTasks[section]?.cancel()
+        loadingCoachingSections.insert(section)
+
+        let ctx = buildBiometricContextJson()
+        let secFacts = buildSectionFacts(for: section)
+        let missing = dataAvailability.missingCategoryNames
+        let prevHead = lastHeadlineBySection[section] ?? sectionCoachingCache[key]?.headline
+        let apiKey = geminiApiKey
+        let model = selectedGeminiModel
+        let userName = userProfile.userName
+        let selIso = selectedDateIso
+        let isToday = dayOffset == 0
+
+        coachingTasks[section] = Task { [weak self] in
+            let card = await GeminiCoachService.shared.generateSectionCoaching(
+                section: section,
+                currentDate: now,
+                selectedDateIso: selIso,
+                isViewingToday: isToday,
+                userName: userName,
+                biometricContextJson: ctx.json,
+                sectionFacts: secFacts.facts,
+                missingCategories: missing,
+                previousHeadline: prevHead,
+                hasSectionData: secFacts.hasData,
+                slotKey: key,
+                generatedAtLabel: info.generatedAtLabel,
+                nextUpdateLabel: info.nextUpdateLabel,
+                apiKey: apiKey,
+                selectedModel: model
+            )
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.sectionCoachingCache[key] = card
+                self.lastHeadlineBySection[section] = card.headline
+                self.loadingCoachingSections.remove(section)
+                // Keep cache bounded to latest 35 entries
+                if self.sectionCoachingCache.count > 35 {
+                    let dropKeys = self.sectionCoachingCache.keys.sorted().prefix(self.sectionCoachingCache.count - 35)
+                    for k in dropKeys { self.sectionCoachingCache.removeValue(forKey: k) }
+                }
+                self.persistState()
+            }
+        }
     }
 
     // MARK: - Trailing Calendar Days Helper (Sparse, Zero-Fabrication!)
@@ -588,7 +840,7 @@ final class ImprovingStore: ObservableObject {
                 valueFormatter: { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }, unitText: "ppm",
                 series: window.map { $0.summary?.restingHrBpm },
                 bandLow: 45, bandHigh: 56, lineColorHex: 0x3BD671,
-                detailNote: "Frecuencia cardíaca mínima sostenida durante el descanso."
+                detailNote: "Frecuencia cardíaca media sostenida durante el descanso nocturno."
             ),
             buildTrendItem(
                 id: "r_resp", title: "Frecuencia respiratoria",
@@ -818,18 +1070,12 @@ final class ImprovingStore: ObservableObject {
         )
     }
 
-    // MARK: - Diario Real 90-Day Statistical Correlation & Reliability Engine
+    // MARK: - Diario Completion (>= 20 Manual Items) & Strict 30-Day Real Insight Engine
+
+    static let diarioRequiredManualCount: Int = 20
+    static let diarioRequiredTrackingDays: Int = 30
 
     static let journalCatalog: [(id: String, emoji: String, title: String, isAuto: Bool)] = [
-        // Automatic habits evaluated from real watch / Apple Health data
-        ("a_noise", "🔊", "Ruido al dormir de 50+ dB", true),
-        ("a_strength", "🏋️", "20+ minutos de fuerza", true),
-        ("a_daylight", "☀️", "20+ minutos de luz natural", true),
-        ("a_steps", "👟", "10.000+ pasos", true),
-        ("a_cardio", "🏃", "20+ minutos de cardio", true),
-        ("a_z2", "🟠", "30+ minutos en la zona 2", true),
-        ("a_stress", "💢", "50+ puntuación del Estrés", true),
-        ("a_strain", "😮‍💨", "Objetivo de Esfuerzo superado", true),
         // Manual daily & nightly habits (strictly ignoring .unset!)
         ("fish_oil", "💊", "Aceite de pescado", false),
         ("sexual_activity", "❣️", "Actividad sexual", false),
@@ -855,7 +1101,67 @@ final class ImprovingStore: ObservableObject {
         ("device_bed", "📱", "Dispositivo en la cama", false),
         ("sleep_interrupt", "🥱", "Interrupción del sueño", false),
         ("reading_bed", "📖", "Lectura en la cama", false),
+        // Automatic habits evaluated from real watch / Apple Health data
+        ("a_noise", "🔊", "Ruido al dormir de 50+ dB", true),
+        ("a_strength", "🏋️", "20+ minutos de fuerza", true),
+        ("a_daylight", "☀️", "20+ minutos de luz natural", true),
+        ("a_steps", "👟", "10.000+ pasos", true),
+        ("a_cardio", "🏃", "20+ minutos de cardio", true),
+        ("a_z2", "🟠", "30+ minutos en la zona 2", true),
+        ("a_stress", "💢", "50+ puntuación del Estrés", true),
+        ("a_strain", "😮‍💨", "Objetivo de Esfuerzo superado", true),
     ]
+
+    static let manualHabitIds: [String] = journalCatalog.filter { !$0.isAuto }.map(\.id)
+
+    /// Counts strictly MANUAL (non-automatic) Diario items completed on `dateIso` (tri-state ✓/✕ + mood + hydration).
+    func manualCompletedCount(for dateIso: String) -> Int {
+        let map = journalCheckinsByDate[dateIso] ?? [:]
+        var count = 0
+        for id in Self.manualHabitIds {
+            if let st = map[id], st != .unset {
+                count += 1
+            }
+        }
+        if journalMoodByDate[dateIso] != nil { count += 1 }
+        if (hydrationGlassesByDate[dateIso] ?? 0) > 0 { count += 1 }
+        return count
+    }
+
+    /// A day receives the Diario checkmark badge ONLY when the user completed >= 20 manual (non-automatic) entries!
+    func isDiarioDayCompleted(for dateIso: String) -> Bool {
+        manualCompletedCount(for: dateIso) >= Self.diarioRequiredManualCount
+    }
+
+    /// Number of distinct dates on which the user has logged at least one manual Diario entry.
+    var totalManualDiarioDaysLogged: Int {
+        var dates = Set<String>()
+        for (iso, map) in journalCheckinsByDate {
+            if Self.manualHabitIds.contains(where: { (map[$0] ?? .unset) != .unset }) {
+                dates.insert(iso)
+            }
+        }
+        for iso in journalMoodByDate.keys { dates.insert(iso) }
+        for (iso, g) in hydrationGlassesByDate where g > 0 { dates.insert(iso) }
+        return dates.count
+    }
+
+    /// Calendar span (in days, inclusive) from the user's earliest manual Diario entry to `selectedDate`.
+    var manualDiarioSpanDays: Int {
+        var earliestIso: String? = nil
+        for (iso, map) in journalCheckinsByDate {
+            if Self.manualHabitIds.contains(where: { (map[$0] ?? .unset) != .unset }) {
+                if earliestIso == nil || iso < earliestIso! { earliestIso = iso }
+            }
+        }
+        for iso in journalMoodByDate.keys {
+            if earliestIso == nil || iso < earliestIso! { earliestIso = iso }
+        }
+        guard let firstIso = earliestIso, let firstDate = isoFormatter.date(from: firstIso) else { return 0 }
+        let cal = Calendar.current
+        let diff = cal.dateComponents([.day], from: cal.startOfDay(for: firstDate), to: cal.startOfDay(for: selectedDate)).day ?? 0
+        return max(diff + 1, 1)
+    }
 
     func automaticHabitState(id: String, day: RealBiometricDaySummary?) -> JournalCheckState {
         guard let d = day else { return .unset }
@@ -892,12 +1198,16 @@ final class ImprovingStore: ObservableObject {
         }
     }
 
+    /// Strict 30-day real tracking engine for Diario ✨ Información:
+    /// - If the user has NOT filled out the Diario form (0 manual entries logged), ZERO metrics are computed or unlocked!
+    /// - Each habit requires at least 30 days of elapsed tracking (daysSpanCount >= 30 || loggedDaysCount >= 30) AND both ✓ and ✕ occurrences before computing impact %.
     func computeJournalImpacts(for target: JournalImpactTarget) -> [JournalHabitImpactItem] {
+        let hasUserFilledForm = totalManualDiarioDaysLogged > 0
         let cal = Calendar.current
         let anchor = cal.startOfDay(for: selectedDate)
         var last90Isos: [String] = []
         last90Isos.reserveCapacity(90)
-        for back in 0..<90 {
+        for back in (0..<90).reversed() {
             if let d = cal.date(byAdding: .day, value: -back, to: anchor) {
                 last90Isos.append(isoFormatter.string(from: d))
             }
@@ -907,36 +1217,48 @@ final class ImprovingStore: ObservableObject {
         for entry in Self.journalCatalog {
             var yesVals: [Double] = []
             var noVals: [Double] = []
+            var firstLoggedIso: String? = nil
+            var totalExplicitDays = 0
 
             for iso in last90Isos {
-                guard let day = activeHistory[iso] else { continue }
-                let outcomeOpt: Int? = (target == .recovery) ? day.recoveryPct : day.sleepPct
-                guard let outcome = outcomeOpt else { continue }
-
                 let state: JournalCheckState
                 if entry.isAuto {
+                    guard hasUserFilledForm, let day = activeHistory[iso] else { continue }
                     state = automaticHabitState(id: entry.id, day: day)
                 } else {
                     state = journalCheckinsByDate[iso]?[entry.id] ?? .unset
                 }
 
-                switch state {
-                case .yes: yesVals.append(Double(outcome))
-                case .no: noVals.append(Double(outcome))
-                case .unset: break // Strictly ignore unselected entries!
-                }
+                guard state != .unset else { continue }
+                if firstLoggedIso == nil { firstLoggedIso = iso }
+                totalExplicitDays += 1
+
+                guard let day = activeHistory[iso] else { continue }
+                let outcomeOpt: Int? = (target == .recovery) ? day.recoveryPct : day.sleepPct
+                guard let outcome = outcomeOpt else { continue }
+
+                if state == .yes { yesVals.append(Double(outcome)) }
+                else if state == .no { noVals.append(Double(outcome)) }
             }
+
+            let spanDays: Int = {
+                guard let fIso = firstLoggedIso, let fDate = isoFormatter.date(from: fIso) else { return 0 }
+                let d = cal.dateComponents([.day], from: cal.startOfDay(for: fDate), to: anchor).day ?? 0
+                return max(d + 1, 1)
+            }()
 
             let yCount = yesVals.count
             let nCount = noVals.count
+            let reached30Days = hasUserFilledForm && (spanDays >= Self.diarioRequiredTrackingDays || totalExplicitDays >= Self.diarioRequiredTrackingDays)
+
             let tier: JournalReliabilityTier
             let impact: Int
-            if yCount >= 5 && nCount >= 5 {
+            if reached30Days && yCount >= 5 && nCount >= 5 {
                 tier = .high
                 let meanY = yesVals.reduce(0, +) / Double(yCount)
                 let meanN = noVals.reduce(0, +) / Double(nCount)
                 impact = Int((meanY - meanN).rounded())
-            } else if yCount >= 1 && nCount >= 1 {
+            } else if reached30Days && yCount >= 1 && nCount >= 1 {
                 tier = .low
                 let meanY = yesVals.reduce(0, +) / Double(yCount)
                 let meanN = noVals.reduce(0, +) / Double(nCount)
@@ -953,6 +1275,8 @@ final class ImprovingStore: ObservableObject {
                 impactPct: impact,
                 yesCount: yCount,
                 noCount: nCount,
+                loggedDaysCount: totalExplicitDays,
+                daysSpanCount: spanDays,
                 reliability: tier,
                 isAutomatic: entry.isAuto
             ))
@@ -965,6 +1289,9 @@ final class ImprovingStore: ObservableObject {
             }
             if a.reliability != .locked && abs(a.impactPct) != abs(b.impactPct) {
                 return abs(a.impactPct) > abs(b.impactPct)
+            }
+            if a.isAutomatic != b.isAutomatic {
+                return !a.isAutomatic // Show manual habits first when locked
             }
             return (a.yesCount + a.noCount) > (b.yesCount + b.noCount)
         }
@@ -986,6 +1313,7 @@ final class ImprovingStore: ObservableObject {
 
     func updateProfile(_ profile: UserPhysiologyProfile) {
         userProfile = profile
+        dataRevision += 1
         persistState()
     }
 
@@ -1060,14 +1388,15 @@ final class ImprovingStore: ObservableObject {
 
     func addEffortEvent(title: String, durationMin: Int, kcal: Int) {
         var d = currentDaySummary ?? RealBiometricDaySummary(dateIso: selectedDateIso)
+        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: durationMin, kcal: kcal, avgHrBpm: 0)
         let ev = EffortEventItem(
             id: UUID().uuidString,
             title: title,
             timeRange: "Hoy",
             durationMin: durationMin,
             avgHrBpm: 0,
-            strainScore: AppleHealthExportImporter.round1(min(Double(durationMin) / 5.0, 20.0)),
-            strainPct: min(max(durationMin, 10), 95),
+            strainScore: ws.strain21,
+            strainPct: ws.strainPct,
             categoryLabel: "Actividad",
             kcal: kcal,
             dateIso: selectedDateIso
@@ -1078,6 +1407,7 @@ final class ImprovingStore: ObservableObject {
         } else {
             simulatedHistory[selectedDateIso] = d
         }
+        dataRevision += 1
         persistState()
     }
 
@@ -1126,6 +1456,7 @@ final class ImprovingStore: ObservableObject {
                     return
                 }
                 self.hasImportedOrPairedRealData = true
+                self.clearPreviewSeededArtifactsOnRealData()
                 self.realHistory = WhoopExportImporter.mergeDays(existing: self.realHistory, imported: result.days)
                 for (iso, map) in result.journalByDate {
                     var dayJournal = self.journalCheckinsByDate[iso] ?? [:]
@@ -1140,7 +1471,9 @@ final class ImprovingStore: ObservableObject {
                 let rangeText = (result.earliestDateIso != nil && result.latestDateIso != nil)
                     ? "\(result.earliestDateIso!) – \(result.latestDateIso!)"
                     : ""
+                let hrvDaysCount = result.days.values.filter { $0.hrvMs != nil }.count
                 var summary = "✓ \(result.days.count) días reales importados"
+                if hrvDaysCount > 0 { summary += " · \(hrvDaysCount) días VFC" }
                 if result.workoutsCount > 0 { summary += " · \(result.workoutsCount) entrenamientos" }
                 self.importStatus = ExportImportStatus(
                     isImporting: false,
@@ -1150,24 +1483,28 @@ final class ImprovingStore: ObservableObject {
                     summaryMessage: summary,
                     errorMessage: nil
                 )
+                self.dataRevision += 1
                 self.persistState()
             }
         }
     }
 
-    // MARK: - HealthKit & WHOOP Live Connectors
+    // MARK: - HealthKit & WHOOP Live Connectors (Full 60-Day Bevel Pipeline + Continuous Energy!)
 
     func connectAndSyncAppleHealth() {
         #if os(iOS)
         healthKitSyncing = true
+        healthKitLastSyncText = "Conectando..."
         Task {
             do {
                 try await HealthKitReader.shared.requestAuthorization()
                 self.healthKitAuthorized = HealthKitReader.shared.isAuthorized
-                if let snap = await HealthKitReader.shared.syncLatestMetrics() {
-                    self.ingestHealthKitSnapshot(snap)
-                }
-                self.healthKitLastSyncText = "Sincronizado"
+                self.healthKitLastSyncText = "Sincronizando 60 días..."
+                let historySnaps = await HealthKitReader.shared.syncHistoryDays(days: 60)
+                self.ingestHealthKitSnapshots(historySnaps)
+                let realDays = self.realHistory.count
+                let hrvDays = self.realHistory.values.filter { $0.hrvMs != nil }.count
+                self.healthKitLastSyncText = "Sincronizado (\(realDays)d · \(hrvDays) VFC)"
             } catch {
                 self.healthKitLastSyncText = error.localizedDescription
             }
@@ -1182,66 +1519,363 @@ final class ImprovingStore: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] snap in
                 guard let self, let snap else { return }
-                self.ingestHealthKitSnapshot(snap)
+                self.ingestHealthKitSnapshots([snap])
             }
             .store(in: &cancellables)
         #endif
     }
 
     #if os(iOS)
-    private func ingestHealthKitSnapshot(_ snap: DailyHealthSnapshot) {
-        let iso = isoFormatter.string(from: snap.day)
-        var d = realHistory[iso] ?? RealBiometricDaySummary(dateIso: iso)
-        var hasReal = false
-        if snap.hrv.weightedHRV > 0 { d.hrvMs = AppleHealthExportImporter.round1(snap.hrv.weightedHRV); hasReal = true }
-        if snap.heartRate.restingHR > 0 { d.restingHrBpm = AppleHealthExportImporter.round1(snap.heartRate.restingHR); hasReal = true }
-        if let live = snap.liveHeartRate { d.liveHrBpm = Int(live.rounded()); hasReal = true }
-        if snap.vitals.meanRespiratoryRate > 0 { d.respRateRpm = AppleHealthExportImporter.round1(snap.vitals.meanRespiratoryRate); hasReal = true }
-        if snap.vitals.meanSpO2 > 0 { d.spo2Percent = AppleHealthExportImporter.round1(snap.vitals.meanSpO2); hasReal = true }
-        if snap.vitals.tempDeltaCelsius != 0 { d.wristTempDeltaC = AppleHealthExportImporter.round1(snap.vitals.tempDeltaCelsius); hasReal = true }
-        if let sl = snap.sleep, sl.totalAsleepMinutes > 0 {
-            d.asleepMinutes = Int(sl.totalAsleepMinutes.rounded())
-            d.inBedMinutes = Int(sl.inBedMinutes.rounded())
-            if sl.deepMinutes > 0 { d.deepMinutes = Int(sl.deepMinutes.rounded()) }
-            if sl.remMinutes > 0 { d.remMinutes = Int(sl.remMinutes.rounded()) }
-            d.sleepPct = min(max(Int(((sl.totalAsleepMinutes / 480.0) * 80.0 + sl.efficiencyPct * 0.2).rounded()), 20), 100)
-            d.sleepDebtMinutes = max(480 - (d.asleepMinutes ?? 0), 0)
-            hasReal = true
-        }
-        if snap.steps > 0 { d.stepsCount = snap.steps; hasReal = true }
-        if snap.activeCalories > 0 { d.activeKcal = Int(snap.activeCalories.rounded()); hasReal = true }
-        if !snap.workouts.isEmpty {
-            d.workouts = snap.workouts.map { w in
-                EffortEventItem(
-                    id: w.id.uuidString,
-                    title: w.name,
-                    timeRange: "Apple Health",
-                    durationMin: w.durationMinutes,
-                    avgHrBpm: w.avgHeartRate > 0 ? w.avgHeartRate : 0,
-                    strainScore: AppleHealthExportImporter.round1(min(20.5, Double(w.activeCalories) / 65.0 + 3.0)),
-                    strainPct: min(max(w.activeCalories / 8 + 15, 5), 98),
-                    categoryLabel: "Watch",
-                    kcal: w.activeCalories,
-                    dateIso: iso
-                )
+    private func ingestHealthKitSnapshots(_ snapshots: [DailyHealthSnapshot]) {
+        guard !snapshots.isEmpty else { return }
+        let sorted = snapshots.sorted { $0.day < $1.day }
+        let cal = Calendar.current
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let maxHr = Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: userProfile))
+        let popLnHrv = log(max((norms.hrvLowMs + norms.hrvHighMs) / 2.0, 25.0))
+        let popRhr = (norms.rhrLowBpm + norms.rhrHighBpm) / 2.0
+
+        let timeFmt = DateFormatter()
+        timeFmt.locale = Locale(identifier: "en_US_POSIX")
+        timeFmt.dateFormat = "HH:mm"
+        let fullFmt = DateFormatter()
+        fullFmt.locale = Locale(identifier: "es_ES")
+        fullFmt.dateFormat = "dd/MM/yy 'a las' H:mm"
+
+        // Seed causal baselines from any existing realHistory strictly BEFORE the first synced snapshot
+        let firstIso = isoFormatter.string(from: sorted[0].day)
+        var priorLnHrv: [Double] = []
+        var priorRhr: [Double] = []
+        var priorResp: [Double] = []
+        var priorTemp: [Double] = []
+        var prevDayEndEnergy: Double? = nil
+        var prevDayIso: String? = nil
+
+        for iso in realHistory.keys.sorted() where iso < firstIso {
+            if let old = realHistory[iso] {
+                if let h = old.hrvMs, h > 2 { priorLnHrv.append(log(h)) }
+                if let r = old.restingHrBpm { priorRhr.append(r) }
+                if let rr = old.respRateRpm { priorResp.append(rr) }
+                if let t = old.wristTempAbsoluteC { priorTemp.append(t) }
+                if let lastE = old.energySamples5m.last?.value ?? old.energyBankPercent.map({ Double($0) }) {
+                    prevDayEndEnergy = lastE
+                    prevDayIso = iso
+                }
             }
-            hasReal = true
         }
-        if let hrv = d.hrvMs, let rhr = d.restingHrBpm {
-            d.recoveryPct = WhoopPhysiologyEngine.computeRecoveryPercent(
-                hrvMs: hrv,
-                rhrBpm: rhr,
-                respRpm: d.respRateRpm ?? 15.2,
-                spo2Pct: d.spo2Percent ?? 98.0,
-                wristTempDeltaC: d.wristTempDeltaC ?? 0.0,
-                sleepScorePct: d.sleepPct ?? 78
+
+        var updatedAny = false
+
+        for snap in sorted {
+            let iso = isoFormatter.string(from: snap.day)
+            var d = realHistory[iso] ?? RealBiometricDaySummary(dateIso: iso)
+            var hasReal = false
+
+            // 1. Sleeping HRV (mean of nocturnal HRV, or fallback daytime HRV — NEVER dropped!)
+            if snap.hrv.sampleCount > 0 && snap.hrv.weightedHRV > 2.0 {
+                d.hrvMs = AppleHealthExportImporter.round1(snap.hrv.weightedHRV)
+                hasReal = true
+            }
+
+            // 2. Sleeping RHR (prefer sleeping mean HR when measured, fallback Apple Resting HR)
+            if snap.heartRate.sleepingMeanHR > 25.0 {
+                d.restingHrBpm = AppleHealthExportImporter.round1(snap.heartRate.sleepingMeanHR)
+                hasReal = true
+            } else if snap.heartRate.restingHR > 25.0 {
+                d.restingHrBpm = AppleHealthExportImporter.round1(snap.heartRate.restingHR)
+                hasReal = true
+            }
+
+            // 3. Daytime HR (strictly outside sleep window)
+            if let live = snap.liveHeartRate, live > 28.0 {
+                d.liveHrBpm = Int(live.rounded())
+                hasReal = true
+            }
+
+            // 4. Vitals (strictly optional — zero fake 14.5 / 98.0 defaults!)
+            if let resp = snap.vitals.meanRespiratoryRate, resp > 5.0 {
+                d.respRateRpm = AppleHealthExportImporter.round1(resp)
+                hasReal = true
+            }
+            if let spo2 = snap.vitals.meanSpO2, spo2 >= 60.0 {
+                d.spo2Percent = AppleHealthExportImporter.round1(spo2)
+                hasReal = true
+            }
+            if let tAbs = snap.vitals.tempAbsoluteCelsius {
+                d.wristTempAbsoluteC = AppleHealthExportImporter.round1(tAbs)
+                let tBase = priorTemp.isEmpty ? tAbs : (priorTemp.suffix(30).reduce(0, +) / Double(min(priorTemp.count, 30)))
+                d.wristTempDeltaC = AppleHealthExportImporter.round1(tAbs - tBase)
+                hasReal = true
+            } else if let tDelta = snap.vitals.tempDeltaCelsius {
+                d.wristTempDeltaC = AppleHealthExportImporter.round1(tDelta)
+                hasReal = true
+            }
+
+            // 5. Sleep session + hypnogram stages + overnight vitals + Bevel Sleep Score
+            var sleepStartEp: Int64? = nil
+            var sleepEndEp: Int64? = nil
+            if let sl = snap.sleep, sl.totalAsleepMinutes > 0 {
+                let asleepMin = Int(sl.totalAsleepMinutes.rounded())
+                let inBedMin = Int(sl.inBedMinutes.rounded())
+                let deepMin = sl.deepMinutes > 0 ? Int(sl.deepMinutes.rounded()) : nil
+                let remMin = sl.remMinutes > 0 ? Int(sl.remMinutes.rounded()) : nil
+                let coreMin = sl.coreMinutes > 0 ? Int(sl.coreMinutes.rounded()) : nil
+                let awakeMin = sl.awakeMinutes > 0 ? Int(sl.awakeMinutes.rounded()) : nil
+
+                sleepStartEp = Int64(sl.startDate.timeIntervalSince1970)
+                sleepEndEp = Int64(sl.endDate.timeIntervalSince1970)
+
+                let awakeBlocks = sl.stages.filter { $0.stageCode == 0 }.count
+                let continuityPct: Int? = awakeBlocks > 0
+                    ? max(20, min(100, 100 - awakeBlocks * 7 - Int((sl.awakeMinutes) * 0.8)))
+                    : nil
+
+                let hrDipPct: Double? = {
+                    guard let dayHr = d.liveHrBpm, dayHr > 0, snap.heartRate.sleepingMeanHR > 25 else { return nil }
+                    return AppleHealthExportImporter.round1(max(-10.0, min(40.0, (Double(dayHr) - snap.heartRate.sleepingMeanHR) / Double(dayHr) * 100.0)))
+                }()
+
+                let stageBlocks: [SleepStageBlock] = sl.stages.enumerated().map { idx, st in
+                    let kind: SleepStageKind = switch st.stageCode {
+                    case 0: .awake
+                    case 1: .rem
+                    case 3: .deep
+                    default: .core
+                    }
+                    return SleepStageBlock(
+                        id: "hk_st_\(iso)_\(idx)",
+                        stage: kind,
+                        startEpochSec: Int64(st.startDate.timeIntervalSince1970),
+                        endEpochSec: Int64(st.endDate.timeIntervalSince1970)
+                    )
+                }
+
+                let toTimed: ([TimedHealthSample]) -> [TimedBiometricPoint] = { arr in
+                    arr.map { s in
+                        let c = cal.dateComponents([.hour, .minute], from: s.date)
+                        let mod = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+                        return TimedBiometricPoint(
+                            minuteOfDay: mod,
+                            value: AppleHealthExportImporter.round1(s.value),
+                            epochSec: Int64(s.date.timeIntervalSince1970)
+                        )
+                    }
+                }
+
+                d.asleepMinutes = asleepMin
+                d.inBedMinutes = inBedMin
+                d.deepMinutes = deepMin
+                d.remMinutes = remMin
+                d.coreMinutes = coreMin
+                d.awakeMinutes = awakeMin
+                d.sleepDebtMinutes = max(Int((norms.sleepTargetHours * 60.0).rounded()) - asleepMin, 0)
+                d.sleepPct = WhoopPhysiologyEngine.computeBevelSleepScore(
+                    asleepMinutes: asleepMin,
+                    inBedMinutes: inBedMin > 0 ? inBedMin : nil,
+                    deepMinutes: deepMin,
+                    remMinutes: remMin,
+                    awakeMinutes: awakeMin,
+                    awakeCount: awakeBlocks,
+                    hrDipPct: hrDipPct,
+                    targetMinutes: norms.sleepTargetHours * 60.0
+                )
+                d.sleepSession = SleepSessionDetail(
+                    startEpochSec: sleepStartEp,
+                    endEpochSec: sleepEndEp,
+                    startTimeLabel: timeFmt.string(from: sl.startDate),
+                    endTimeLabel: timeFmt.string(from: sl.endDate),
+                    startDateTimeLabel: fullFmt.string(from: sl.startDate),
+                    sourceName: sl.sourceName,
+                    awakeSeconds: awakeMin.map { $0 * 60 },
+                    remSeconds: remMin.map { $0 * 60 },
+                    coreSeconds: coreMin.map { $0 * 60 },
+                    deepSeconds: deepMin.map { $0 * 60 },
+                    latencyMinutes: sl.latencyMinutes,
+                    efficiencyPct: Int(sl.efficiencyPct.rounded()),
+                    hrDipPct: hrDipPct,
+                    continuityPct: continuityPct,
+                    stages: stageBlocks,
+                    sleepHrSamples: toTimed(snap.sleepHrSamples),
+                    sleepHrvSamples: toTimed(snap.sleepHrvSamples),
+                    sleepRespSamples: toTimed(snap.sleepRespSamples),
+                    sleepSpo2Samples: toTimed(snap.sleepSpo2Samples)
+                )
+                hasReal = true
+            }
+
+            // 6. Activity, Workouts, HR Zones & Bevel Strain
+            if let steps = snap.steps { d.stepsCount = steps; hasReal = true }
+            if let kcal = snap.activeCalories { d.activeKcal = Int(kcal.rounded()); hasReal = true }
+            if let v = snap.vo2Max { d.vo2MaxMlKgMin = AppleHealthExportImporter.round1(v); hasReal = true }
+            if let hrr = snap.hrRecoveryBpm { d.hrRecoveryBpm = AppleHealthExportImporter.round1(hrr); hasReal = true }
+            if let w = snap.bodyWeightKg { d.bodyWeightKg = AppleHealthExportImporter.round1(w); hasReal = true }
+            if let f = snap.bodyFatPct { d.bodyFatPct = AppleHealthExportImporter.round1(f); hasReal = true }
+            if let l = snap.leanMassKg { d.leanMassKg = AppleHealthExportImporter.round1(l); hasReal = true }
+            if let s = snap.systolicBp { d.systolicBp = s; hasReal = true }
+            if let dia = snap.diastolicBp { d.diastolicBp = dia; hasReal = true }
+            if let dl = snap.daylightMinutes { d.daylightMinutes = dl; hasReal = true }
+            if let noise = snap.sleepNoiseOver50Db { d.sleepNoiseOver50Db = noise; hasReal = true }
+
+            let rhrBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
+                priorValues: priorRhr, populationMean: popRhr, populationSigma: 3.5, floorSigma: 2.0
             )
+            let lnHrvBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
+                priorValues: priorLnHrv, populationMean: popLnHrv, populationSigma: 0.24, floorSigma: 0.14
+            )
+            let respBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
+                priorValues: priorResp, populationMean: 15.2, populationSigma: 0.9, floorSigma: 0.5
+            )
+            let rhrRef = d.restingHrBpm ?? rhrBaseline.mean
+
+            var workoutSpans: [ClosedRange<Int64>] = []
+            if !snap.workouts.isEmpty {
+                var strengthMins = 0
+                d.workouts = snap.workouts.map { w in
+                    if w.isStrength { strengthMins += w.durationMinutes }
+                    let sEp = Int64(w.startDate.timeIntervalSince1970)
+                    let eEp = max(Int64(w.endDate.timeIntervalSince1970), sEp + Int64(w.durationMinutes * 60))
+                    workoutSpans.append(sEp...eEp)
+                    let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+                        durationMin: w.durationMinutes,
+                        kcal: w.activeCalories,
+                        avgHrBpm: w.avgHeartRate,
+                        rhrBpm: rhrRef,
+                        maxHrBpm: maxHr,
+                        banisterB: userProfile.sex.banisterB
+                    )
+                    return EffortEventItem(
+                        id: w.id.uuidString,
+                        title: w.name,
+                        timeRange: "\(timeFmt.string(from: w.startDate)) - \(timeFmt.string(from: w.endDate))",
+                        durationMin: w.durationMinutes,
+                        avgHrBpm: w.avgHeartRate,
+                        strainScore: ws.strain21,
+                        strainPct: ws.strainPct,
+                        categoryLabel: w.isStrength ? "Fuerza" : "Cardio",
+                        kcal: w.activeCalories,
+                        dateIso: iso
+                    )
+                }
+                d.strengthMinutes = strengthMins
+                hasReal = true
+            }
+
+            if !snap.intradayHrSamples.isEmpty {
+                let hrTuples: [(Int64, Int, Double)] = snap.intradayHrSamples.map { s in
+                    let ep = Int64(s.date.timeIntervalSince1970)
+                    let c = cal.dateComponents([.hour, .minute], from: s.date)
+                    return (ep, (c.hour ?? 0) * 60 + (c.minute ?? 0), s.value)
+                }
+                d.hrZoneMinutes = AppleHealthExportImporter.computeHrZoneMinutes(
+                    samples: hrTuples.map { ($0.0, $0.2) },
+                    workoutSpans: workoutSpans,
+                    maxHr: maxHr,
+                    rhr: rhrRef
+                )
+                hasReal = true
+            }
+
+            // 7. Bevel Adaptive Recovery % (strictly from real measured sensors)
+            d.recoveryPct = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+                hrvMs: d.hrvMs,
+                rhrBpm: d.restingHrBpm,
+                respRpm: d.respRateRpm,
+                spo2Pct: d.spo2Percent,
+                wristTempDeltaC: d.wristTempDeltaC,
+                lnHrvBaseline: lnHrvBaseline,
+                rhrBaseline: rhrBaseline,
+                respBaseline: respBaseline
+            )
+
+            // 8. Bevel Calibrated Strain
+            if let strainPair = WhoopPhysiologyEngine.computeBevelStrain(
+                profile: userProfile,
+                rhrBpm: rhrRef,
+                hrZoneMinutes: d.hrZoneMinutes,
+                workouts: d.workouts,
+                activeKcal: d.activeKcal.map { Double($0) }
+            ) {
+                d.strain21 = strainPair.strain21
+                d.strainPct = strainPair.strainPct
+                hasReal = true
+            }
+
+            // 9. 5-Minute Stress + CONTINUOUS Cross-Day Energy Bank (ZERO midnight jump!)
+            if !snap.intradayHrSamples.isEmpty {
+                let hrTuples: [(Int64, Int, Double)] = snap.intradayHrSamples.map { s in
+                    let ep = Int64(s.date.timeIntervalSince1970)
+                    let c = cal.dateComponents([.hour, .minute], from: s.date)
+                    return (ep, (c.hour ?? 0) * 60 + (c.minute ?? 0), s.value)
+                }
+                let hrvFactor: Double = {
+                    guard let h = d.hrvMs, h > 2 else { return 1.0 }
+                    let ratio = exp(lnHrvBaseline.mean) / h
+                    return min(max(ratio, 0.72), 1.40)
+                }()
+                let stress5m = AppleHealthExportImporter.buildFiveMinuteStressSamples(
+                    hrSamples: hrTuples,
+                    rhrRef: rhrRef,
+                    maxHr: maxHr,
+                    hrvFactor: hrvFactor,
+                    sleepStartEpoch: sleepStartEp,
+                    sleepEndEpoch: sleepEndEp
+                )
+                if !stress5m.isEmpty {
+                    d.stressSamples5m = stress5m
+                    d.stressScore = Int((stress5m.map(\.value).reduce(0, +) / Double(stress5m.count)).rounded())
+
+                    let isConsecutiveDay: Bool = {
+                        guard let prevIso = prevDayIso,
+                              let prevDt = isoFormatter.date(from: prevIso),
+                              let diff = cal.dateComponents([.day], from: prevDt, to: snap.day).day else { return false }
+                        return diff == 1
+                    }()
+                    let startingEnergy: Double = {
+                        if isConsecutiveDay, let carried = prevDayEndEnergy {
+                            return carried
+                        }
+                        if sleepStartEp != nil {
+                            return 32.0
+                        }
+                        return Double(d.recoveryPct ?? d.sleepPct ?? 58)
+                    }()
+
+                    let energy5m = AppleHealthExportImporter.buildContinuousFiveMinuteEnergySamples(
+                        stressSamples: stress5m,
+                        startingEnergy: startingEnergy,
+                        recoveryPct: d.recoveryPct,
+                        sleepPct: d.sleepPct,
+                        sleepStartEpoch: sleepStartEp,
+                        sleepEndEpoch: sleepEndEp,
+                        workoutSpans: workoutSpans
+                    )
+                    if let lastPt = energy5m.last {
+                        d.energySamples5m = energy5m
+                        d.energyBankPercent = Int(lastPt.value.rounded())
+                        prevDayEndEnergy = lastPt.value
+                        prevDayIso = iso
+                    }
+                    hasReal = true
+                }
+            }
+
+            // Advance causal baselines AFTER computing today
+            if let h = d.hrvMs, h > 2 { priorLnHrv.append(log(h)) }
+            if let r = d.restingHrBpm { priorRhr.append(r) }
+            if let rr = d.respRateRpm { priorResp.append(rr) }
+            if let t = d.wristTempAbsoluteC { priorTemp.append(t) }
+
+            if hasReal {
+                realHistory[iso] = d
+                updatedAny = true
+            }
         }
-        if hasReal {
-            realHistory[iso] = d
+
+        if updatedAny {
             hasImportedOrPairedRealData = true
+            clearPreviewSeededArtifactsOnRealData()
             healthKitAuthorized = true
-            healthKitLastSyncText = "Actualizado"
+            dataRevision += 1
             persistState()
         }
     }
@@ -1313,6 +1947,7 @@ final class ImprovingStore: ObservableObject {
                     }
                     self.realHistory[iso] = d
                     self.hasImportedOrPairedRealData = true
+                    self.clearPreviewSeededArtifactsOnRealData()
                 case .battery(let pct, _, _, _):
                     self.whoopBatteryPct = pct
                 case .log(let msg):
@@ -1324,7 +1959,7 @@ final class ImprovingStore: ObservableObject {
         }
     }
 
-    // MARK: - AI Coach (Exact Android 3-Tier Engine + Zero-Fabrication JSON Context)
+    // MARK: - AI Coach Context & Multi-Turn Chat
 
     private func buildBiometricContextJson() -> (json: String, highlights: [String]) {
         let av = dataAvailability
@@ -1342,8 +1977,8 @@ final class ImprovingStore: ObservableObject {
         if let steps = stepsCount { highlights.append("\(steps) pasos") }
 
         let dayJournal = journalCheckinsByDate[selectedDateIso] ?? [:]
-        let yesHabits = Self.journalCatalog.filter { dayJournal[$0.id] == .yes }.map(\.title)
-        let noHabits = Self.journalCatalog.filter { dayJournal[$0.id] == .no }.map(\.title)
+        let yesHabits = Self.journalCatalog.filter { !$0.isAuto && dayJournal[$0.id] == .yes }.map(\.title)
+        let noHabits = Self.journalCatalog.filter { !$0.isAuto && dayJournal[$0.id] == .no }.map(\.title)
 
         let perfil: [String: Any] = [
             "nombre": userProfile.userName.isEmpty ? "Usuario" : userProfile.userName,
@@ -1381,7 +2016,10 @@ final class ImprovingStore: ObservableObject {
             "marcados_no": noHabits
         ]
 
+        let nowFmt = DateFormatter()
+        nowFmt.dateFormat = "HH:mm"
         let payload: [String: Any] = [
+            "hora_local_actual": nowFmt.string(from: Date()),
             "fecha_seleccionada": selectedDateIso,
             "origen_datos": hasImportedOrPairedRealData ? "Apple Health / Sensores reales" : "Modo vista previa",
             "perfil": perfil,
@@ -1398,8 +2036,15 @@ final class ImprovingStore: ObservableObject {
 
     func sendCoachPrompt(_ rawPrompt: String) {
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
-        let userMsg = CoachChatMessage(id: UUID().uuidString, isUser: true, text: prompt, timestampLabel: "Ahora", isSuggestionChip: false)
+        guard !prompt.isEmpty, !isCoachThinking else { return }
+
+        let now = Date()
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm"
+        let tsLabel = timeFmt.string(from: now)
+
+        let historySnap = Array(coachMessages.suffix(16))
+        let userMsg = CoachChatMessage(id: UUID().uuidString, isUser: true, text: prompt, timestampLabel: tsLabel, isSuggestionChip: false)
         coachMessages.append(userMsg)
         isCoachThinking = true
 
@@ -1408,15 +2053,15 @@ final class ImprovingStore: ObservableObject {
         let model = selectedGeminiModel
         let userName = userProfile.userName
         let missing = dataAvailability.missingCategoryNames
-        let historySnap = Array(coachMessages.dropLast().suffix(8))
         let prevId = activeCoachInteractionId
 
-        Task {
+        Task { [weak self] in
             let result = await GeminiCoachService.shared.askLiveCoach(
                 prompt: prompt,
                 apiKey: key,
                 selectedModel: model,
                 userName: userName,
+                currentDate: now,
                 biometricContextJson: ctx.json,
                 availableHighlights: ctx.highlights,
                 missingCategories: missing,
@@ -1424,18 +2069,21 @@ final class ImprovingStore: ObservableObject {
                 previousInteractionId: prevId
             )
             await MainActor.run {
+                guard let self else { return }
                 self.isCoachThinking = false
                 if let newId = result.interactionId {
                     self.activeCoachInteractionId = newId
                 }
+                let replyFmt = DateFormatter()
+                replyFmt.dateFormat = "HH:mm"
                 self.coachMessages.append(
                     CoachChatMessage(
                         id: UUID().uuidString,
                         isUser: false,
-                        verdictTitle: result.verdictTitle,
+                        verdictTitle: result.verdictTitle.isEmpty ? nil : result.verdictTitle,
                         text: result.text,
                         bullets: result.bullets,
-                        timestampLabel: "Ahora",
+                        timestampLabel: replyFmt.string(from: Date()),
                         isSuggestionChip: false,
                         modelUsed: result.modelUsed
                     )
@@ -1447,11 +2095,13 @@ final class ImprovingStore: ObservableObject {
     func startNewCleanChat() {
         coachMessages = []
         activeCoachInteractionId = nil
+        isCoachThinking = false
     }
 
     func updateGeminiConfig(apiKey: String, model: String) {
         geminiApiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedGeminiModel = model
+        dataRevision += 1
         persistState()
     }
 
@@ -1472,7 +2122,8 @@ final class ImprovingStore: ObservableObject {
             smartAlarmEnabled: smartAlarmEnabled,
             wakeOffsetMinutes: wakeOffsetMinutes,
             sleepGoalPct: sleepGoalPct,
-            visibleTabs: Array(visibleTabs)
+            visibleTabs: Array(visibleTabs),
+            sectionCoachingCache: sectionCoachingCache
         )
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: persistenceURL, options: .atomic)
@@ -1498,5 +2149,6 @@ final class ImprovingStore: ObservableObject {
         wakeOffsetMinutes = snap.wakeOffsetMinutes
         sleepGoalPct = snap.sleepGoalPct
         if !snap.visibleTabs.isEmpty { visibleTabs = Set(snap.visibleTabs) }
+        if let cached = snap.sectionCoachingCache { sectionCoachingCache = cached }
     }
 }

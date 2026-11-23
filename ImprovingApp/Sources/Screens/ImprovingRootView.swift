@@ -74,7 +74,6 @@ struct ImprovingRootView: View {
                             onDismiss: { quickMenuOpen = false },
                             onOpenNutrition: { push(.nutricion) },
                             onOpenAskBevel: {
-                                store.startNewCleanChat()
                                 push(.askBevel)
                             },
                             onOpenFitness: { selectTab(.fitness) },
@@ -100,7 +99,6 @@ struct ImprovingRootView: View {
                                 withAnimation { quickMenuOpen.toggle() }
                             },
                             onOpenAskBevel: {
-                                store.startNewCleanChat()
                                 push(.askBevel)
                             },
                             onExpand: {

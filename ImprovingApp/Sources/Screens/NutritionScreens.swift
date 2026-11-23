@@ -7,7 +7,7 @@ struct NutricionScreen: View {
 
     var body: some View {
         let meals = store.mealsToday
-        let glasses = store.hydrationGlassesByDate[store.selectedDateIso] ?? 8
+        let glasses = store.hydrationGlassesByDate[store.selectedDateIso] ?? 0
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
 
         ScrollView {
@@ -159,9 +159,8 @@ struct NutrientDetailScreen: View {
             ? "Añadir 250,0 ml"
             : (isAlcohol ? "+ Añadir 1 bebidas" : (isCaffeine ? "+ Añadir 50mg" : "+ Añadir 100mg"))
 
-        let baseVal: Double = isHydration
-            ? Double(store.hydrationGlassesByDate[store.selectedDateIso] ?? 8) * 250.0
-            : (isCaffeine ? 3.1 : (isAlcohol ? 0.0 : 464.9))
+        let glassesToday = store.hydrationGlassesByDate[store.selectedDateIso] ?? 0
+        let baseVal: Double = isHydration ? Double(glassesToday) * 250.0 : 0.0
         let totalVal = baseVal + extraAmount
 
         ZStack(alignment: .bottom) {
@@ -269,18 +268,52 @@ struct NutrientDetailScreen: View {
                     }
                     .padding(.horizontal, 16)
 
-                    // Linked Food / Hydration Rows
+                    // Linked Food / Hydration Rows (Strictly real user-logged entries — ZERO invented foods!)
                     VStack(spacing: 10) {
                         if isHydration {
-                            nutrientEntryRow(emoji: "💧", time: "08:59", title: "Hidratación", meta: nil, amount: "268,7 ml")
-                            nutrientEntryRow(emoji: "💧", time: "13:20", title: "Hidratación", meta: nil, amount: "500,0 ml")
-                        } else if isAlcohol {
-                            nutrientEntryRow(emoji: "🍪", time: "08:53", title: "Galletas de avena con chispas", meta: "🍎 134 kcal", amount: "+0 bebidas (0g)")
-                        } else if isCaffeine {
-                            nutrientEntryRow(emoji: "🍪", time: "08:53", title: "Galletas de avena con c...", meta: "🍎 134 kcal  🧪 5  🌾 21  🍗 2", amount: "+3,1mg")
+                            if glassesToday > 0 {
+                                nutrientEntryRow(
+                                    emoji: "💧",
+                                    time: store.dateLabel,
+                                    title: "Hidratación registrada (\(glassesToday) vasos)",
+                                    meta: nil,
+                                    amount: String(format: "%.0f ml", Double(glassesToday) * 250.0)
+                                )
+                            } else {
+                                BevelCard(cornerRadius: 16) {
+                                    Text("No has registrado hidratación este día. Pulsa abajo para añadir un vaso de 250 ml.")
+                                        .font(ImprovingFont.body(13.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(14)
+                                }
+                            }
+                        } else if !store.mealsToday.isEmpty {
+                            ForEach(store.mealsToday) { meal in
+                                nutrientEntryRow(
+                                    emoji: "🍽️",
+                                    time: meal.timeLabel,
+                                    title: meal.title,
+                                    meta: "🍎 \(meal.kcal) kcal  🍗 \(meal.proteinG)g  🌾 \(meal.carbsG)g  🧪 \(meal.fatG)g",
+                                    amount: "\(meal.kcal) kcal"
+                                )
+                            }
+                        } else if extraAmount > 0 {
+                            nutrientEntryRow(
+                                emoji: isCaffeine ? "☕" : (isAlcohol ? "🍷" : "✨"),
+                                time: "Hoy",
+                                title: "Registro manual de \(key.lowercased())",
+                                meta: nil,
+                                amount: isAlcohol ? "+\(Int(extraAmount)) bebidas" : String(format: "+%.0fmg", extraAmount)
+                            )
                         } else {
-                            nutrientEntryRow(emoji: "🥛", time: "08:59", title: "Leche con chocolate", meta: "🍎 227 kcal", amount: "+444,6mg")
-                            nutrientEntryRow(emoji: "🍪", time: "08:53", title: "Galletas de avena con...", meta: "🍎 134 kcal  🧪 5  🌾 21  🍗 2", amount: "+20,3mg")
+                            BevelCard(cornerRadius: 16) {
+                                Text("No hay registros de \(key.lowercased()) en esta fecha.")
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(14)
+                            }
                         }
                     }
                     .padding(.horizontal, 16)

@@ -5,30 +5,81 @@ import Combine
 
 // MARK: - HealthKit Processing Models & Data Types
 
-/// One workout read from HealthKit (Apple Watch or any other source).
 public struct WorkoutSummary: Sendable {
     public let id: UUID
     public let activityType: HKWorkoutActivityType
     public let name: String
     public let sfSymbol: String
     public let startDate: Date
+    public let endDate: Date
     public let durationMinutes: Int
     public let activeCalories: Int
     public let avgHeartRate: Int
     public let maxHeartRate: Int
+    public let isStrength: Bool
+
+    public init(
+        id: UUID,
+        activityType: HKWorkoutActivityType,
+        name: String,
+        sfSymbol: String,
+        startDate: Date,
+        endDate: Date? = nil,
+        durationMinutes: Int,
+        activeCalories: Int,
+        avgHeartRate: Int,
+        maxHeartRate: Int,
+        isStrength: Bool = false
+    ) {
+        self.id = id
+        self.activityType = activityType
+        self.name = name
+        self.sfSymbol = sfSymbol
+        self.startDate = startDate
+        self.endDate = endDate ?? startDate.addingTimeInterval(Double(durationMinutes) * 60.0)
+        self.durationMinutes = durationMinutes
+        self.activeCalories = activeCalories
+        self.avgHeartRate = avgHeartRate
+        self.maxHeartRate = maxHeartRate
+        self.isStrength = isStrength
+    }
 }
 
-/// Everything the reader extracts for one day. Pure data: no scoring, no persistence.
+public struct TimedHealthSample: Sendable {
+    public let date: Date
+    public let value: Double
+}
+
+public struct SleepStageSample: Sendable {
+    public let startDate: Date
+    public let endDate: Date
+    public let stageCode: Int // 0=awake, 1=rem, 2=core, 3=deep
+}
+
 public struct DailyHealthSnapshot: Sendable {
     public let day: Date
     public let sleep: NightlySleepSession?
     public let hrv: ProcessedNightlyHRV
     public let heartRate: ProcessedNightlyHeartRate
     public let vitals: ProcessedNocturnalVitals
-    public let steps: Int
-    public let activeCalories: Double
+    public let steps: Int?
+    public let activeCalories: Double?
     public let workouts: [WorkoutSummary]
     public let liveHeartRate: Double?
+    public let intradayHrSamples: [TimedHealthSample]
+    public let sleepHrSamples: [TimedHealthSample]
+    public let sleepHrvSamples: [TimedHealthSample]
+    public let sleepRespSamples: [TimedHealthSample]
+    public let sleepSpo2Samples: [TimedHealthSample]
+    public let vo2Max: Double?
+    public let hrRecoveryBpm: Double?
+    public let bodyWeightKg: Double?
+    public let bodyFatPct: Double?
+    public let leanMassKg: Double?
+    public let systolicBp: Int?
+    public let diastolicBp: Int?
+    public let daylightMinutes: Int?
+    public let sleepNoiseOver50Db: Bool?
 }
 
 public enum DataConfidence: String, Codable, Sendable {
@@ -45,31 +96,36 @@ public struct NightlySleepSession: Sendable {
     public let deepMinutes: Double
     public let remMinutes: Double
     public let coreMinutes: Double
-    public let awakeMinutes: Double // WASO
-    public let efficiencyPct: Double // (totalAsleep / inBed) * 100
-    public let restorativePct: Double // ((deep + rem) / totalAsleep) * 100
+    public let awakeMinutes: Double
+    public let latencyMinutes: Int?
+    public let efficiencyPct: Double
+    public let restorativePct: Double
     public let isPrimary: Bool
+    public let sourceName: String?
+    public let stages: [SleepStageSample]
 }
 
 public struct ProcessedNightlyHRV: Sendable {
     public let medianHRV: Double
-    public let weightedHRV: Double // 60% weight to last third of night
+    public let weightedHRV: Double
     public let sampleCount: Int
     public let confidence: DataConfidence
 }
 
 public struct ProcessedNightlyHeartRate: Sendable {
     public let restingHR: Double
+    public let sleepingMeanHR: Double
     public let sleepingMinHR: Double
     public let sleepingMinHRTimestamp: Date?
-    public let nadirElapsedFraction: Double // 0.0 (early) to 1.0 (late in the night)
+    public let nadirElapsedFraction: Double
 }
 
 public struct ProcessedNocturnalVitals: Sendable {
-    public let tempDeltaCelsius: Double
-    public let meanRespiratoryRate: Double
-    public let meanSpO2: Double
-    public let minSpO2: Double
+    public let tempAbsoluteCelsius: Double?
+    public let tempDeltaCelsius: Double?
+    public let meanRespiratoryRate: Double?
+    public let meanSpO2: Double?
+    public let minSpO2: Double?
 }
 
 public struct WorkoutZoneDistribution: Sendable {
@@ -77,16 +133,16 @@ public struct WorkoutZoneDistribution: Sendable {
     public let activityType: HKWorkoutActivityType
     public let durationMinutes: Double
     public let activeCalories: Double
-    public let z1Minutes: Double // 50-60% FC_Max
-    public let z2Minutes: Double // 60-70% FC_Max
-    public let z3Minutes: Double // 70-80% FC_Max
-    public let z4Minutes: Double // 80-90% FC_Max
-    public let z5Minutes: Double // 90-100% FC_Max
+    public let z1Minutes: Double
+    public let z2Minutes: Double
+    public let z3Minutes: Double
+    public let z4Minutes: Double
+    public let z5Minutes: Double
     public let avgHeartRate: Double
     public let maxHeartRate: Double
 }
 
-// MARK: - HealthKitReader (read-only access to Apple Watch / Apple Health data)
+// MARK: - HealthKitReader (Strict Zero-Fabrication Live Apple Health Reader)
 
 @MainActor
 public final class HealthKitReader: ObservableObject {
@@ -98,43 +154,52 @@ public final class HealthKitReader: ObservableObject {
     @Published public private(set) var lastSyncTimestamp: Date? = nil
     @Published public private(set) var isSyncing: Bool = false
     @Published public private(set) var currentLiveHR: Double? = nil
-    /// Latest snapshot produced by `syncLatestMetrics()`; observers re-publish it automatically.
     @Published public private(set) var latestSnapshot: DailyHealthSnapshot? = nil
 
-    // Observers retention
     private var activeObserverQueries: [HKObserverQuery] = []
 
     public init() {}
 
-    // MARK: - 1. Authorization & Types Setup
-    
+    // MARK: - 1. Authorization
+
     public func requestAuthorization() async throws {
         guard HKHealthStore.isHealthDataAvailable() else {
-            throw NSError(domain: "HealthKitManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "HealthKit no estÃ¡ disponible en este dispositivo."])
+            throw NSError(domain: "HealthKitManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "HealthKit no está disponible en este dispositivo."])
         }
 
-        let readTypes: Set<HKObjectType> = [
-            HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
-            HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!,
-            HKQuantityType.quantityType(forIdentifier: .heartRate)!,
-            HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!,
-            HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature)!,
-            HKQuantityType.quantityType(forIdentifier: .respiratoryRate)!,
-            HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)!,
-            HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
-            HKQuantityType.quantityType(forIdentifier: .stepCount)!,
-            HKQuantityType.quantityType(forIdentifier: .vo2Max)!,
-            HKQuantityType.quantityType(forIdentifier: .bodyMass)!,
-            HKQuantityType.quantityType(forIdentifier: .leanBodyMass)!,
-            HKQuantityType.quantityType(forIdentifier: .bodyFatPercentage)!,
+        var readTypes: Set<HKObjectType> = [
             HKObjectType.workoutType()
         ]
+        let qIds: [HKQuantityTypeIdentifier] = [
+            .heartRateVariabilitySDNN,
+            .restingHeartRate,
+            .heartRate,
+            .appleSleepingWristTemperature,
+            .respiratoryRate,
+            .oxygenSaturation,
+            .activeEnergyBurned,
+            .stepCount,
+            .vo2Max,
+            .heartRateRecoveryOneMinute,
+            .bodyMass,
+            .leanBodyMass,
+            .bodyFatPercentage,
+            .bloodPressureSystolic,
+            .bloodPressureDiastolic,
+            .environmentalAudioExposure,
+            .timeInDaylight
+        ]
+        for id in qIds {
+            if let t = HKQuantityType.quantityType(forIdentifier: id) {
+                readTypes.insert(t)
+            }
+        }
+        if let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) {
+            readTypes.insert(sleepType)
+        }
 
-        // Read-only: this package never writes to Apple Health.
         try await healthStore.requestAuthorization(toShare: [], read: readTypes)
         self.isAuthorized = true
-        
-        // Setup background deliveries and observers
         await setupBackgroundDeliveryAndObservers()
     }
 
@@ -143,36 +208,29 @@ public final class HealthKitReader: ObservableObject {
     public func setupBackgroundDeliveryAndObservers() async {
         guard isAuthorized else { return }
 
-        // Frecuencia .immediate para SueÃ±o y Entrenamientos
-        enableBackgroundDelivery(for: HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!, frequency: .immediate)
+        if let s = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) {
+            enableBackgroundDelivery(for: s, frequency: .immediate)
+        }
         enableBackgroundDelivery(for: HKObjectType.workoutType(), frequency: .immediate)
-
-        // Frecuencia .hourly para VFC, RHR y FC continua
-        enableBackgroundDelivery(for: HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!, frequency: .hourly)
-        enableBackgroundDelivery(for: HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!, frequency: .hourly)
-        enableBackgroundDelivery(for: HKQuantityType.quantityType(forIdentifier: .heartRate)!, frequency: .hourly)
-
+        for id: HKQuantityTypeIdentifier in [.heartRateVariabilitySDNN, .restingHeartRate, .heartRate] {
+            if let t = HKQuantityType.quantityType(forIdentifier: id) {
+                enableBackgroundDelivery(for: t, frequency: .hourly)
+            }
+        }
         registerObservers()
     }
 
     private func enableBackgroundDelivery(for type: HKObjectType, frequency: HKUpdateFrequency) {
-        healthStore.enableBackgroundDelivery(for: type, frequency: frequency) { success, error in
-            if let error = error {
-                print("[HealthKitManager] Error habilitando background delivery para \(type): \(error.localizedDescription)")
-            }
-        }
+        healthStore.enableBackgroundDelivery(for: type, frequency: frequency) { _, _ in }
     }
 
     private func registerObservers() {
-        let observedTypes: [HKSampleType] = [
-            HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!,
-            HKObjectType.workoutType(),
-            HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)!,
-            HKQuantityType.quantityType(forIdentifier: .restingHeartRate)!,
-            HKQuantityType.quantityType(forIdentifier: .heartRate)!,
-            HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
-            HKQuantityType.quantityType(forIdentifier: .stepCount)!
-        ]
+        guard activeObserverQueries.isEmpty else { return }
+        var observedTypes: [HKSampleType] = [HKObjectType.workoutType()]
+        if let s = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) { observedTypes.append(s) }
+        for id: HKQuantityTypeIdentifier in [.heartRateVariabilitySDNN, .restingHeartRate, .heartRate, .activeEnergyBurned, .stepCount] {
+            if let t = HKQuantityType.quantityType(forIdentifier: id) { observedTypes.append(t) }
+        }
 
         for sampleType in observedTypes {
             let query = HKObserverQuery(sampleType: sampleType, predicate: nil) { [weak self] _, completionHandler, error in
@@ -181,7 +239,7 @@ public final class HealthKitReader: ObservableObject {
                     return
                 }
                 Task { @MainActor [weak self] in
-                    guard let self = self else {
+                    guard let self else {
                         completionHandler()
                         return
                     }
@@ -194,7 +252,7 @@ public final class HealthKitReader: ObservableObject {
         }
     }
 
-    // MARK: - 3. Core Sync & Historical Ingestion (60 Days Cold Start)
+    // MARK: - 3. Single-Day & Multi-Day History Sync (Zero Fabricated Defaults!)
 
     @discardableResult
     public func syncLatestMetrics() async -> DailyHealthSnapshot? {
@@ -202,28 +260,57 @@ public final class HealthKitReader: ObservableObject {
         self.isSyncing = true
         defer { self.isSyncing = false }
 
-        let calendar = Calendar.current
-        let now = Date()
-        let startOfToday = calendar.startOfDay(for: now)
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        let snapshot = await fetchDailySnapshot(for: startOfToday)
+        self.latestSnapshot = snapshot
+        self.lastSyncTimestamp = Date()
+        return snapshot
+    }
 
-        // 1. Process Nightly Sleep Session
-        let sleepSession = await extractPrimarySleepSession(around: startOfToday)
-        
-        // 2. Process Nocturnal HRV (filtered strictly to sleep window)
-        let hrvData = await extractNocturnalHRV(sleepSession: sleepSession, targetDay: startOfToday)
-        
-        // 3. Process RHR and Sleeping Min HR (nadir)
-        let hrData = await extractNocturnalHeartRates(sleepSession: sleepSession, targetDay: startOfToday)
-        
-        // 4. Process Secondary Nocturnal Vitals
-        let vitalsData = await extractNocturnalVitals(sleepSession: sleepSession)
-        
-        // 5. Activity, Steps and Workouts
-        let (steps, cals, workouts) = await extractDailyActivity(targetDay: startOfToday)
+    public func syncHistoryDays(days: Int = 60) async -> [DailyHealthSnapshot] {
+        guard isAuthorized else { return [] }
+        self.isSyncing = true
+        defer { self.isSyncing = false }
 
-        // 6. Publish the snapshot (consumers decide what to do with it)
-        let snapshot = DailyHealthSnapshot(
-            day: startOfToday,
+        let cal = Calendar.current
+        let todayStart = cal.startOfDay(for: Date())
+        var results: [DailyHealthSnapshot] = []
+        results.reserveCapacity(days)
+
+        for back in (0..<days).reversed() {
+            guard let targetDay = cal.date(byAdding: .day, value: -back, to: todayStart) else { continue }
+            let snap = await fetchDailySnapshot(for: targetDay)
+            results.append(snap)
+        }
+        if let last = results.last {
+            self.latestSnapshot = last
+        }
+        self.lastSyncTimestamp = Date()
+        return results
+    }
+
+    public func fetchDailySnapshot(for targetDay: Date) async -> DailyHealthSnapshot {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: targetDay)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+
+        let sleepSession = await extractPrimarySleepSession(around: dayStart)
+        let (hrvData, sleepHrvSamples) = await extractNocturnalHRV(sleepSession: sleepSession, targetDay: dayStart)
+        let (hrData, sleepHrSamples, intradayHrSamples, daytimeMeanHr) = await extractHeartRates(sleepSession: sleepSession, targetDay: dayStart)
+        let (vitalsData, sleepRespSamples, sleepSpo2Samples, sleepNoiseOver50) = await extractNocturnalVitals(sleepSession: sleepSession, targetDay: dayStart)
+        let (steps, cals, workouts) = await extractDailyActivity(targetDay: dayStart)
+
+        let vo2 = await queryMeanQuantity(.vo2Max, unit: HKUnit(from: "mL/kg*min"), start: dayStart, end: dayEnd)
+        let hrr = await queryMeanQuantity(.heartRateRecoveryOneMinute, unit: HKUnit.count().unitDivided(by: .minute()), start: dayStart, end: dayEnd)
+        let weight = await queryMeanQuantity(.bodyMass, unit: .gramUnit(with: .kilo), start: dayStart, end: dayEnd)
+        let fat = await queryMeanQuantity(.bodyFatPercentage, unit: .percent(), start: dayStart, end: dayEnd).map { $0 <= 1.0 ? $0 * 100.0 : $0 }
+        let lean = await queryMeanQuantity(.leanBodyMass, unit: .gramUnit(with: .kilo), start: dayStart, end: dayEnd)
+        let sysBp = await queryMeanQuantity(.bloodPressureSystolic, unit: .millimeterOfMercury(), start: dayStart, end: dayEnd).map { Int($0.rounded()) }
+        let diaBp = await queryMeanQuantity(.bloodPressureDiastolic, unit: .millimeterOfMercury(), start: dayStart, end: dayEnd).map { Int($0.rounded()) }
+        let daylight = await querySumQuantity(.timeInDaylight, unit: .minute(), start: dayStart, end: dayEnd).map { Int($0.rounded()) }
+
+        return DailyHealthSnapshot(
+            day: dayStart,
             sleep: sleepSession,
             hrv: hrvData,
             heartRate: hrData,
@@ -231,24 +318,34 @@ public final class HealthKitReader: ObservableObject {
             steps: steps,
             activeCalories: cals,
             workouts: workouts,
-            liveHeartRate: currentLiveHR
+            liveHeartRate: daytimeMeanHr,
+            intradayHrSamples: intradayHrSamples,
+            sleepHrSamples: sleepHrSamples,
+            sleepHrvSamples: sleepHrvSamples,
+            sleepRespSamples: sleepRespSamples,
+            sleepSpo2Samples: sleepSpo2Samples,
+            vo2Max: vo2,
+            hrRecoveryBpm: hrr,
+            bodyWeightKg: weight,
+            bodyFatPct: fat,
+            leanMassKg: lean,
+            systolicBp: sysBp,
+            diastolicBp: diaBp,
+            daylightMinutes: daylight,
+            sleepNoiseOver50Db: sleepNoiseOver50
         )
-        self.latestSnapshot = snapshot
-        self.lastSyncTimestamp = Date()
-        return snapshot
     }
 
-    // MARK: - 4. Advanced Sleep Analysis & Overlap Deduplication
+    // MARK: - 4. Sleep Session with Interval Deduplication
 
     public func extractPrimarySleepSession(around targetDate: Date) async -> NightlySleepSession? {
         guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
 
-        let calendar = Calendar.current
-        // Window from 18:00 of previous day to 14:00 of target day
-        guard let windowStart = calendar.date(byAdding: .hour, value: -14, to: targetDate),
-              let windowEnd = calendar.date(byAdding: .hour, value: 14, to: targetDate) else { return nil }
+        let cal = Calendar.current
+        guard let windowStart = cal.date(byAdding: .hour, value: -10, to: targetDate),
+              let windowEnd = cal.date(byAdding: .hour, value: 16, to: targetDate) else { return nil }
 
-        let predicate = HKQuery.predicateForSamples(withStart: windowStart, end: windowEnd, options: .strictStartDate)
+        let predicate = HKQuery.predicateForSamples(withStart: windowStart, end: windowEnd, options: [])
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
         let samples: [HKCategorySample] = await withCheckedContinuation { continuation in
@@ -257,446 +354,440 @@ public final class HealthKitReader: ObservableObject {
             }
             healthStore.execute(query)
         }
-
         guard !samples.isEmpty else { return nil }
 
-        // Filter and prioritize native Apple Watch samples over third-party apps
-        let appleWatchSamples = samples.filter { sample in
-            let bundle = sample.sourceRevision.source.bundleIdentifier.lowercased()
-            return bundle.contains("apple") || sample.device?.name?.contains("Apple Watch") == true
+        // Keep only samples whose wake/end date falls on targetDate (avoiding previous night leakage)
+        let targetEnd = cal.date(byAdding: .day, value: 1, to: targetDate)!
+        let daySamples = samples.filter { $0.endDate >= targetDate && $0.endDate < targetEnd }
+        guard !daySamples.isEmpty else { return nil }
+
+        let appleWatchSamples = daySamples.filter { s in
+            let bundle = s.sourceRevision.source.bundleIdentifier.lowercased()
+            return bundle.contains("apple") || s.device?.name?.localizedCaseInsensitiveContains("watch") == true
         }
-        let cleanSamples = appleWatchSamples.isEmpty ? samples : appleWatchSamples
+        let cleanSamples = appleWatchSamples.isEmpty ? daySamples : appleWatchSamples
 
-        // Merge intervals separated by less than 20 minutes of awake
-        var mergedIntervals: [(start: Date, end: Date, value: Int)] = []
-        for sample in cleanSamples {
-            if let last = mergedIntervals.last,
-               sample.startDate.timeIntervalSince(last.end) < 20 * 60,
-               last.value != HKCategoryValueSleepAnalysis.awake.rawValue,
-               sample.value != HKCategoryValueSleepAnalysis.awake.rawValue {
-                // Merge contiguous sleep stages
-                mergedIntervals[mergedIntervals.count - 1].end = max(last.end, sample.endDate)
-            } else {
-                mergedIntervals.append((start: sample.startDate, end: sample.endDate, value: sample.value))
-            }
-        }
+        var deepRanges: [(Date, Date)] = []
+        var remRanges: [(Date, Date)] = []
+        var coreRanges: [(Date, Date)] = []
+        var unspecRanges: [(Date, Date)] = []
+        var awakeRanges: [(Date, Date)] = []
+        var inBedRanges: [(Date, Date)] = []
+        var stageBlocks: [SleepStageSample] = []
+        var sourceName: String? = nil
 
-        // Tally minutes by sleep stage
-        var inBedMin: Double = 0
-        var deepMin: Double = 0
-        var remMin: Double = 0
-        var coreMin: Double = 0
-        var awakeMin: Double = 0
-        var overallStart: Date?
-        var overallEnd: Date?
-
-        for sample in cleanSamples {
-            let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
-            if duration <= 0 { continue }
-
-            if overallStart == nil || sample.startDate < overallStart! { overallStart = sample.startDate }
-            if overallEnd == nil || sample.endDate > overallEnd! { overallEnd = sample.endDate }
-
-            switch sample.value {
+        for s in cleanSamples where s.endDate > s.startDate {
+            if sourceName == nil { sourceName = s.sourceRevision.source.name }
+            switch s.value {
             case HKCategoryValueSleepAnalysis.inBed.rawValue:
-                inBedMin += duration
+                inBedRanges.append((s.startDate, s.endDate))
             case HKCategoryValueSleepAnalysis.awake.rawValue:
-                awakeMin += duration
-            case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
-                deepMin += duration
+                awakeRanges.append((s.startDate, s.endDate))
+                stageBlocks.append(SleepStageSample(startDate: s.startDate, endDate: s.endDate, stageCode: 0))
             case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
-                remMin += duration
+                remRanges.append((s.startDate, s.endDate))
+                stageBlocks.append(SleepStageSample(startDate: s.startDate, endDate: s.endDate, stageCode: 1))
             case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
-                coreMin += duration
+                coreRanges.append((s.startDate, s.endDate))
+                stageBlocks.append(SleepStageSample(startDate: s.startDate, endDate: s.endDate, stageCode: 2))
+            case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
+                deepRanges.append((s.startDate, s.endDate))
+                stageBlocks.append(SleepStageSample(startDate: s.startDate, endDate: s.endDate, stageCode: 3))
             default:
-                // Unspecified asleep
-                coreMin += duration
+                unspecRanges.append((s.startDate, s.endDate))
             }
         }
 
-        let totalAsleep = deepMin + remMin + coreMin
-        if inBedMin < totalAsleep { inBedMin = totalAsleep + awakeMin }
+        let deepMin = mergeMinutes(deepRanges)
+        let remMin = mergeMinutes(remRanges)
+        let coreMin = mergeMinutes(coreRanges)
+        let unspecMin = mergeMinutes(unspecRanges)
+        let awakeMin = mergeMinutes(awakeRanges)
+        let rawInBedMin = mergeMinutes(inBedRanges)
+
+        let stagedAsleep = deepMin + remMin + coreMin
+        let totalAsleep = stagedAsleep > 0 ? stagedAsleep : unspecMin
+        guard totalAsleep > 0 else { return nil }
+
+        let inBedMin = max(rawInBedMin, totalAsleep + awakeMin)
+        let allAsleep = deepRanges + remRanges + coreRanges + unspecRanges
+        let allSpans = allAsleep + awakeRanges + inBedRanges
+        guard let overallStart = allSpans.map(\.0).min(),
+              let overallEnd = allSpans.map(\.1).max() else { return nil }
+
+        let latencyMin: Int? = {
+            guard let ib = inBedRanges.map(\.0).min(), let fa = allAsleep.map(\.0).min(), fa >= ib else { return nil }
+            return min(Int((fa.timeIntervalSince(ib) / 60.0).rounded()), 120)
+        }()
+
         let efficiency = inBedMin > 0 ? min(100.0, (totalAsleep / inBedMin) * 100.0) : 0.0
         let restorative = totalAsleep > 0 ? min(100.0, ((deepMin + remMin) / totalAsleep) * 100.0) : 0.0
 
         return NightlySleepSession(
-            startDate: overallStart ?? windowStart,
-            endDate: overallEnd ?? windowEnd,
+            startDate: overallStart,
+            endDate: overallEnd,
             inBedMinutes: inBedMin,
             totalAsleepMinutes: totalAsleep,
             deepMinutes: deepMin,
             remMinutes: remMin,
             coreMinutes: coreMin,
             awakeMinutes: awakeMin,
+            latencyMinutes: latencyMin,
             efficiencyPct: efficiency,
             restorativePct: restorative,
-            isPrimary: totalAsleep >= 120 // Sessiones de al menos 2h son primarias
+            isPrimary: totalAsleep >= 120,
+            sourceName: sourceName,
+            stages: stageBlocks.sorted { $0.startDate < $1.startDate }
         )
     }
 
-    // MARK: - 5. Strict Noise-Filtered VFC (HRV SDNN) Processing
-
-    public func extractNocturnalHRV(sleepSession: NightlySleepSession?, targetDay: Date) async -> ProcessedNightlyHRV {
-        guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
-            return ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low)
-        }
-
-        let calendar = Calendar.current
-        var searchStart = sleepSession?.startDate ?? calendar.date(byAdding: .hour, value: -12, to: targetDay)!
-        var searchEnd = sleepSession?.endDate ?? targetDay
-        var isColdStartMorning = false
-
-        // Si no durmiÃ³ con el reloj, buscar en los primeros 30 min tras despertarse
-        if sleepSession == nil || sleepSession!.totalAsleepMinutes < 60 {
-            isColdStartMorning = true
-            searchStart = targetDay
-            searchEnd = calendar.date(byAdding: .minute, value: 30, to: targetDay)!
-        }
-
-        let predicate = HKQuery.predicateForSamples(withStart: searchStart, end: searchEnd, options: .strictStartDate)
-        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
-
-        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-            let query = HKSampleQuery(sampleType: hrvType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDescriptor]) { _, results, _ in
-                continuation.resume(returning: (results as? [HKQuantitySample]) ?? [])
-            }
-            healthStore.execute(query)
-        }
-
-        let msUnit = HKUnit.secondUnit(with: .milli)
-        let values: [(date: Date, val: Double)] = samples.map { ($0.startDate, $0.quantity.doubleValue(for: msUnit)) }
-
-        guard !values.isEmpty else {
-            return ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low)
-        }
-
-        // 1. Calcular Mediana
-        let sortedValues = values.map { $0.val }.sorted()
-        let median: Double
-        if sortedValues.count % 2 == 0 {
-            median = (sortedValues[sortedValues.count / 2 - 1] + sortedValues[sortedValues.count / 2]) / 2.0
-        } else {
-            median = sortedValues[sortedValues.count / 2]
-        }
-
-        // 2. Media Ponderada: 60% al Ãºltimo tercio de la noche, 40% a los dos primeros tercios
-        let sessionDuration = searchEnd.timeIntervalSince(searchStart)
-        let lastThirdThreshold = searchStart.addingTimeInterval(sessionDuration * (2.0 / 3.0))
-
-        var earlySamples: [Double] = []
-        var lateSamples: [Double] = []
-
-        for item in values {
-            if item.date >= lastThirdThreshold {
-                lateSamples.append(item.val)
+    private func mergeMinutes(_ ranges: [(Date, Date)]) -> Double {
+        guard !ranges.isEmpty else { return 0 }
+        let sorted = ranges.sorted { $0.0 < $1.0 }
+        var total: TimeInterval = 0
+        var curS = sorted[0].0
+        var curE = sorted[0].1
+        for (s, e) in sorted.dropFirst() {
+            if s <= curE {
+                curE = max(curE, e)
             } else {
-                earlySamples.append(item.val)
+                total += max(curE.timeIntervalSince(curS), 0)
+                curS = s
+                curE = e
             }
         }
-
-        let weighted: Double
-        if !lateSamples.isEmpty && !earlySamples.isEmpty {
-            let earlyMean = earlySamples.reduce(0, +) / Double(earlySamples.count)
-            let lateMean = lateSamples.reduce(0, +) / Double(lateSamples.count)
-            weighted = (earlyMean * 0.40) + (lateMean * 0.60)
-        } else {
-            weighted = median
-        }
-
-        let confidence: DataConfidence = isColdStartMorning ? .low : (samples.count >= 4 ? .high : .medium)
-
-        return ProcessedNightlyHRV(
-            medianHRV: median,
-            weightedHRV: weighted,
-            sampleCount: samples.count,
-            confidence: confidence
-        )
+        total += max(curE.timeIntervalSince(curS), 0)
+        return total / 60.0
     }
 
-    // MARK: - 6. RHR and Sleeping Min HR (Nadir Detection)
+    // MARK: - 5. Bevel-Aligned Nocturnal HRV (With Full-Day Fallback So HRV Is NEVER Dropped!)
 
-    public func extractNocturnalHeartRates(sleepSession: NightlySleepSession?, targetDay: Date) async -> ProcessedNightlyHeartRate {
-        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
-        
-        // 1. Resting Heart Rate de Apple Salud
-        var rhrValue: Double = 0.0
-        if let rhrType = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) {
-            let calendar = Calendar.current
-            let start = calendar.date(byAdding: .day, value: -1, to: targetDay)!
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: .strictStartDate)
-            let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
-
-            let rhrSamples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                let query = HKSampleQuery(sampleType: rhrType, predicate: predicate, limit: 1, sortDescriptors: [sortDescriptor]) { _, results, _ in
-                    continuation.resume(returning: (results as? [HKQuantitySample]) ?? [])
-                }
-                healthStore.execute(query)
-            }
-            if let first = rhrSamples.first {
-                rhrValue = first.quantity.doubleValue(for: bpmUnit)
-            }
+    private func extractNocturnalHRV(sleepSession: NightlySleepSession?, targetDay: Date) async -> (ProcessedNightlyHRV, [TimedHealthSample]) {
+        guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else {
+            return (ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low), [])
         }
 
-        // 2. Continuous HR during Sleep for Nadir (MÃ­nimo Nocturno)
-        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate),
-              let sleep = sleepSession else {
-            return ProcessedNightlyHeartRate(restingHR: rhrValue, sleepingMinHR: rhrValue, sleepingMinHRTimestamp: nil, nadirElapsedFraction: 0.5)
-        }
-
-        let predicate = HKQuery.predicateForSamples(withStart: sleep.startDate, end: sleep.endDate, options: .strictStartDate)
+        let cal = Calendar.current
+        let msUnit = HKUnit.secondUnit(with: .milli)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
-        let hrSamples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-            let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDescriptor]) { _, results, _ in
-                continuation.resume(returning: (results as? [HKQuantitySample]) ?? [])
+        func queryHrv(from s: Date, to e: Date) async -> [TimedHealthSample] {
+            let pred = HKQuery.predicateForSamples(withStart: s, end: e, options: [])
+            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let q = HKSampleQuery(sampleType: hrvType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDescriptor]) { _, res, _ in
+                    continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
+                }
+                healthStore.execute(q)
             }
-            healthStore.execute(query)
-        }
-
-        var minHR: Double = 999.0
-        var minHRDate: Date? = nil
-
-        for s in hrSamples {
-            let bpm = s.quantity.doubleValue(for: bpmUnit)
-            if bpm > 30.0 && bpm < minHR { // Filter out sensor dropouts below 30 bpm
-                minHR = bpm
-                minHRDate = s.startDate
+            return samples.compactMap { s in
+                let v = s.quantity.doubleValue(for: msUnit)
+                return (3.0...350.0).contains(v) ? TimedHealthSample(date: s.startDate, value: v) : nil
             }
         }
 
-        if minHR == 999.0 {
-            minHR = rhrValue > 0 ? rhrValue : 50.0
-            minHRDate = sleep.startDate.addingTimeInterval(sleep.endDate.timeIntervalSince(sleep.startDate) * 0.5)
+        var sleepSamples: [TimedHealthSample] = []
+        if let sl = sleepSession {
+            sleepSamples = await queryHrv(from: sl.startDate.addingTimeInterval(-300), to: sl.endDate.addingTimeInterval(300))
         }
 
-        let totalNightDuration = sleep.endDate.timeIntervalSince(sleep.startDate)
-        let nadirFraction: Double
-        if totalNightDuration > 0, let nadirDate = minHRDate {
-            nadirFraction = min(max(nadirDate.timeIntervalSince(sleep.startDate) / totalNightDuration, 0.0), 1.0)
-        } else {
-            nadirFraction = 0.5
+        // If no sleeping HRV samples exist, fall back to full day HRV so recorded HRV is never lost!
+        let dayStart = cal.startOfDay(for: targetDay)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+        let chosen = !sleepSamples.isEmpty ? sleepSamples : await queryHrv(from: dayStart, to: dayEnd)
+
+        guard !chosen.isEmpty else {
+            return (ProcessedNightlyHRV(medianHRV: 0, weightedHRV: 0, sampleCount: 0, confidence: .low), [])
         }
 
-        return ProcessedNightlyHeartRate(
-            restingHR: rhrValue > 0 ? rhrValue : minHR,
-            sleepingMinHR: minHR,
-            sleepingMinHRTimestamp: minHRDate,
-            nadirElapsedFraction: nadirFraction
+        let vals = chosen.map(\.value).sorted()
+        let median = vals.count % 2 == 0 ? (vals[vals.count / 2 - 1] + vals[vals.count / 2]) / 2.0 : vals[vals.count / 2]
+        // Bevel displays the mean of sleeping HRV samples
+        let meanVal = vals.reduce(0, +) / Double(vals.count)
+        let conf: DataConfidence = sleepSamples.count >= 3 ? .high : (!sleepSamples.isEmpty ? .medium : .low)
+
+        return (
+            ProcessedNightlyHRV(medianHRV: median, weightedHRV: meanVal, sampleCount: chosen.count, confidence: conf),
+            sleepSamples
         )
     }
 
-    // MARK: - 7. Secondary Nocturnal Vitals (Wrist Temp, Resp Rate, SpO2)
+    // MARK: - 6. Bevel-Aligned Sleeping HR, RHR & Full-Day Intraday HR (Zero Fake 50.0!)
 
-    public func extractNocturnalVitals(sleepSession: NightlySleepSession?) async -> ProcessedNocturnalVitals {
-        let calendar = Calendar.current
-        let start = sleepSession?.startDate ?? calendar.date(byAdding: .hour, value: -10, to: Date())!
-        let end = sleepSession?.endDate ?? Date()
+    private func extractHeartRates(
+        sleepSession: NightlySleepSession?,
+        targetDay: Date
+    ) async -> (ProcessedNightlyHeartRate, [TimedHealthSample], [TimedHealthSample], Double?) {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: targetDay)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+        let sortAsc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
 
-        // 1. Wrist Temp Delta
-        var tempDelta: Double = 0.0
-        if let tempType = HKQuantityType.quantityType(forIdentifier: .appleSleepingWristTemperature) {
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
-            let degC = HKUnit.degreeCelsius()
+        // 1. Apple Health Resting HR for this exact day
+        var appleRhr: Double = 0
+        if let rhrType = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) {
+            let pred = HKQuery.predicateForSamples(withStart: dayStart, end: dayEnd, options: [])
             let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                let query = HKSampleQuery(sampleType: tempType, predicate: predicate, limit: 10, sortDescriptors: nil) { _, res, _ in
+                let q = HKSampleQuery(sampleType: rhrType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortAsc]) { _, res, _ in
                     continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
                 }
-                healthStore.execute(query)
+                healthStore.execute(q)
             }
-            if let first = samples.first {
-                tempDelta = first.quantity.doubleValue(for: degC)
+            let vals = samples.map { $0.quantity.doubleValue(for: bpmUnit) }.filter { (28...130).contains($0) }
+            if !vals.isEmpty {
+                appleRhr = vals.reduce(0, +) / Double(vals.count)
             }
         }
 
-        // 2. Respiratory Rate
-        var meanResp: Double = 14.5
-        if let respType = HKQuantityType.quantityType(forIdentifier: .respiratoryRate) {
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
-            let countUnit = HKUnit.count().unitDivided(by: .minute())
-            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                let query = HKSampleQuery(sampleType: respType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, res, _ in
+        // 2. All HR samples for intraday stress/energy (and sleep window HR if sleep started before midnight)
+        var intraday: [TimedHealthSample] = []
+        var sleepHr: [TimedHealthSample] = []
+        if let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) {
+            let queryStart = min(dayStart, sleepSession?.startDate.addingTimeInterval(-300) ?? dayStart)
+            let pred = HKQuery.predicateForSamples(withStart: queryStart, end: dayEnd, options: [])
+            let rawHr: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let q = HKSampleQuery(sampleType: hrType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortAsc]) { _, res, _ in
                     continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
                 }
-                healthStore.execute(query)
+                healthStore.execute(q)
             }
-            if !samples.isEmpty {
-                let vals = samples.map { $0.quantity.doubleValue(for: countUnit) }
-                meanResp = vals.reduce(0, +) / Double(vals.count)
+            for s in rawHr {
+                let bpm = s.quantity.doubleValue(for: bpmUnit)
+                guard (28...235).contains(bpm) else { continue }
+                let sample = TimedHealthSample(date: s.startDate, value: bpm)
+                if s.startDate >= dayStart && s.startDate < dayEnd {
+                    intraday.append(sample)
+                }
+                if let sl = sleepSession,
+                   s.startDate >= sl.startDate.addingTimeInterval(-300),
+                   s.startDate <= sl.endDate.addingTimeInterval(300) {
+                    sleepHr.append(sample)
+                }
             }
         }
 
-        // 3. SpO2 Mean and Min
-        var meanSpO2: Double = 98.0
-        var minSpO2: Double = 95.0
-        if let spo2Type = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation) {
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
-            let pctUnit = HKUnit.percent()
-            let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-                let query = HKSampleQuery(sampleType: spo2Type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, res, _ in
+        // Bevel RHR = sleeping average heart rate during sleep (falls back to Apple RHR if no sleep HR)
+        let sleepMean: Double = sleepHr.isEmpty ? 0 : (sleepHr.map(\.value).reduce(0, +) / Double(sleepHr.count))
+        let effectiveRhr: Double = sleepHr.count >= 5 ? sleepMean : (appleRhr > 0 ? appleRhr : sleepMean)
+
+        var minHr: Double = 0
+        var minHrDate: Date? = nil
+        if let best = sleepHr.min(by: { $0.value < $1.value }) {
+            minHr = best.value
+            minHrDate = best.date
+        }
+
+        let daytimeSamples: [Double] = {
+            guard let sl = sleepSession else { return intraday.map(\.value) }
+            return intraday.filter { $0.date > sl.endDate || $0.date < sl.startDate }.map(\.value)
+        }()
+        let daytimeMean: Double? = daytimeSamples.isEmpty ? nil : (daytimeSamples.reduce(0, +) / Double(daytimeSamples.count))
+
+        let processed = ProcessedNightlyHeartRate(
+            restingHR: effectiveRhr,
+            sleepingMeanHR: sleepMean,
+            sleepingMinHR: minHr,
+            sleepingMinHRTimestamp: minHrDate,
+            nadirElapsedFraction: 0.5
+        )
+        return (processed, sleepHr, intraday, daytimeMean)
+    }
+
+    // MARK: - 7. Nocturnal Vitals (STRICT ZERO FAKE DEFAULTS: nil if not measured!)
+
+    private func extractNocturnalVitals(
+        sleepSession: NightlySleepSession?,
+        targetDay: Date
+    ) async -> (ProcessedNocturnalVitals, [TimedHealthSample], [TimedHealthSample], Bool?) {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: targetDay)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+        let winStart = sleepSession?.startDate.addingTimeInterval(-300) ?? dayStart
+        let winEnd = sleepSession?.endDate.addingTimeInterval(300) ?? dayEnd
+        let sortAsc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        func queryTimed(_ id: HKQuantityTypeIdentifier, unit: HKUnit, from s: Date, to e: Date, scale: Double = 1.0) async -> [TimedHealthSample] {
+            guard let t = HKQuantityType.quantityType(forIdentifier: id) else { return [] }
+            let pred = HKQuery.predicateForSamples(withStart: s, end: e, options: [])
+            let raw: [HKQuantitySample] = await withCheckedContinuation { continuation in
+                let q = HKSampleQuery(sampleType: t, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortAsc]) { _, res, _ in
                     continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
                 }
-                healthStore.execute(query)
+                healthStore.execute(q)
             }
-            if !samples.isEmpty {
-                let vals = samples.map { $0.quantity.doubleValue(for: pctUnit) * 100.0 }
-                meanSpO2 = vals.reduce(0, +) / Double(vals.count)
-                minSpO2 = vals.min() ?? 95.0
+            return raw.map { TimedHealthSample(date: $0.startDate, value: $0.quantity.doubleValue(for: unit) * scale) }
+        }
+
+        let tempSamples = await queryTimed(.appleSleepingWristTemperature, unit: .degreeCelsius(), from: dayStart, to: dayEnd)
+            .filter { (28.0...42.0).contains($0.value) }
+        let tempAbs: Double? = tempSamples.isEmpty ? nil : (tempSamples.map(\.value).reduce(0, +) / Double(tempSamples.count))
+
+        let respUnit = HKUnit.count().unitDivided(by: .minute())
+        let respSleep = await queryTimed(.respiratoryRate, unit: respUnit, from: winStart, to: winEnd).filter { (5.0...45.0).contains($0.value) }
+        let respAll = respSleep.isEmpty ? await queryTimed(.respiratoryRate, unit: respUnit, from: dayStart, to: dayEnd).filter { (5.0...45.0).contains($0.value) } : respSleep
+        let meanResp: Double? = respAll.isEmpty ? nil : (respAll.map(\.value).reduce(0, +) / Double(respAll.count))
+
+        let spo2Sleep = await queryTimed(.oxygenSaturation, unit: .percent(), from: winStart, to: winEnd, scale: 100.0).filter { (60.0...100.0).contains($0.value) }
+        let spo2All = spo2Sleep.isEmpty ? await queryTimed(.oxygenSaturation, unit: .percent(), from: dayStart, to: dayEnd, scale: 100.0).filter { (60.0...100.0).contains($0.value) } : spo2Sleep
+        let meanSpo2: Double? = spo2All.isEmpty ? nil : (spo2All.map(\.value).reduce(0, +) / Double(spo2All.count))
+        let minSpo2: Double? = spo2All.map(\.value).min()
+
+        var sleepNoiseOver50: Bool? = nil
+        if sleepSession != nil {
+            let dbUnit = HKUnit.decibelAWeightedSoundPressureLevel()
+            let audio = await queryTimed(.environmentalAudioExposure, unit: dbUnit, from: winStart, to: winEnd)
+            if !audio.isEmpty {
+                sleepNoiseOver50 = audio.contains { $0.value >= 50.0 }
             }
         }
 
-        return ProcessedNocturnalVitals(
-            tempDeltaCelsius: tempDelta,
+        let vitals = ProcessedNocturnalVitals(
+            tempAbsoluteCelsius: tempAbs,
+            tempDeltaCelsius: nil,
             meanRespiratoryRate: meanResp,
-            meanSpO2: meanSpO2,
-            minSpO2: minSpO2
+            meanSpO2: meanSpo2,
+            minSpO2: minSpo2
         )
+        return (vitals, respSleep, spo2Sleep, sleepNoiseOver50)
     }
 
-    // MARK: - 8. Activity, Steps and Workouts with 5-Zone HR Distribution
+    // MARK: - 8. Daily Activity & Workouts (Zero Fake HR!)
 
-    public func extractDailyActivity(targetDay: Date) async -> (steps: Int, cals: Double, workouts: [WorkoutSummary]) {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: targetDay)
-        let end = calendar.date(byAdding: .day, value: 1, to: start)!
-        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+    public func extractDailyActivity(targetDay: Date) async -> (steps: Int?, cals: Double?, workouts: [WorkoutSummary]) {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: targetDay)
+        let end = cal.date(byAdding: .day, value: 1, to: start)!
 
-        // 1. Steps
-        var totalSteps = 0
-        if let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) {
-            let countUnit = HKUnit.count()
-            let sum: Double = await withCheckedContinuation { continuation in
-                let query = HKStatisticsQuery(quantityType: stepType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, stats, _ in
-                    continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: countUnit) ?? 0.0)
-                }
-                healthStore.execute(query)
-            }
-            totalSteps = Int(sum)
-        }
+        let steps = await querySumQuantity(.stepCount, unit: .count(), start: start, end: end).map { Int($0.rounded()) }
+        let activeCals = await querySumQuantity(.activeEnergyBurned, unit: .kilocalorie(), start: start, end: end)
 
-        // 2. Active Calories
-        var activeCals = 0.0
-        if let calType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
-            let kcalUnit = HKUnit.kilocalorie()
-            let sum: Double = await withCheckedContinuation { continuation in
-                let query = HKStatisticsQuery(quantityType: calType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, stats, _ in
-                    continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: kcalUnit) ?? 0.0)
-                }
-                healthStore.execute(query)
-            }
-            activeCals = sum
-        }
-
-        // 3. Workouts
-        var workoutItems: [WorkoutSummary] = []
-        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        let pred = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
         let rawWorkouts: [HKWorkout] = await withCheckedContinuation { continuation in
-            let query = HKSampleQuery(sampleType: HKObjectType.workoutType(), predicate: predicate, limit: 10, sortDescriptors: [sortDescriptor]) { _, res, _ in
+            let q = HKSampleQuery(sampleType: HKObjectType.workoutType(), predicate: pred, limit: 20, sortDescriptors: [sortDesc]) { _, res, _ in
                 continuation.resume(returning: (res as? [HKWorkout]) ?? [])
             }
-            healthStore.execute(query)
+            healthStore.execute(q)
         }
 
+        var items: [WorkoutSummary] = []
         for w in rawWorkouts {
-            let durMin = Int(w.duration / 60.0)
-            let kcal = Int(w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0.0)
-            let (icon, name) = workoutMetadata(for: w.workoutActivityType)
-
-            // Query HR during this workout
-            let hrDistribution = await computeWorkoutHRZones(workout: w, age: 26)
-
-            workoutItems.append(WorkoutSummary(
+            let durMin = max(Int((w.duration / 60.0).rounded()), 1)
+            let kcal = Int((w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0.0).rounded())
+            let (icon, name, isStrength) = workoutMetadata(for: w.workoutActivityType)
+            let hrDist = await computeWorkoutHRZones(workout: w, age: 24)
+            items.append(WorkoutSummary(
                 id: w.uuid,
                 activityType: w.workoutActivityType,
                 name: name,
                 sfSymbol: icon,
                 startDate: w.startDate,
+                endDate: w.endDate,
                 durationMinutes: durMin,
                 activeCalories: kcal,
-                avgHeartRate: Int(hrDistribution.avgHeartRate),
-                maxHeartRate: Int(hrDistribution.maxHeartRate)
+                avgHeartRate: Int(hrDist.avgHeartRate.rounded()),
+                maxHeartRate: Int(hrDist.maxHeartRate.rounded()),
+                isStrength: isStrength
             ))
         }
 
-        return (totalSteps, activeCals, workoutItems)
+        return (steps, activeCals, items)
     }
 
-    // MARK: - 9. 5-Zone Heart Rate Distribution & Streaming Strain
-
-    public func computeWorkoutHRZones(workout: HKWorkout, age: Int = 26) async -> WorkoutZoneDistribution {
+    public func computeWorkoutHRZones(workout: HKWorkout, age: Int = 24) async -> WorkoutZoneDistribution {
         guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
-            return WorkoutZoneDistribution(workoutId: workout.uuid, activityType: workout.workoutActivityType, durationMinutes: workout.duration / 60.0, activeCalories: 0, z1Minutes: 0, z2Minutes: 0, z3Minutes: 0, z4Minutes: 0, z5Minutes: 0, avgHeartRate: 130, maxHeartRate: 165)
+            return WorkoutZoneDistribution(workoutId: workout.uuid, activityType: workout.workoutActivityType, durationMinutes: workout.duration / 60.0, activeCalories: 0, z1Minutes: 0, z2Minutes: 0, z3Minutes: 0, z4Minutes: 0, z5Minutes: 0, avgHeartRate: 0, maxHeartRate: 0)
         }
-
-        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate, options: .strictStartDate)
+        let pred = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate, options: [])
         let bpmUnit = HKUnit.count().unitDivided(by: .minute())
-
         let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-            let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, res, _ in
+            let q = HKSampleQuery(sampleType: hrType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, res, _ in
                 continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
             }
-            healthStore.execute(query)
+            healthStore.execute(q)
+        }
+        guard !samples.isEmpty else {
+            return WorkoutZoneDistribution(workoutId: workout.uuid, activityType: workout.workoutActivityType, durationMinutes: workout.duration / 60.0, activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0, z1Minutes: 0, z2Minutes: 0, z3Minutes: 0, z4Minutes: 0, z5Minutes: 0, avgHeartRate: 0, maxHeartRate: 0)
         }
 
-        let maxHR = Double(208 - Int(0.7 * Double(age))) // Tanaka formula
-        var z1Count = 0, z2Count = 0, z3Count = 0, z4Count = 0, z5Count = 0
-        var totalBpm = 0.0
-        var peakBpm = 0.0
-
+        let maxHR = Double(208 - Int(0.7 * Double(age)))
+        var z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0
+        var sumBpm = 0.0, peakBpm = 0.0
         for s in samples {
             let bpm = s.quantity.doubleValue(for: bpmUnit)
-            totalBpm += bpm
+            sumBpm += bpm
             if bpm > peakBpm { peakBpm = bpm }
-
             let pct = bpm / maxHR
-            if pct >= 0.90 {
-                z5Count += 1
-            } else if pct >= 0.80 {
-                z4Count += 1
-            } else if pct >= 0.70 {
-                z3Count += 1
-            } else if pct >= 0.60 {
-                z2Count += 1
-            } else if pct >= 0.50 {
-                z1Count += 1
-            }
+            if pct >= 0.90 { z5 += 1 }
+            else if pct >= 0.80 { z4 += 1 }
+            else if pct >= 0.70 { z3 += 1 }
+            else if pct >= 0.60 { z2 += 1 }
+            else if pct >= 0.50 { z1 += 1 }
         }
-
-        let totalSamples = max(samples.count, 1)
         let durMin = workout.duration / 60.0
-        let fraction = durMin / Double(totalSamples)
-
+        let frac = durMin / Double(samples.count)
         return WorkoutZoneDistribution(
             workoutId: workout.uuid,
             activityType: workout.workoutActivityType,
             durationMinutes: durMin,
             activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0,
-            z1Minutes: Double(z1Count) * fraction,
-            z2Minutes: Double(z2Count) * fraction,
-            z3Minutes: Double(z3Count) * fraction,
-            z4Minutes: Double(z4Count) * fraction,
-            z5Minutes: Double(z5Count) * fraction,
-            avgHeartRate: totalBpm / Double(totalSamples),
+            z1Minutes: Double(z1) * frac,
+            z2Minutes: Double(z2) * frac,
+            z3Minutes: Double(z3) * frac,
+            z4Minutes: Double(z4) * frac,
+            z5Minutes: Double(z5) * frac,
+            avgHeartRate: sumBpm / Double(samples.count),
             maxHeartRate: peakBpm
         )
     }
 
-    private func workoutMetadata(for type: HKWorkoutActivityType) -> (icon: String, name: String) {
+    private func querySumQuantity(_ id: HKQuantityTypeIdentifier, unit: HKUnit, start: Date, end: Date) async -> Double? {
+        guard let t = HKQuantityType.quantityType(forIdentifier: id) else { return nil }
+        let pred = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        return await withCheckedContinuation { continuation in
+            let q = HKStatisticsQuery(quantityType: t, quantitySamplePredicate: pred, options: .cumulativeSum) { _, stats, _ in
+                if let qty = stats?.sumQuantity() {
+                    let v = qty.doubleValue(for: unit)
+                    continuation.resume(returning: v > 0 ? v : nil)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
+            healthStore.execute(q)
+        }
+    }
+
+    private func queryMeanQuantity(_ id: HKQuantityTypeIdentifier, unit: HKUnit, start: Date, end: Date) async -> Double? {
+        guard let t = HKQuantityType.quantityType(forIdentifier: id) else { return nil }
+        let pred = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let q = HKSampleQuery(sampleType: t, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, res, _ in
+                continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
+            }
+            healthStore.execute(q)
+        }
+        guard !samples.isEmpty else { return nil }
+        let vals = samples.map { $0.quantity.doubleValue(for: unit) }
+        return vals.reduce(0, +) / Double(vals.count)
+    }
+
+    private func workoutMetadata(for type: HKWorkoutActivityType) -> (icon: String, name: String, isStrength: Bool) {
         switch type {
-        case .running: return ("figure.run", "Carrera al aire libre")
-        case .cycling: return ("figure.outdoor.cycle", "Ciclismo")
-        case .swimming: return ("figure.pool.swim", "Natación")
-        case .traditionalStrengthTraining, .functionalStrengthTraining: return ("dumbbell.fill", "Entrenamiento de Fuerza")
-        case .highIntensityIntervalTraining: return ("flame.fill", "HIIT")
-        case .walking: return ("figure.walk", "Caminata")
-        case .yoga: return ("figure.mind.and.body", "Yoga")
-        case .pilates: return ("figure.pilates", "Pilates")
-        default: return ("figure.cross.training", "Entrenamiento Funcional")
+        case .running: return ("figure.run", "Carrera", false)
+        case .cycling: return ("figure.outdoor.cycle", "Bici al aire libre", false)
+        case .swimming: return ("figure.pool.swim", "Natación", false)
+        case .traditionalStrengthTraining, .functionalStrengthTraining, .coreTraining:
+            return ("dumbbell.fill", "Entrenamiento de fuerza", true)
+        case .highIntensityIntervalTraining: return ("flame.fill", "HIIT", false)
+        case .walking, .hiking: return ("figure.walk", "Caminata", false)
+        case .yoga, .pilates: return ("figure.mind.and.body", "Movilidad / Yoga", false)
+        default: return ("figure.cross.training", "Entrenamiento", false)
         }
     }
 }
 #endif
 
-// MARK: - Pure WHOOP + Bevel Physiology Calculator for Apple Watch / HealthKit Snapshots
+// MARK: - Pure Shared Physiology Types (macOS + iOS)
 
 public enum BiologicalSexProfile: String, Codable, Sendable {
     case male = "male"
@@ -721,10 +812,10 @@ public struct UserPhysiologyProfileConfig: Codable, Sendable {
     public var maxHrOverride: Int?
 
     public init(
-        ageYears: Double = 19.4,
+        ageYears: Double = 24.0,
         sex: BiologicalSexProfile = .male,
-        weightKg: Double = 58.8,
-        heightCm: Double = 175.0,
+        weightKg: Double = 70.0,
+        heightCm: Double = 176.0,
         bodyFatPct: Double? = nil,
         maxHrOverride: Int? = nil
     ) {
@@ -736,77 +827,3 @@ public struct UserPhysiologyProfileConfig: Codable, Sendable {
         self.maxHrOverride = maxHrOverride
     }
 }
-
-public enum WhoopHealthKitPhysiologyCalculator {
-    public static func computeMaxHeartRate(profile: UserPhysiologyProfileConfig, observedPeakBpm: Int = 0) -> Int {
-        if let override = profile.maxHrOverride {
-            return min(max(override, 130), 225)
-        }
-        let tanaka = Int((208.0 - 0.7 * profile.ageYears).rounded())
-        return min(max(max(tanaka, observedPeakBpm), 130), 225)
-    }
-
-    public static func computeBmrKcalPerDay(profile: UserPhysiologyProfileConfig) -> Int {
-        let w = profile.weightKg
-        let h = profile.heightCm
-        let a = profile.ageYears
-        let bmr: Double
-        switch profile.sex {
-        case .male: bmr = 88.362 + 13.397 * w + 4.799 * h - 5.677 * a
-        case .female: bmr = 447.593 + 9.247 * w + 3.098 * h - 4.330 * a
-        case .nonBinary: bmr = 267.9775 + 11.322 * w + 3.9485 * h - 5.0035 * a
-        }
-        return max(Int(bmr.rounded()), 1000)
-    }
-
-    public static func computeRecoveryPercent(
-        hrvMs: Double,
-        rhrBpm: Double,
-        respRpm: Double,
-        spo2Pct: Double,
-        wristTempDeltaC: Double,
-        sleepScorePct: Int,
-        hrvMean: Double = 72.0,
-        hrvSigma: Double = 8.0,
-        rhrMean: Double = 49.5,
-        rhrSigma: Double = 2.5,
-        respMean: Double = 15.2,
-        respSigma: Double = 0.6
-    ) -> Int {
-        let zHrv = (hrvMs - hrvMean) / max(hrvSigma, 1.0)
-        let zRhr = (rhrMean - rhrBpm) / max(rhrSigma, 0.8)
-        let zSleep = (Double(sleepScorePct) / 100.0 - 0.85) / 0.12
-        let zResp = (respMean - respRpm) / max(respSigma, 0.3)
-        let zTemp = -abs(wristTempDeltaC) / 1.0
-        let compositeZ = 0.55 * zHrv + 0.20 * zRhr + 0.15 * zSleep + 0.05 * zResp + 0.05 * zTemp
-        var score = 100.0 / (1.0 + exp(-1.6 * (compositeZ + 0.20)))
-        if spo2Pct < 95.0 {
-            score -= (95.0 - spo2Pct) * 1.6
-        }
-        if wristTempDeltaC > 0.5 && zRhr < -1.0 {
-            score *= 0.75
-        }
-        return min(max(Int(score.rounded()), 1), 99)
-    }
-
-    public static func computeEffortPercentFromZones(
-        profile: UserPhysiologyProfileConfig,
-        rhrBpm: Double,
-        zoneMinutes: [Double]
-    ) -> Int {
-        let b = profile.sex.banisterB
-        let floorRate = 0.10 * 0.64 * exp(b * 0.10)
-        let mids = [0.55, 0.65, 0.75, 0.85, 0.95]
-        var trimp = 0.0
-        for (idx, mins) in zoneMinutes.prefix(5).enumerated() where mins > 0 {
-            let x = mids[idx]
-            let rate = x * 0.64 * exp(b * x)
-            trimp += mins * max(rate - floorRate, 0.0)
-        }
-        let maxRefTrimp = 320.0 * (b / 1.92)
-        let pct = 100.0 * log(1.0 + max(trimp, 1.0)) / log(1.0 + maxRefTrimp)
-        return min(max(Int(pct.rounded()), 1), 100)
-    }
-}
-
-

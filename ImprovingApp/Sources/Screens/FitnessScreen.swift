@@ -146,18 +146,12 @@ struct FitnessScreen: View {
                 }
 
                 VStack(alignment: .leading, spacing: 18) {
-                    // 2. Coaching Card (strictly real)
-                    BevelCard(cornerRadius: 20) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("🏋️ Preparación para entrenar")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.textPrimary)
-                            Text(store.activeCoachingSummary)
-                                .font(ImprovingFont.body(13.5))
-                                .foregroundColor(BevelColors.textSecondary)
-                        }
-                        .padding(16)
-                    }
+                    // 2. 4-Hour Time-Aware Fitness-Focused Live AI Coaching Card
+                    LiveAiCoachingCard(
+                        section: .fitness,
+                        store: store,
+                        onAskMore: { onNavigate(.askBevel) }
+                    )
 
                     // 3. Actividad de hoy
                     HStack {
