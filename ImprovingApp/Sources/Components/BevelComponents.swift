@@ -265,7 +265,7 @@ struct StressRadialDial: View {
 
     var body: some View {
         let frac = hasData ? min(max(Double(score) / 100.0, 0), 1) : 0
-        let statusColor: Color = !hasData ? BevelColors.textMuted : (score < 35 ? BevelColors.greenPrimary : (score < 65 ? BevelColors.amberStart : BevelColors.coralHigh))
+        let statusColor: Color = !hasData ? BevelColors.textMuted : (score < 30 ? BevelColors.greenPrimary : (score < 60 ? BevelColors.amberStart : BevelColors.coralHigh))
 
         ZStack {
             Circle()
@@ -352,73 +352,96 @@ struct TrainingLoadTickGauge: View {
     let optimalStartFrac: Double
     let optimalEndFrac: Double
     let currentFrac: Double
+    var optimalRangeLabel: String? = nil
     var hasData: Bool = true
 
     var body: some View {
-        ZStack {
-            Canvas { ctx, sz in
-                let center = CGPoint(x: sz.width / 2, y: sz.height * 0.56)
-                let outerR = min(sz.width, sz.height) * 0.44
-                let innerR = outerR - 10
-                let startDeg = 140.0
-                let sweepDeg = 260.0
-                let totalTicks = 44
+        VStack(spacing: 2) {
+            ZStack {
+                Canvas { ctx, sz in
+                    let center = CGPoint(x: sz.width / 2, y: sz.height * 0.58)
+                    let outerR = min(sz.width, sz.height) * 0.45
+                    let innerR = outerR - 11
+                    let startDeg = 140.0
+                    let sweepDeg = 260.0
+                    let totalTicks = 44
 
-                var trackArc = Path()
-                trackArc.addArc(center: center, radius: outerR + 6, startAngle: .degrees(startDeg), endAngle: .degrees(startDeg + sweepDeg), clockwise: false)
-                ctx.stroke(trackArc, with: .color(Color.white.opacity(0.08)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    // Subtle outer halo track
+                    var trackArc = Path()
+                    trackArc.addArc(center: center, radius: outerR + 6, startAngle: .degrees(startDeg), endAngle: .degrees(startDeg + sweepDeg), clockwise: false)
+                    ctx.stroke(trackArc, with: .color(Color.white.opacity(0.08)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
 
-                if hasData {
-                    var optArc = Path()
-                    optArc.addArc(
-                        center: center,
-                        radius: outerR + 6,
-                        startAngle: .degrees(startDeg + sweepDeg * optimalStartFrac),
-                        endAngle: .degrees(startDeg + sweepDeg * optimalEndFrac),
-                        clockwise: false
-                    )
-                    ctx.stroke(optArc, with: .color(BevelColors.greenPrimary), style: StrokeStyle(lineWidth: 3.2, lineCap: .round))
+                    if hasData {
+                        let oStart = min(max(optimalStartFrac, 0.02), 0.94)
+                        let oEnd = min(max(optimalEndFrac, oStart + 0.06), 0.98)
+                        var optArc = Path()
+                        optArc.addArc(
+                            center: center,
+                            radius: outerR + 6,
+                            startAngle: .degrees(startDeg + sweepDeg * oStart),
+                            endAngle: .degrees(startDeg + sweepDeg * oEnd),
+                            clockwise: false
+                        )
+                        ctx.stroke(optArc, with: .color(BevelColors.greenPrimary), style: StrokeStyle(lineWidth: 3.4, lineCap: .round))
+                    }
+
+                    let clamped = min(max(currentFrac, 0.03), 0.97)
+                    let litCount = hasData ? Int(clamped * Double(totalTicks)) : -1
+                    for i in 0...totalTicks {
+                        let deg = startDeg + Double(i) / Double(totalTicks) * sweepDeg
+                        let rad = deg * .pi / 180.0
+                        var tick = Path()
+                        tick.move(to: CGPoint(x: center.x + innerR * cos(rad), y: center.y + innerR * sin(rad)))
+                        tick.addLine(to: CGPoint(x: center.x + outerR * cos(rad), y: center.y + outerR * sin(rad)))
+                        ctx.stroke(tick, with: .color(i <= litCount ? Color.white.opacity(0.42) : Color.white.opacity(0.11)), style: StrokeStyle(lineWidth: 1.9, lineCap: .round))
+                    }
+
+                    if hasData {
+                        let knobDeg = startDeg + clamped * sweepDeg
+                        let kRad = knobDeg * .pi / 180.0
+                        let kPt = CGPoint(x: center.x + (outerR - 4) * cos(kRad), y: center.y + (outerR - 4) * sin(kRad))
+                        ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 11, y: kPt.y - 11, width: 22, height: 22)), with: .color(Color.white.opacity(0.14)))
+                        ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(BevelColors.card))
+                        ctx.stroke(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(Color.white.opacity(0.70)), lineWidth: 2.2)
+                    }
                 }
 
-                let clamped = min(max(currentFrac, 0.04), 0.96)
-                let litCount = hasData ? Int(clamped * Double(totalTicks)) : -1
-                for i in 0...totalTicks {
-                    let deg = startDeg + Double(i) / Double(totalTicks) * sweepDeg
-                    let rad = deg * .pi / 180.0
-                    var tick = Path()
-                    tick.move(to: CGPoint(x: center.x + innerR * cos(rad), y: center.y + innerR * sin(rad)))
-                    tick.addLine(to: CGPoint(x: center.x + outerR * cos(rad), y: center.y + outerR * sin(rad)))
-                    ctx.stroke(tick, with: .color(i <= litCount ? Color.white.opacity(0.45) : Color.white.opacity(0.11)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                }
+                Text(hasData ? "\(value)" : "--")
+                    .font(ImprovingFont.metricHero(28))
+                    .monospacedDigit()
+                    .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
+                    .offset(y: 6)
 
-                if hasData {
-                    let knobDeg = startDeg + clamped * sweepDeg
-                    let kRad = knobDeg * .pi / 180.0
-                    let kPt = CGPoint(x: center.x + (outerR - 4) * cos(kRad), y: center.y + (outerR - 4) * sin(kRad))
-                    ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 10, y: kPt.y - 10, width: 20, height: 20)), with: .color(Color.white.opacity(0.14)))
-                    ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(BevelColors.card))
-                    ctx.stroke(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(Color.white.opacity(0.65)), lineWidth: 2.2)
+                VStack {
+                    Spacer()
+                    HStack {
+                        Text("\(minVal)").font(ImprovingFont.caption(10.5)).monospacedDigit().foregroundColor(BevelColors.textMuted)
+                        Spacer()
+                        Text("\(maxVal)").font(ImprovingFont.caption(10.5)).monospacedDigit().foregroundColor(BevelColors.textMuted)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 0)
                 }
             }
+            .frame(height: 120)
 
-            Text(hasData ? "\(value)" : "--")
-                .font(ImprovingFont.metricHero(26))
-                .monospacedDigit()
-                .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
-                .offset(y: 4)
-
-            VStack {
-                Spacer()
-                HStack {
-                    Text("\(minVal)").font(ImprovingFont.caption(10.5)).foregroundColor(BevelColors.textMuted)
-                    Spacer()
-                    Text("\(maxVal)").font(ImprovingFont.caption(10.5)).foregroundColor(BevelColors.textMuted)
+            if let optLbl = optimalRangeLabel {
+                HStack(spacing: 5) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 2).fill(BevelColors.greenPrimary.opacity(0.28)).frame(width: 10, height: 10)
+                        VStack(spacing: 4) {
+                            Rectangle().fill(BevelColors.greenPrimary).frame(width: 10, height: 1.4)
+                            Rectangle().fill(BevelColors.greenPrimary).frame(width: 10, height: 1.4)
+                        }
+                    }
+                    Text(optLbl)
+                        .font(ImprovingFont.caption(11.5))
+                        .foregroundColor(BevelColors.textSecondary)
+                        .lineLimit(1)
                 }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 2)
+                .padding(.top, 2)
             }
         }
-        .frame(height: 118)
     }
 }
 

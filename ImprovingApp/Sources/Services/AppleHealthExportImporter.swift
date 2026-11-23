@@ -56,6 +56,12 @@ enum AppleHealthExportImporter {
         var hasSteps: Bool = false
         var activeKcalSum: Double = 0
         var hasActiveKcal: Bool = false
+        var distanceKmSum: Double = 0
+        var hasDistanceKm: Bool = false
+        var elevationMSum: Double = 0
+        var hasElevationM: Bool = false
+        var powerValues: [Double] = []
+        var cadenceValues: [Double] = []
 
         var sleepSourceName: String? = nil
         var deepIntervals: [ClosedRange<Int64>] = []
@@ -613,19 +619,89 @@ enum AppleHealthExportImporter {
             if let r = rhrBpm { priorRhr.append(r) }
             if let rr = respRate { priorResp.append(rr) }
 
-            // 6. Accurate HR Zones (conservative dt cap prevents passive-walking inflation!) & Bevel Strain
+            // 6. Accurate 6-Zone HR (Z0..Z5) & Per-Workout Real HR/Zone/HRR Enrichment + Bevel Strain
             let rhrForZones = rhrBpm ?? rhrBase.mean
-            let zones = computeHrZoneMinutes(
+            let zones6 = computeHrZoneMinutes6(
                 samples: raw.hrSamples.map { ($0.0, $0.2) },
                 workoutSpans: raw.workoutSpans,
                 maxHr: maxHr,
                 rhr: rhrForZones
             )
+            let zones = Array(zones6.dropFirst()) // [Z1, Z2, Z3, Z4, Z5]
+            let z0Min = zones6.first ?? 0
+
+            // Enrich workouts using real intraday HR samples (avgHrBpm, per-workout Z0..Z5, and 1-min post-workout HRR!)
+            var inferredHrrVals: [Double] = []
+            let outdoorDistanceWorkouts = raw.workouts.filter { w in
+                let l = w.title.lowercased()
+                return l.contains("bici") || l.contains("carrera") || l.contains("caminat") || l.contains("run") || l.contains("cycl") || l.contains("walk")
+            }
+            let enrichedWorkouts: [EffortEventItem] = raw.workouts.enumerated().map { idx, w in
+                var item = w
+                let span: ClosedRange<Int64>? = idx < raw.workoutSpans.count ? raw.workoutSpans[idx] : nil
+                if let sp = span {
+                    let inSpanSamples = raw.hrSamples.filter { sp.contains($0.0) }
+                    if item.avgHrBpm == 0 && !inSpanSamples.isEmpty {
+                        let avg = Int((inSpanSamples.map(\.2).reduce(0, +) / Double(inSpanSamples.count)).rounded())
+                        if (45...225).contains(avg) {
+                            let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+                                durationMin: item.durationMin,
+                                kcal: item.kcal,
+                                avgHrBpm: avg,
+                                rhrBpm: rhrForZones,
+                                maxHrBpm: maxHr,
+                                banisterB: profile.sex.banisterB
+                            )
+                            item = EffortEventItem(
+                                id: item.id, title: item.title, timeRange: item.timeRange,
+                                durationMin: item.durationMin, avgHrBpm: avg,
+                                strainScore: ws.strain21, strainPct: ws.strainPct,
+                                categoryLabel: item.categoryLabel, kcal: item.kcal,
+                                distanceKm: item.distanceKm, elevationM: item.elevationM, dateIso: item.dateIso,
+                                startEpochSec: item.startEpochSec ?? sp.lowerBound,
+                                avgPowerW: item.avgPowerW, avgCadenceRpm: item.avgCadenceRpm,
+                                hrZoneMinutes6: item.hrZoneMinutes6, hrRecovery1MinBpm: item.hrRecovery1MinBpm,
+                                totalSets: item.totalSets, totalVolumeKg: item.totalVolumeKg, targetMuscles: item.targetMuscles
+                            )
+                        }
+                    }
+                    if inSpanSamples.count >= 2 {
+                        let wZones6 = computeHrZoneMinutes6(
+                            samples: inSpanSamples.map { ($0.0, $0.2) },
+                            workoutSpans: [sp],
+                            maxHr: maxHr,
+                            rhr: rhrForZones
+                        )
+                        if wZones6.reduce(0, +) > 0 {
+                            item.hrZoneMinutes6 = wZones6
+                        }
+                    }
+                    // Genuine 1-minute post-workout HR Recovery from real HR samples when direct HKQuantity HRR wasn't exported!
+                    let endWindowHr = raw.hrSamples.filter { $0.0 >= sp.upperBound - 120 && $0.0 <= sp.upperBound + 15 }.map(\.2)
+                    let post1MinHr = raw.hrSamples.filter { $0.0 >= sp.upperBound + 45 && $0.0 <= sp.upperBound + 135 }.map(\.2)
+                    if let peakEnd = endWindowHr.max(), let minAfter = post1MinHr.min(), peakEnd >= 102.0 {
+                        let drop = peakEnd - minAfter
+                        if (5.0...85.0).contains(drop) {
+                            let roundedDrop = round1(drop)
+                            item.hrRecovery1MinBpm = roundedDrop
+                            inferredHrrVals.append(roundedDrop)
+                        }
+                    }
+                }
+                // If only 1 outdoor distance workout occurred today and distanceKm is missing on the workout, attach daily distance
+                if item.distanceKm == nil && raw.hasDistanceKm && outdoorDistanceWorkouts.count == 1 && outdoorDistanceWorkouts.first?.id == item.id {
+                    item.distanceKm = round1(raw.distanceKmSum)
+                }
+                return item
+            }
+
+            let finalHrr = hrr ?? mean(inferredHrrVals).map(round1)
+
             let strainPair = WhoopPhysiologyEngine.computeBevelStrain(
                 profile: profile,
                 rhrBpm: rhrForZones,
                 hrZoneMinutes: zones,
-                workouts: raw.workouts,
+                workouts: enrichedWorkouts,
                 activeKcal: raw.hasActiveKcal ? raw.activeKcalSum : nil
             )
 
@@ -713,7 +789,7 @@ enum AppleHealthExportImporter {
                 energyBankPercent: energyPct,
                 stepsCount: raw.hasSteps ? max(Int(raw.stepsSum.rounded()), 0) : nil,
                 vo2MaxMlKgMin: vo2,
-                hrRecoveryBpm: hrr,
+                hrRecoveryBpm: finalHrr,
                 glucoseMgDl: glucose,
                 activeKcal: raw.hasActiveKcal ? Int(raw.activeKcalSum.rounded()) : nil,
                 daylightMinutes: raw.hasDaylight ? Int(raw.daylightMinSum.rounded()) : nil,
@@ -724,12 +800,17 @@ enum AppleHealthExportImporter {
                 systolicBp: sysBp,
                 diastolicBp: diaBp,
                 hrZoneMinutes: zones,
+                hrZone0Minutes: z0Min > 0 ? z0Min : nil,
+                distanceKm: raw.hasDistanceKm ? round1(raw.distanceKmSum) : nil,
+                elevationM: raw.hasElevationM ? round1(raw.elevationMSum) : nil,
+                avgPowerW: mean(raw.powerValues).map(round1),
+                avgCadenceRpm: mean(raw.cadenceValues).map(round1),
                 stressSeries24h: [],
                 energySeries24h: [],
                 stressSamples5m: stress5m,
                 energySamples5m: energy5m,
                 strengthMinutes: raw.strengthMinutes,
-                workouts: raw.workouts
+                workouts: enrichedWorkouts
             )
         }
 
@@ -1250,6 +1331,22 @@ enum AppleHealthExportImporter {
                     day.activeKcalSum += kcal
                     day.hasActiveKcal = true
                 }
+            case "HKQuantityTypeIdentifierDistanceWalkingRunning", "HKQuantityTypeIdentifierDistanceCycling":
+                let lowU = unitStr.lowercased()
+                let km = lowU == "m" ? num / 1000.0 : (lowU.contains("mi") ? num * 1.60934 : num)
+                if (0.0...300.0).contains(km) {
+                    day.distanceKmSum += km
+                    day.hasDistanceKm = true
+                }
+            case "HKQuantityTypeIdentifierFlightsClimbed":
+                if (0.0...500.0).contains(num) {
+                    day.elevationMSum += num * 3.05
+                    day.hasElevationM = true
+                }
+            case "HKQuantityTypeIdentifierRunningPower", "HKQuantityTypeIdentifierCyclingPower":
+                if (10.0...2000.0).contains(num) { day.powerValues.append(num) }
+            case "HKQuantityTypeIdentifierCyclingCadence":
+                if (20.0...220.0).contains(num) { day.cadenceValues.append(num) }
             default:
                 break
             }
@@ -1369,17 +1466,28 @@ enum AppleHealthExportImporter {
     }
 
     static func mapWorkoutName(_ rawType: String) -> (String, String, Bool) {
-        let low = rawType.lowercased()
-        if low.contains("strength") || low.contains("coretraining") { return ("Entrenamiento de fuerza", "Fuerza", true) }
-        if low.contains("running") { return ("Carrera", "Cardio", false) }
-        if low.contains("cycling") { return ("Bici al aire libre", "Cardio", false) }
-        if low.contains("walking") || low.contains("hiking") { return ("Caminata", "Aeróbico", false) }
-        if low.contains("swimming") { return ("Natación", "Cardio", false) }
+        let low = rawType
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        if low.contains("traditionalstrength") || low.contains("fuerza tradicional") {
+            return ("Entrenamiento de fuerza tradicional", "Fuerza", true)
+        }
+        if low.contains("functionalstrength") || low.contains("fuerza funcional") {
+            return ("Entrenamiento de fuerza funcional", "Fuerza", true)
+        }
+        if low.contains("strength") || low.contains("coretraining") || low.contains("fuerza") || low.contains("pesas") {
+            return ("Entrenamiento de fuerza tradicional", "Fuerza", true)
+        }
+        if low.contains("running") || low.contains("correr") || low.contains("carrera") { return ("Carrera", "Cardio", false) }
+        if low.contains("cycling") || low.contains("bici") || low.contains("ciclismo") { return ("Bici al aire libre", "Cardio", false) }
+        if low.contains("walking") || low.contains("hiking") || low.contains("caminar") || low.contains("caminata") || low.contains("senderismo") {
+            return ("Caminata", "Aeróbico", false)
+        }
+        if low.contains("swimming") || low.contains("natacion") { return ("Natación", "Cardio", false) }
         if low.contains("highintensity") || low.contains("hiit") { return ("HIIT", "Alta intensidad", false) }
-        if low.contains("yoga") || low.contains("pilates") { return ("Movilidad / Yoga", "Recuperación", false) }
-        if low.contains("rowing") { return ("Remo", "Cardio", false) }
-        if low.contains("soccer") || low.contains("football") { return ("Fútbol", "Deporte", false) }
-        if low.contains("tennis") || low.contains("padel") { return ("Tenis / Pádel", "Deporte", false) }
+        if low.contains("yoga") || low.contains("pilates") || low.contains("movilidad") { return ("Movilidad / Yoga", "Recuperación", false) }
+        if low.contains("rowing") || low.contains("remo") { return ("Remo", "Cardio", false) }
+        if low.contains("soccer") || low.contains("football") || low.contains("futbol") { return ("Fútbol", "Deporte", false) }
+        if low.contains("tennis") || low.contains("padel") || low.contains("tenis") { return ("Tenis / Pádel", "Deporte", false) }
         return ("Entrenamiento", "Actividad", false)
     }
 
@@ -1470,7 +1578,20 @@ enum AppleHealthExportImporter {
         maxHr: Double,
         rhr: Double
     ) -> [Int] {
-        guard samples.count >= 2 else { return [0, 0, 0, 0, 0] }
+        let z6 = computeHrZoneMinutes6(samples: samples, workoutSpans: workoutSpans, maxHr: maxHr, rhr: rhr)
+        return Array(z6.dropFirst())
+    }
+
+    /// Computes 6-zone heart rate durations `[Z0, Z1, Z2, Z3, Z4, Z5]` in minutes:
+    /// - Z0: active workout / warm-up HR below 50% HRR (matches Bevel's Z0 bar!)
+    /// - Z1..Z5: Karvonen 50%..100% HRR with conservative dt capping so passive walking never inflates Z1/Z2.
+    static func computeHrZoneMinutes6(
+        samples: [(Int64, Double)],
+        workoutSpans: [ClosedRange<Int64>],
+        maxHr: Double,
+        rhr: Double
+    ) -> [Int] {
+        guard samples.count >= 2 else { return [0, 0, 0, 0, 0, 0] }
         let sorted = samples.sorted { $0.0 < $1.0 }
 
         // Collapse identical timestamps (e.g. Apple Shortcuts minute-truncated HR readings) by averaging BPM
@@ -1491,24 +1612,24 @@ enum AppleHealthExportImporter {
             }
         }
         deduped.append((curEp, sumBpm / cnt))
-        guard deduped.count >= 2 else { return [0, 0, 0, 0, 0] }
+        guard deduped.count >= 2 else { return [0, 0, 0, 0, 0, 0] }
 
         let hrr = max(maxHr - rhr, 40.0)
-        var secs = [0.0, 0.0, 0.0, 0.0, 0.0]
+        var secs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         for idx in 0..<(deduped.count - 1) {
             let ep = deduped[idx].0
             let rawDt = Double(deduped[idx + 1].0 - ep)
             guard rawDt > 0 else { continue }
             let inWorkout = workoutSpans.contains { $0.contains(ep) }
-            // Cap dt conservatively so sparse background samples never inflate passive time into huge fake Zone 1/2 minutes!
-            let maxCap = inWorkout ? 30.0 : 90.0
+            let maxCap = inWorkout ? 45.0 : 90.0
             let dt = min(rawDt, maxCap)
             let pctHrr = (deduped[idx].1 - rhr) / hrr
-            if pctHrr >= 0.90 { secs[4] += dt }
-            else if pctHrr >= 0.80 { secs[3] += dt }
-            else if pctHrr >= 0.70 { secs[2] += dt }
-            else if pctHrr >= 0.60 { secs[1] += dt }
-            else if pctHrr >= 0.50 { secs[0] += dt }
+            if pctHrr >= 0.90 { secs[5] += dt }
+            else if pctHrr >= 0.80 { secs[4] += dt }
+            else if pctHrr >= 0.70 { secs[3] += dt }
+            else if pctHrr >= 0.60 { secs[2] += dt }
+            else if pctHrr >= 0.50 { secs[1] += dt }
+            else if inWorkout || pctHrr >= 0.34 { secs[0] += dt }
         }
         return secs.map { Int($0 / 60.0) }
     }

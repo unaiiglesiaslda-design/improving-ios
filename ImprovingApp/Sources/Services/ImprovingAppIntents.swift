@@ -68,6 +68,45 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
     @Parameter(title: "Fechas de Calorías activas")
     var kcalDates: [String]?
 
+    @Parameter(title: "VO₂ máx. (mL/kg·min)")
+    var vo2Values: [String]?
+
+    @Parameter(title: "Fechas de VO₂ máx.")
+    var vo2Dates: [String]?
+
+    @Parameter(title: "Recuperación de FC (ppm)")
+    var hrrValues: [String]?
+
+    @Parameter(title: "Fechas de Recuperación de FC")
+    var hrrDates: [String]?
+
+    @Parameter(title: "Distancia (km)")
+    var distanceValues: [String]?
+
+    @Parameter(title: "Fechas de Distancia")
+    var distanceDates: [String]?
+
+    @Parameter(title: "Pisos subidos (desnivel)")
+    var flightsValues: [String]?
+
+    @Parameter(title: "Fechas de Pisos subidos")
+    var flightsDates: [String]?
+
+    @Parameter(title: "Nombres de Entrenamientos")
+    var workoutNames: [String]?
+
+    @Parameter(title: "Inicios de Entrenamientos")
+    var workoutStarts: [String]?
+
+    @Parameter(title: "Fines de Entrenamientos")
+    var workoutEnds: [String]?
+
+    @Parameter(title: "Duraciones de Entrenamientos")
+    var workoutDurations: [String]?
+
+    @Parameter(title: "Calorías de Entrenamientos")
+    var workoutKcals: [String]?
+
     @Parameter(title: "JSON o texto libre (opcional)", description: "Alternativa: pega aquí un Diccionario JSON o líneas tipo 'hrv|fecha|valor'")
     var rawTextOrJson: String?
 
@@ -91,9 +130,22 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
             stepsDates: stepsDates,
             kcalValues: kcalValues,
             kcalDates: kcalDates,
+            vo2Values: vo2Values,
+            vo2Dates: vo2Dates,
+            hrrValues: hrrValues,
+            hrrDates: hrrDates,
+            distanceValues: distanceValues,
+            distanceDates: distanceDates,
+            flightsValues: flightsValues,
+            flightsDates: flightsDates,
             sleepValues: sleepValues,
             sleepStarts: sleepStarts,
             sleepEnds: sleepEnds,
+            workoutNames: workoutNames,
+            workoutStarts: workoutStarts,
+            workoutEnds: workoutEnds,
+            workoutDurations: workoutDurations,
+            workoutKcals: workoutKcals,
             rawTextOrJson: rawTextOrJson
         )
 

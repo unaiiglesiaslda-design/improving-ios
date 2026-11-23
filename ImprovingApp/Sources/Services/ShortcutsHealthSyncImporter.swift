@@ -27,11 +27,25 @@ struct ShortcutsSyncEnvelope: Codable {
     var kcalDates: [String]? = nil
     var vo2Values: [String]? = nil
     var vo2Dates: [String]? = nil
+    var hrrValues: [String]? = nil
+    var hrrDates: [String]? = nil
+    var distanceValues: [String]? = nil
+    var distanceDates: [String]? = nil
+    var cyclingDistanceValues: [String]? = nil
+    var cyclingDistanceDates: [String]? = nil
+    var flightsValues: [String]? = nil
+    var flightsDates: [String]? = nil
     var weightValues: [String]? = nil
     var weightDates: [String]? = nil
     var sleepValues: [String]? = nil
     var sleepStarts: [String]? = nil
     var sleepEnds: [String]? = nil
+    var workoutNames: [String]? = nil
+    var workoutStarts: [String]? = nil
+    var workoutEnds: [String]? = nil
+    var workoutDurations: [String]? = nil
+    var workoutKcals: [String]? = nil
+    var workoutDistances: [String]? = nil
     var workoutLines: [String]? = nil
     var rawTextOrJson: String? = nil
 }
@@ -125,8 +139,8 @@ enum ShortcutsHealthSyncImporter {
         let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
         let sz = vals?.fileSize ?? 0
-        // v6 prefix forces automatic re-parse with REM-preserving sleeping HR & 60-day personal vital bands
-        return "v6#\(url.lastPathComponent)#\(sz)#\(mtime)"
+        // v7 prefix forces automatic re-parse with Fitness workouts, Z0..Z5, HRR, distance, elevation & live stress
+        return "v7#\(url.lastPathComponent)#\(sz)#\(mtime)"
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)
@@ -244,8 +258,21 @@ enum ShortcutsHealthSyncImporter {
         ingestParallelSeries(kind: .steps, values: env.stepsValues, dates: env.stepsDates, into: &days)
         ingestParallelSeries(kind: .kcal, values: env.kcalValues, dates: env.kcalDates, into: &days)
         ingestParallelSeries(kind: .vo2, values: env.vo2Values, dates: env.vo2Dates, into: &days)
+        ingestParallelSeries(kind: .hrr, values: env.hrrValues, dates: env.hrrDates, into: &days)
+        ingestParallelSeries(kind: .distanceKm, values: env.distanceValues, dates: env.distanceDates, into: &days)
+        ingestParallelSeries(kind: .distanceKm, values: env.cyclingDistanceValues, dates: env.cyclingDistanceDates, into: &days)
+        ingestParallelSeries(kind: .flights, values: env.flightsValues, dates: env.flightsDates, into: &days)
         ingestParallelSeries(kind: .weight, values: env.weightValues, dates: env.weightDates, into: &days)
         ingestParallelSleep(values: env.sleepValues, starts: env.sleepStarts, ends: env.sleepEnds, sourceName: env.source, into: &days)
+        ingestParallelWorkouts(
+            names: env.workoutNames,
+            starts: env.workoutStarts,
+            ends: env.workoutEnds,
+            durations: env.workoutDurations,
+            kcals: env.workoutKcals,
+            distances: env.workoutDistances,
+            into: &days
+        )
 
         if let wkLines = env.workoutLines {
             for line in expandLines(wkLines) {
@@ -277,8 +304,9 @@ enum ShortcutsHealthSyncImporter {
     private static func envelopeHasAnyContent(_ e: ShortcutsSyncEnvelope) -> Bool {
         let lists: [[String]?] = [
             e.hrValues, e.hrvValues, e.rhrValues, e.respValues, e.spo2Values,
-            e.tempValues, e.stepsValues, e.kcalValues, e.vo2Values, e.weightValues,
-            e.sleepValues, e.workoutLines
+            e.tempValues, e.stepsValues, e.kcalValues, e.vo2Values, e.hrrValues,
+            e.distanceValues, e.cyclingDistanceValues, e.flightsValues, e.weightValues,
+            e.sleepValues, e.workoutNames, e.workoutStarts, e.workoutLines
         ]
         if lists.contains(where: { !($0?.isEmpty ?? true) }) { return true }
         return !(e.rawTextOrJson?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
@@ -288,6 +316,7 @@ enum ShortcutsHealthSyncImporter {
 
     private enum SyncMetricKind {
         case hr, hrv, hrvRmssd, rhr, resp, spo2, temp, steps, kcal, vo2, hrr, weight, bodyFat, leanMass, daylight, audio
+        case distanceKm, flights, elevationM, powerW, cadenceRpm
     }
 
     private static func classifyMetricKey(_ rawKey: String) -> SyncMetricKind? {
@@ -309,8 +338,13 @@ enum ShortcutsHealthSyncImporter {
         if k == "temp" || k.contains("temperat") || k.contains("wrist") || k.contains("muneca") { return .temp }
         if k == "steps" || k.contains("step") || k.contains("paso") { return .steps }
         if k == "kcal" || k == "calories" || k.contains("active energy") || k.contains("energia activa") || k.contains("calorias") { return .kcal }
-        if k == "vo2" || k.contains("vo2") { return .vo2 }
-        if k == "hrr" || k.contains("heart rate recovery") { return .hrr }
+        if k == "vo2" || k.contains("vo2") || k.contains("capacidad aerobica") { return .vo2 }
+        if k == "hrr" || k.contains("heart rate recovery") || k.contains("recuperacion de fc") || k.contains("recuperacion cardiaca") { return .hrr }
+        if k.contains("flight") || k.contains("pisos") || k.contains("escaleras") { return .flights }
+        if k.contains("elevat") || k.contains("desnivel") || k.contains("altitud") { return .elevationM }
+        if k.contains("distanc") || k == "km" { return .distanceKm }
+        if k.contains("power") || k.contains("potencia") { return .powerW }
+        if k.contains("cadenc") { return .cadenceRpm }
         if k == "weight" || k == "peso" || k.contains("body mass") || k.contains("masa corporal") { return .weight }
         if k.contains("body fat") || k.contains("grasa") { return .bodyFat }
         if k.contains("lean") || k.contains("masa magra") { return .leanMass }
@@ -443,7 +477,7 @@ enum ShortcutsHealthSyncImporter {
             for w in workouts { ingestWorkoutDict(w, into: &days) }
         }
 
-        // 3. Parallel-list keys inside a Shortcut Dictionary (e.g. hr_values + hr_dates, sleep_values + sleep_starts + sleep_ends)
+        // 3. Parallel-list keys inside a Shortcut Dictionary (e.g. hr_values + hr_dates, sleep_values + sleep_starts + sleep_ends, workout_names + workout_starts...)
         let parallelPrefixes: [(prefix: String, kind: SyncMetricKind)] = [
             ("hr", .hr), ("fc", .hr),
             ("rmssd", .hrvRmssd), ("hrv_rmssd", .hrvRmssd), ("vfc_rmssd", .hrvRmssd),
@@ -455,6 +489,12 @@ enum ShortcutsHealthSyncImporter {
             ("steps", .steps), ("pasos", .steps),
             ("kcal", .kcal), ("active_kcal", .kcal), ("calories", .kcal),
             ("vo2", .vo2),
+            ("hrr", .hrr), ("hr_recovery", .hrr),
+            ("distance", .distanceKm), ("walk_distance", .distanceKm), ("cycling_distance", .distanceKm), ("distancia", .distanceKm),
+            ("flights", .flights), ("pisos", .flights),
+            ("elevation", .elevationM), ("desnivel", .elevationM),
+            ("power", .powerW), ("potencia", .powerW),
+            ("cadence", .cadenceRpm), ("cadencia", .cadenceRpm),
             ("weight", .weight), ("peso", .weight)
         ]
         for (p, kind) in parallelPrefixes {
@@ -469,6 +509,23 @@ enum ShortcutsHealthSyncImporter {
         let slEnds = extractStringList(dict["sleep_ends"] ?? dict["sleepEnds"])
         if !slStarts.isEmpty && !slEnds.isEmpty {
             ingestParallelSleep(values: slVals, starts: slStarts, ends: slEnds, sourceName: "Atajos de Apple", into: &days)
+        }
+        let wkNames = extractStringList(dict["workout_names"] ?? dict["workoutNames"] ?? dict["workout_types"] ?? dict["workouts_names"])
+        let wkStarts = extractStringList(dict["workout_starts"] ?? dict["workoutStarts"] ?? dict["workouts_starts"] ?? dict["workout_dates"])
+        let wkEnds = extractStringList(dict["workout_ends"] ?? dict["workoutEnds"] ?? dict["workouts_ends"])
+        let wkDurs = extractStringList(dict["workout_durations"] ?? dict["workoutDurations"] ?? dict["workouts_durations"])
+        let wkKcals = extractStringList(dict["workout_kcals"] ?? dict["workoutKcals"] ?? dict["workout_values"] ?? dict["workouts_values"])
+        let wkDists = extractStringList(dict["workout_distances"] ?? dict["workoutDistances"])
+        if !wkStarts.isEmpty {
+            ingestParallelWorkouts(
+                names: wkNames,
+                starts: wkStarts,
+                ends: wkEnds,
+                durations: wkDurs,
+                kcals: wkKcals,
+                distances: wkDists,
+                into: &days
+            )
         }
 
         // 4. Shorthand dictionary keys: { "hr": ["2026-11-23 08:15|64"], "hrv": 72.0, "date": "2026-11-23", ... }
@@ -633,6 +690,17 @@ enum ShortcutsHealthSyncImporter {
             if let hrObj = w["heartRate"] as? [String: Any], let q = anyToDouble(hrObj["avg"] ?? hrObj["Avg"]) { return q }
             return anyToDouble(w["avgHr"] ?? w["avgHeartRate"] ?? w["fc_media"]) ?? 0
         }()
+        let distKmVal: Double? = {
+            if let distObj = w["distance"] as? [String: Any], let q = anyToDouble(distObj["qty"]) {
+                let u = ((distObj["units"] as? String) ?? "").lowercased()
+                return u == "m" ? q / 1000.0 : (u.contains("mi") ? q * 1.60934 : q)
+            }
+            return anyToDouble(w["distanceKm"] ?? w["distance"] ?? w["distancia"])
+        }()
+        let elevMVal: Double? = {
+            if let elObj = w["elevationUp"] as? [String: Any], let q = anyToDouble(elObj["qty"]) { return q }
+            return anyToDouble(w["elevationM"] ?? w["elevation"] ?? w["desnivel"])
+        }()
         addWorkout(
             title: title == "Entrenamiento" && !rawName.isEmpty ? rawName : title,
             category: category,
@@ -642,8 +710,89 @@ enum ShortcutsHealthSyncImporter {
             durationMin: max(durMin, 1),
             kcal: max(Int(kcalVal.rounded()), 0),
             avgHr: max(Int(avgHrVal.rounded()), 0),
+            distanceKm: distKmVal,
+            elevationM: elevMVal,
             into: &days
         )
+    }
+
+    private static func ingestParallelWorkouts(
+        names rawNames: [String]?,
+        starts rawStarts: [String]?,
+        ends rawEnds: [String]?,
+        durations rawDurations: [String]?,
+        kcals rawKcals: [String]?,
+        distances rawDistances: [String]?,
+        into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
+    ) {
+        let starts = expandParallelLines(rawStarts)
+        guard !starts.isEmpty else { return }
+        let names = expandParallelLines(rawNames)
+        let ends = expandParallelLines(rawEnds)
+        let durs = expandParallelLines(rawDurations)
+        let kcals = expandParallelLines(rawKcals)
+        let dists = expandParallelLines(rawDistances)
+
+        for i in 0..<starts.count {
+            guard let s = parseFlexibleDate(starts[i]) else { continue }
+            let eOpt = i < ends.count ? parseFlexibleDate(ends[i]) : nil
+            let durFromField: Int? = {
+                guard i < durs.count, !durs[i].isEmpty else { return nil }
+                let low = durs[i].lowercased()
+                if let val = parseLocalizedNumber(durs[i]) {
+                    if low.contains("seg") || low.contains("sec") || (val > 400 && !low.contains("min") && !low.contains("h")) {
+                        return max(Int((val / 60.0).rounded()), 1)
+                    }
+                    if low.contains("h") && val <= 12 {
+                        return max(Int((val * 60.0).rounded()), 1)
+                    }
+                    return max(Int(val.rounded()), 1)
+                }
+                return nil
+            }()
+            let spanMin: Int = {
+                if let e = eOpt {
+                    return max(Int((e.date.timeIntervalSince(s.date) / 60.0).rounded()), 1)
+                }
+                return durFromField ?? 30
+            }()
+            let finalDur = min(max(durFromField ?? spanMin, 1), 720)
+            let endPair: (date: Date, wall: (iso: String, minuteOfDay: Int)) = eOpt ?? {
+                let endDt = s.date.addingTimeInterval(Double(finalDur * 60))
+                return (endDt, wallClock(for: endDt))
+            }()
+
+            let rawName = (i < names.count && !names[i].isEmpty) ? names[i] : "Entrenamiento"
+            let (mapped, cat, isStr) = AppleHealthExportImporter.mapWorkoutName(rawName)
+            let kcal: Int = {
+                guard i < kcals.count, let v = parseLocalizedNumber(kcals[i]) else { return 0 }
+                let low = kcals[i].lowercased()
+                let k = low.contains("kj") ? v / 4.184 : v
+                return (1.0...6_000.0).contains(k) ? Int(k.rounded()) : 0
+            }()
+            let distKm: Double? = {
+                guard i < dists.count, let v = parseLocalizedNumber(dists[i]), v > 0 else { return nil }
+                let low = dists[i].lowercased()
+                let km = (low.contains(" m") || low.hasSuffix("m")) && !low.contains("km") && !low.contains("mi")
+                    ? v / 1000.0
+                    : (low.contains("mi") ? v * 1.60934 : v)
+                return km > 0 && km < 300 ? AppleHealthExportImporter.round1(km) : nil
+            }()
+
+            addWorkout(
+                title: mapped == "Entrenamiento" && rawName != "Entrenamiento" ? rawName : mapped,
+                category: cat,
+                isStrength: isStr,
+                start: s,
+                end: endPair,
+                durationMin: finalDur,
+                kcal: kcal,
+                avgHr: 0,
+                distanceKm: distKm,
+                elevationM: nil,
+                into: &days
+            )
+        }
     }
 
     // MARK: - Pipe / Delimited Plain Text Ingestion
@@ -792,6 +941,26 @@ enum ShortcutsHealthSyncImporter {
             }
         case .audio:
             if (20.0...130.0).contains(num) { day.audioSamplesDb.append((ep, num)) }
+        case .distanceKm:
+            let km = (lowUnit.contains("mi") ? num * 1.60934 : ((lowUnit.contains(" m") || lowUnit == "m") && !lowUnit.contains("km") ? num / 1000.0 : num))
+            if (0.0...300.0).contains(km) {
+                day.distanceKmSum += km
+                day.hasDistanceKm = true
+            }
+        case .flights:
+            if (0.0...500.0).contains(num) {
+                day.elevationMSum += num * 3.05
+                day.hasElevationM = true
+            }
+        case .elevationM:
+            if (0.0...12_000.0).contains(num) {
+                day.elevationMSum += num
+                day.hasElevationM = true
+            }
+        case .powerW:
+            if (10.0...2000.0).contains(num) { day.powerValues.append(num) }
+        case .cadenceRpm:
+            if (20.0...220.0).contains(num) { day.cadenceValues.append(num) }
         }
     }
 
@@ -840,28 +1009,38 @@ enum ShortcutsHealthSyncImporter {
         durationMin: Int,
         kcal: Int,
         avgHr: Int,
+        distanceKm: Double? = nil,
+        elevationM: Double? = nil,
         into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
     ) {
         let day = mutableDay(iso: start.wall.iso, in: &days)
-        if isStrength { day.strengthMinutes += durationMin }
         let sEp = Int64(start.date.timeIntervalSince1970)
         let eEp = max(Int64(end.date.timeIntervalSince1970), sEp + Int64(durationMin * 60))
-        day.workoutSpans.append(sEp...eEp)
-        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: durationMin, kcal: kcal, avgHrBpm: avgHr)
         let sTime = String(format: "%02d:%02d", start.wall.minuteOfDay / 60, start.wall.minuteOfDay % 60)
         let eTime = String(format: "%02d:%02d", end.wall.minuteOfDay / 60, end.wall.minuteOfDay % 60)
+        let timeRange = "\(sTime) - \(eTime)"
+        // Deduplicate exact same workout within the same sync payload
+        if day.workouts.contains(where: { $0.title == title && $0.timeRange == timeRange }) {
+            return
+        }
+        if isStrength { day.strengthMinutes += durationMin }
+        day.workoutSpans.append(sEp...eEp)
+        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: durationMin, kcal: kcal, avgHrBpm: avgHr)
         day.workouts.append(
             EffortEventItem(
                 id: "sh_wk_\(day.dateIso)_\(day.workouts.count)",
                 title: title,
-                timeRange: "\(sTime) - \(eTime)",
+                timeRange: timeRange,
                 durationMin: durationMin,
                 avgHrBpm: avgHr,
                 strainScore: ws.strain21,
                 strainPct: ws.strainPct,
                 categoryLabel: category,
                 kcal: kcal,
-                dateIso: day.dateIso
+                distanceKm: distanceKm,
+                elevationM: elevationM,
+                dateIso: day.dateIso,
+                startEpochSec: sEp
             )
         )
     }

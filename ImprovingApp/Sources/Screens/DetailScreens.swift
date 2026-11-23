@@ -1090,7 +1090,21 @@ struct EstresScreen: View {
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
                     canGoNextDay: store.dayOffset > 0
                 ) {
-                    StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 176, isHeroGauge: true, hasData: avail.hasStressData)
+                    VStack(spacing: 10) {
+                        StressRadialDial(score: store.displayStressScore, statusLabel: store.stressStatusLabel, size: 176, isHeroGauge: true, hasData: avail.hasStressData)
+                        if avail.hasStressData {
+                            let labelPrefix = store.dayOffset == 0
+                                ? (store.lastStressSampleTimeLabel.map { "Actual \($0)" } ?? "Actual")
+                                : "Media del día"
+                            Text("\(labelPrefix) · Media \(store.stressAvg ?? store.stressScore) · Máx \(store.stressMax ?? 0) · Mín \(store.stressMin ?? 0)")
+                                .font(ImprovingFont.caption(12))
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.textSecondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(Color.white.opacity(0.06)))
+                        }
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 14) {

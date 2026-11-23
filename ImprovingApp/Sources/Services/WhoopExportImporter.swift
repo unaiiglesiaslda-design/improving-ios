@@ -159,6 +159,30 @@ enum WhoopExportImporter {
                     guard let impLbl = imp.hrvMethodLabel else { return true }
                     return !impLbl.hasPrefix("RMSSD")
                 }()
+                // Merge 5-minute stress/energy timelines by minuteOfDay so fresh syncs ALWAYS append/update
+                // latest readings without losing earlier bins from the same day!
+                let mergedStress5m: [TimedBiometricPoint] = {
+                    if imp.stressSamples5m.isEmpty { return cur.stressSamples5m }
+                    if cur.stressSamples5m.isEmpty { return imp.stressSamples5m }
+                    var byMin: [Int: TimedBiometricPoint] = [:]
+                    for p in cur.stressSamples5m { byMin[p.minuteOfDay] = p }
+                    for p in imp.stressSamples5m { byMin[p.minuteOfDay] = p }
+                    return byMin.keys.sorted().compactMap { byMin[$0] }
+                }()
+                let mergedEnergy5m: [TimedBiometricPoint] = {
+                    if imp.energySamples5m.isEmpty { return cur.energySamples5m }
+                    if cur.energySamples5m.isEmpty { return imp.energySamples5m }
+                    var byMin: [Int: TimedBiometricPoint] = [:]
+                    for p in cur.energySamples5m { byMin[p.minuteOfDay] = p }
+                    for p in imp.energySamples5m { byMin[p.minuteOfDay] = p }
+                    return byMin.keys.sorted().compactMap { byMin[$0] }
+                }()
+                let mergedStressAvg: Int? = mergedStress5m.isEmpty
+                    ? (imp.stressScore ?? cur.stressScore)
+                    : Int((mergedStress5m.map(\.value).reduce(0, +) / Double(mergedStress5m.count)).rounded())
+                let mergedEnergyPct: Int? = mergedEnergy5m.last.map { Int($0.value.rounded()) }
+                    ?? (imp.energyBankPercent ?? cur.energyBankPercent)
+
                 merged[iso] = RealBiometricDaySummary(
                     dateIso: iso,
                     liveHrBpm: imp.liveHrBpm ?? cur.liveHrBpm,
@@ -182,8 +206,8 @@ enum WhoopExportImporter {
                     strain21: impHasFreshActivity ? imp.strain21 : (imp.strain21 ?? cur.strain21),
                     strainPct: impHasFreshActivity ? imp.strainPct : (imp.strainPct ?? cur.strainPct),
                     recoveryPct: imp.recoveryPct ?? cur.recoveryPct,
-                    stressScore: imp.stressScore ?? cur.stressScore,
-                    energyBankPercent: imp.energyBankPercent ?? cur.energyBankPercent,
+                    stressScore: mergedStressAvg,
+                    energyBankPercent: mergedEnergyPct,
                     stepsCount: imp.stepsCount ?? cur.stepsCount,
                     vo2MaxMlKgMin: imp.vo2MaxMlKgMin ?? cur.vo2MaxMlKgMin,
                     hrRecoveryBpm: imp.hrRecoveryBpm ?? cur.hrRecoveryBpm,
@@ -197,10 +221,15 @@ enum WhoopExportImporter {
                     systolicBp: imp.systolicBp ?? cur.systolicBp,
                     diastolicBp: imp.diastolicBp ?? cur.diastolicBp,
                     hrZoneMinutes: zones,
+                    hrZone0Minutes: impHasFreshActivity ? (imp.hrZone0Minutes ?? cur.hrZone0Minutes) : (cur.hrZone0Minutes ?? imp.hrZone0Minutes),
+                    distanceKm: imp.distanceKm ?? cur.distanceKm,
+                    elevationM: imp.elevationM ?? cur.elevationM,
+                    avgPowerW: imp.avgPowerW ?? cur.avgPowerW,
+                    avgCadenceRpm: imp.avgCadenceRpm ?? cur.avgCadenceRpm,
                     stressSeries24h: !imp.stressSeries24h.isEmpty ? imp.stressSeries24h : cur.stressSeries24h,
                     energySeries24h: !imp.energySeries24h.isEmpty ? imp.energySeries24h : cur.energySeries24h,
-                    stressSamples5m: !imp.stressSamples5m.isEmpty ? imp.stressSamples5m : cur.stressSamples5m,
-                    energySamples5m: !imp.energySamples5m.isEmpty ? imp.energySamples5m : cur.energySamples5m,
+                    stressSamples5m: mergedStress5m,
+                    energySamples5m: mergedEnergy5m,
                     strengthMinutes: max(cur.strengthMinutes, imp.strengthMinutes),
                     workouts: combinedWorkouts
                 )

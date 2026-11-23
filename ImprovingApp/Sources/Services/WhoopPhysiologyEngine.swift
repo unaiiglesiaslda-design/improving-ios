@@ -1224,4 +1224,491 @@ enum WhoopPhysiologyEngine {
         }
         return map
     }
+
+    // MARK: - Acute/Chronic EWMA Training Load Engine (Cardio & Muscular — Matches Bevel 7-State Breakdown!)
+
+    /// Computes genuine Bevel-style Acute (7d EWMA) vs Chronic (28d EWMA) Cardio or Muscular Training Load
+    /// strictly from real recorded workouts, HR zones, active calories, and logged strength sets.
+    static func computeTrainingLoadAnalysis(
+        tab: TrainingLoadTab,
+        history: [String: RealBiometricDaySummary],
+        strengthLogs: [StrengthLoggedSet],
+        anchorDate: Date,
+        spanDays: Int,
+        windowPageOffset: Int
+    ) -> TrainingLoadAnalysis {
+        let cal = Calendar.current
+        let anchorStart = cal.startOfDay(for: anchorDate)
+        let windowEnd = cal.date(byAdding: .day, value: -(windowPageOffset * spanDays), to: anchorStart) ?? anchorStart
+        let windowStart = cal.date(byAdding: .day, value: -(spanDays - 1), to: windowEnd) ?? windowEnd
+        // Warmup 42 days prior to windowStart so chronic EWMA & calibration status are causal and smooth
+        let warmupDays = 42
+        let simStart = cal.date(byAdding: .day, value: -warmupDays, to: windowStart) ?? windowStart
+        let totalSimDays = (cal.dateComponents([.day], from: simStart, to: windowEnd).day ?? (spanDays + warmupDays)) + 1
+
+        let isoFmt = DateFormatter()
+        isoFmt.locale = Locale(identifier: "en_US_POSIX")
+        isoFmt.dateFormat = "yyyy-MM-dd"
+        let shortFmt = DateFormatter()
+        shortFmt.locale = Locale(identifier: "es_ES")
+        shortFmt.dateFormat = spanDays >= 180 ? "MMM yy" : "d MMM"
+
+        let setsByDay = Dictionary(grouping: strengthLogs.filter(\.completed), by: \.dateIso)
+        let firstHistoryIso = history.keys.sorted().first ?? isoFmt.string(from: anchorStart)
+
+        let alphaAcute = 2.0 / (7.0 + 1.0)
+        let alphaChronic = 2.0 / (28.0 + 1.0)
+        var acute = 0.0
+        var chronic = 0.0
+        var activeDaysSeen = 0
+        var anyDataFound = false
+
+        var windowPoints: [TrainingLoadDayPoint] = []
+        windowPoints.reserveCapacity(spanDays)
+
+        for offset in 0..<max(totalSimDays, 1) {
+            guard let dt = cal.date(byAdding: .day, value: offset, to: simStart) else { continue }
+            let iso = isoFmt.string(from: dt)
+            let summary = history[iso]
+
+            let dailyStimulus: Double
+            if tab == .cardio {
+                if let d = summary {
+                    let workoutStim = d.workouts.reduce(0.0) { acc, w in
+                        acc + Double(w.strainPct) * 0.42
+                    }
+                    let zoneSum = d.hrZoneMinutes.reduce(0, +)
+                    let zoneStim: Double = {
+                        guard zoneSum > 0 else { return 0 }
+                        let weights = [0.22, 0.48, 0.85, 1.35, 1.95]
+                        return d.hrZoneMinutes.prefix(5).enumerated().reduce(0.0) { $0 + Double($1.element) * weights[$1.offset] } * 0.55
+                    }()
+                    let strainStim = d.strainPct.map { Double($0) * 0.28 } ?? 0
+                    dailyStimulus = max(workoutStim, max(zoneStim, strainStim))
+                } else {
+                    dailyStimulus = 0.0
+                }
+            } else {
+                // Muscular load: real strength workouts (HealthKit / Shortcuts) + logged strength sets & tonnage
+                let wkStrengthStim: Double = (summary?.workouts ?? []).reduce(0.0) { acc, w in
+                    let isStr = w.categoryLabel.localizedCaseInsensitiveContains("fuerza")
+                        || w.title.localizedCaseInsensitiveContains("fuerza")
+                        || w.title.localizedCaseInsensitiveContains("strength")
+                        || w.title.localizedCaseInsensitiveContains("core")
+                    guard isStr else { return acc }
+                    let base = max(Double(w.strainPct) * 1.45, Double(w.durationMin) * 0.88)
+                    return acc + base
+                }
+                let daySets = setsByDay[iso] ?? []
+                let loggedStim: Double = daySets.isEmpty ? 0.0 : (Double(daySets.count) * 1.85 + daySets.reduce(0.0) { $0 + Double($1.reps) * $1.weightKg } / 260.0)
+                let minFallback = (wkStrengthStim == 0 && (summary?.strengthMinutes ?? 0) > 0) ? Double(summary?.strengthMinutes ?? 0) * 0.85 : 0.0
+                dailyStimulus = max(wkStrengthStim, max(loggedStim, minFallback))
+            }
+
+            if dailyStimulus > 0.5 {
+                activeDaysSeen += 1
+                anyDataFound = true
+            }
+
+            acute = alphaAcute * dailyStimulus + (1.0 - alphaAcute) * acute
+            chronic = alphaChronic * dailyStimulus + (1.0 - alphaChronic) * chronic
+
+            let optLow = max((chronic * 0.78).rounded(), chronic > 0.4 ? 1.0 : 0.0)
+            let optHigh = max((chronic * 1.32).rounded(), optLow + (chronic > 0.4 ? 1.0 : 0.0))
+
+            let daysSinceFirst: Int = {
+                guard let fDt = isoFmt.date(from: firstHistoryIso) else { return 0 }
+                return max(cal.dateComponents([.day], from: cal.startOfDay(for: fDt), to: dt).day ?? 0, 0)
+            }()
+
+            let state: TrainingLoadState
+            if daysSinceFirst < 21 || activeDaysSeen < 5 || chronic < 1.2 {
+                state = .calibrating
+            } else {
+                let ratio = acute / max(chronic, 0.8)
+                if ratio < 0.65 {
+                    state = .detraining
+                } else if ratio < 0.82 && chronic >= 10.0 {
+                    state = .peaking
+                } else if ratio < 1.02 {
+                    state = .maintaining
+                } else if ratio <= 1.32 {
+                    state = .productive
+                } else if tab == .cardio && ratio <= 1.56 {
+                    state = .fatigued
+                } else {
+                    state = .overtraining
+                }
+            }
+
+            if dt >= windowStart && dt <= windowEnd {
+                windowPoints.append(
+                    TrainingLoadDayPoint(
+                        dateIso: iso,
+                        shortDateLabel: shortFmt.string(from: dt).replacingOccurrences(of: ".", with: ""),
+                        load: AppleHealthExportImporter.round1(acute),
+                        optLow: optLow,
+                        optHigh: optHigh,
+                        state: state
+                    )
+                )
+            }
+        }
+
+        let order = tab == .cardio ? TrainingLoadState.cardioOrder : TrainingLoadState.muscularOrder
+        let totalPts = max(windowPoints.count, 1)
+        let breakdown: [TrainingLoadBreakdownRow] = order.map { st in
+            let cnt = windowPoints.filter { $0.state == st }.count
+            let pct = windowPoints.isEmpty ? 0 : Int((Double(cnt) / Double(totalPts) * 100.0).rounded())
+            return TrainingLoadBreakdownRow(state: st, days: cnt, percent: pct)
+        }
+
+        let latest = windowPoints.last
+        let curLoad = Int((latest?.load ?? 0).rounded())
+        let optL = Int((latest?.optLow ?? 0).rounded())
+        let optH = max(Int((latest?.optHigh ?? 0).rounded()), optL + (anyDataFound ? 1 : 0))
+        let peakInWindow = Int(ceil(max(Double(max(curLoad, optH)) * 1.4, (windowPoints.map(\.load).max() ?? 0) * 1.15)))
+        let gaugeMax = max(peakInWindow, tab == .cardio ? 6 : 12)
+
+        return TrainingLoadAnalysis(
+            tab: tab,
+            currentLoad: curLoad,
+            currentState: latest?.state ?? .calibrating,
+            optimalLow: optL,
+            optimalHigh: optH,
+            gaugeMax: gaugeMax,
+            points: windowPoints,
+            breakdown: breakdown,
+            hasAnyData: anyDataFound
+        )
+    }
+
+    // MARK: - 5-Segment Standardized Cohort Evaluators (VO₂ máx. & HRR — Exact Bevel Thresholds)
+
+    static func standardizeVo2Max(_ value: Double, profile: UserPhysiologyProfile) -> StandardizedBandEvaluation {
+        let age = profile.effectiveAgeYears
+        let isFemale = profile.sex == .female
+        let decadeShift = (max(0.0, age - 24.0) / 10.0) * 3.2
+        // FRIEND / ACSM / Bevel 5-band thresholds (20-29 Male baseline: 40.1 / 48.0 / 55.2 / 61.8)
+        let t1 = AppleHealthExportImporter.round1(max((isFemale ? 33.0 : 40.1) - decadeShift, 18.0))
+        let t2 = AppleHealthExportImporter.round1(max((isFemale ? 39.5 : 48.0) - decadeShift, 22.0))
+        let t3 = AppleHealthExportImporter.round1(max((isFemale ? 45.2 : 55.2) - decadeShift, 26.0))
+        let t4 = AppleHealthExportImporter.round1(max((isFemale ? 51.0 : 61.8) - decadeShift, 30.0))
+
+        let fmt: (Double) -> String = { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }
+        let labels = ["<\(fmt(t1))", fmt(t1), fmt(t2), fmt(t3), ">\(fmt(t4))"]
+
+        let segIdx: Int
+        let title: String
+        let color: Color
+        let ptr: Double
+        if value < t1 {
+            segIdx = 0; title = "Bajo"; color = BevelColors.coralHigh
+            ptr = min(max(value / max(t1, 1.0) * 0.19, 0.04), 0.19)
+        } else if value < t2 {
+            segIdx = 1; title = "Aceptable"; color = BevelColors.amberStart
+            ptr = 0.20 + min(max((value - t1) / max(t2 - t1, 1.0), 0), 1) * 0.20
+        } else if value < t3 {
+            segIdx = 2; title = "Bueno"; color = BevelColors.greenPrimary
+            ptr = 0.40 + min(max((value - t2) / max(t3 - t2, 1.0), 0), 1) * 0.20
+        } else if value < t4 {
+            segIdx = 3; title = "Excelente"; color = BevelColors.bioTeal
+            ptr = 0.60 + min(max((value - t3) / max(t4 - t3, 1.0), 0), 1) * 0.20
+        } else {
+            segIdx = 4; title = "Superior"; color = BevelColors.skyBlue
+            ptr = 0.80 + min(max((value - t4) / 10.0, 0), 1) * 0.16
+        }
+
+        let ageBand: String = {
+            if age < 20 { return "0 - 19" }
+            if age < 30 { return "20 - 29" }
+            if age < 40 { return "30 - 39" }
+            if age < 50 { return "40 - 49" }
+            if age < 60 { return "50 - 59" }
+            return "60+"
+        }()
+        let sexWord = isFemale ? "mujeres" : (profile.sex == .male ? "hombres" : "adultos")
+        return StandardizedBandEvaluation(
+            labels: labels,
+            activeSegmentIndex: segIdx,
+            categoryTitle: title,
+            pointerFraction: ptr,
+            cohortSubtitle: "Estandarizado para \(ageBand) \(sexWord)",
+            activeColor: color
+        )
+    }
+
+    static func standardizeHrRecovery(_ bpm: Double, profile: UserPhysiologyProfile) -> StandardizedBandEvaluation {
+        let age = profile.effectiveAgeYears
+        let ageDrop = max(0.0, age - 29.0) * 0.22
+        let t1 = AppleHealthExportImporter.round1(max(15.0 - ageDrop * 0.4, 10.0))
+        let t2 = AppleHealthExportImporter.round1(max(32.0 - ageDrop * 0.7, 20.0))
+        let t3 = AppleHealthExportImporter.round1(max(40.0 - ageDrop * 0.8, 28.0))
+        let t4 = AppleHealthExportImporter.round1(max(49.0 - ageDrop * 0.9, 36.0))
+
+        let fmt: (Double) -> String = { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }
+        let labels = ["<\(fmt(t1))", fmt(t1), fmt(t2), fmt(t3), ">\(fmt(t4))"]
+
+        let segIdx: Int
+        let title: String
+        let color: Color
+        let ptr: Double
+        if bpm < t1 {
+            segIdx = 0; title = "Bajo"; color = BevelColors.coralHigh
+            ptr = min(max(bpm / max(t1, 1.0) * 0.19, 0.04), 0.19)
+        } else if bpm < t2 {
+            segIdx = 1; title = "Aceptable"; color = BevelColors.amberStart
+            ptr = 0.20 + min(max((bpm - t1) / max(t2 - t1, 1.0), 0), 1) * 0.20
+        } else if bpm < t3 {
+            segIdx = 2; title = "Bueno"; color = BevelColors.greenPrimary
+            ptr = 0.40 + min(max((bpm - t2) / max(t3 - t2, 1.0), 0), 1) * 0.20
+        } else if bpm < t4 {
+            segIdx = 3; title = "Excelente"; color = BevelColors.bioTeal
+            ptr = 0.60 + min(max((bpm - t3) / max(t4 - t3, 1.0), 0), 1) * 0.20
+        } else {
+            segIdx = 4; title = "Superior"; color = BevelColors.skyBlue
+            ptr = 0.80 + min(max((bpm - t4) / 14.0, 0), 1) * 0.16
+        }
+
+        let ageBand: String = {
+            if age < 30 { return "0 - 29" }
+            if age < 40 { return "30 - 39" }
+            if age < 50 { return "40 - 49" }
+            if age < 60 { return "50 - 59" }
+            return "60+"
+        }()
+        return StandardizedBandEvaluation(
+            labels: labels,
+            activeSegmentIndex: segIdx,
+            categoryTitle: title,
+            pointerFraction: ptr,
+            cohortSubtitle: "Estandarizado para \(ageBand)",
+            activeColor: color
+        )
+    }
+
+    // MARK: - 7-Day Rolling Average Multi-Period Trend Analysis (3d / 7d / 14d / 30d / 90d)
+
+    static func computeMultiPeriodTrendRows(
+        history: [String: RealBiometricDaySummary],
+        anchorDate: Date,
+        extractor: (RealBiometricDaySummary) -> Double?
+    ) -> [MetricTrendPeriodRow] {
+        let cal = Calendar.current
+        let isoFmt = DateFormatter()
+        isoFmt.locale = Locale(identifier: "en_US_POSIX")
+        isoFmt.dateFormat = "yyyy-MM-dd"
+        let anchor = cal.startOfDay(for: anchorDate)
+
+        // Extract dated values up to anchorDate across last 120 days
+        var dated: [(dayIndex: Int, value: Double)] = []
+        for back in (0..<120).reversed() {
+            guard let dt = cal.date(byAdding: .day, value: -back, to: anchor) else { continue }
+            let iso = isoFmt.string(from: dt)
+            if let v = history[iso].flatMap(extractor), v.isFinite {
+                dated.append((119 - back, v))
+            }
+        }
+
+        let periods = [3, 7, 14, 30, 90]
+        guard !dated.isEmpty else {
+            return periods.map { MetricTrendPeriodRow(id: $0, periodDays: $0, delta: nil, sparklinePoints: []) }
+        }
+
+        // Build daily linearly interpolated series from first recorded value to latest recorded value for smooth 7-day rolling averages
+        let firstDay = dated.first!.dayIndex
+        let lastDay = dated.last!.dayIndex
+        var daily: [Double?] = Array(repeating: nil, count: 120)
+        for idx in 0..<dated.count {
+            let cur = dated[idx]
+            daily[cur.dayIndex] = cur.value
+            if idx + 1 < dated.count {
+                let nxt = dated[idx + 1]
+                let gap = nxt.dayIndex - cur.dayIndex
+                if gap > 1 {
+                    for step in 1..<gap {
+                        let frac = Double(step) / Double(gap)
+                        daily[cur.dayIndex + step] = cur.value + (nxt.value - cur.value) * frac
+                    }
+                }
+            }
+        }
+
+        // 7-day trailing rolling average at each day
+        var rolling7: [Double?] = Array(repeating: nil, count: 120)
+        for d in firstDay...lastDay {
+            let lo = max(firstDay, d - 6)
+            let vals = (lo...d).compactMap { daily[$0] }
+            if !vals.isEmpty {
+                rolling7[d] = vals.reduce(0, +) / Double(vals.count)
+            }
+        }
+
+        return periods.map { p in
+            let endIdx = lastDay
+            let startIdx = max(firstDay, endIdx - p)
+            let slice = (startIdx...endIdx).compactMap { rolling7[$0] }
+            guard slice.count >= 2, let firstV = slice.first, let lastV = slice.last else {
+                return MetricTrendPeriodRow(id: p, periodDays: p, delta: nil, sparklinePoints: [])
+            }
+            let delta = AppleHealthExportImporter.round1(lastV - firstV)
+            return MetricTrendPeriodRow(id: p, periodDays: p, delta: delta, sparklinePoints: slice)
+        }
+    }
+
+    // MARK: - 6-Zone Heart Rate Thresholds (Z0..Z5 Karvonen / Tanaka)
+
+    static func hrZoneRangesBpm(profile: UserPhysiologyProfile, restingHrBpm: Double?) -> [(zone: Int, low: Int, high: Int)] {
+        let maxHr = Double(computeMaxHeartRate(profile: profile))
+        let rhr = restingHrBpm ?? computePersonalizedNorms(profile: profile).restingHrExpected
+        let hrr = max(maxHr - rhr, 45.0)
+        let z1Low = Int((rhr + hrr * 0.50).rounded())
+        let z2Low = Int((rhr + hrr * 0.60).rounded())
+        let z3Low = Int((rhr + hrr * 0.70).rounded())
+        let z4Low = Int((rhr + hrr * 0.80).rounded())
+        let z5Low = Int((rhr + hrr * 0.90).rounded())
+        let zMax = Int(maxHr.rounded())
+        return [
+            (0, Int(rhr.rounded()), max(z1Low - 1, Int(rhr.rounded()) + 10)),
+            (1, z1Low, max(z2Low - 1, z1Low + 5)),
+            (2, z2Low, max(z3Low - 1, z2Low + 5)),
+            (3, z3Low, max(z4Low - 1, z3Low + 5)),
+            (4, z4Low, max(z5Low - 1, z4Low + 5)),
+            (5, z5Low, max(zMax, z5Low + 5))
+        ]
+    }
+
+    // MARK: - 20-Muscle Anatomical Freshness & Load Engine (Zero Fabricated Workouts!)
+
+    static func computeMuscleGroupSnapshots(
+        history: [String: RealBiometricDaySummary],
+        strengthLogs: [StrengthLoggedSet],
+        anchorDate: Date
+    ) -> [MuscleGroupSnapshot] {
+        let cal = Calendar.current
+        let anchorStart = cal.startOfDay(for: anchorDate)
+        let isoFmt = DateFormatter()
+        isoFmt.locale = Locale(identifier: "en_US_POSIX")
+        isoFmt.dateFormat = "yyyy-MM-dd"
+
+        var fatigueMap: [MuscleGroupKind: Double] = [:]
+        var setsMap: [MuscleGroupKind: Int] = [:]
+        var volMap: [MuscleGroupKind: Double] = [:]
+        var trainedCountMap: [MuscleGroupKind: Int] = [:]
+        var loadMap: [MuscleGroupKind: Double] = [:]
+
+        // Look back 14 days for physiological freshness decay (48-72h half-life) and 30 days for volume/load
+        let setsByDay = Dictionary(grouping: strengthLogs.filter(\.completed), by: \.dateIso)
+
+        for back in 0..<30 {
+            guard let dt = cal.date(byAdding: .day, value: -back, to: anchorStart) else { continue }
+            let iso = isoFmt.string(from: dt)
+            let hoursAgo = Double(back * 24 + 12)
+            let decay = exp(-hoursAgo / 56.0) // ~39h half-life (~85-95% recovered after 5 days)
+            let loadDecay = exp(-Double(back) / 10.0)
+
+            // 1. Explicit logged strength sets (exact exercise -> muscle mapping!)
+            if let daySets = setsByDay[iso] {
+                for s in daySets {
+                    let vol = Double(s.reps) * max(s.weightKg, 10.0)
+                    for m in s.primaryMuscles {
+                        setsMap[m, default: 0] += 1
+                        volMap[m, default: 0] += vol
+                        trainedCountMap[m, default: 0] += 1
+                        loadMap[m, default: 0] += (4.5 + vol / 220.0) * loadDecay
+                        if back < 14 {
+                            fatigueMap[m, default: 0] += (11.5 + min(vol / 180.0, 9.0)) * decay
+                        }
+                    }
+                    for m in s.secondaryMuscles {
+                        volMap[m, default: 0] += vol * 0.4
+                        trainedCountMap[m, default: 0] += 1
+                        loadMap[m, default: 0] += (2.0 + vol / 440.0) * loadDecay
+                        if back < 14 {
+                            fatigueMap[m, default: 0] += (5.2 + min(vol / 380.0, 4.5)) * decay
+                        }
+                    }
+                }
+            }
+
+            // 2. Synced HealthKit / Shortcuts workouts (mapped physiologically to active muscle groups)
+            if let day = history[iso] {
+                for w in day.workouts {
+                    let mapping = inferMusclesForWorkout(w)
+                    let baseStim = max(Double(w.strainPct) * 1.15, Double(w.durationMin) * 0.65)
+                    for m in mapping.primary {
+                        trainedCountMap[m, default: 0] += 1
+                        loadMap[m, default: 0] += baseStim * 0.45 * loadDecay
+                        if back < 14 {
+                            fatigueMap[m, default: 0] += baseStim * 1.05 * decay
+                        }
+                    }
+                    for m in mapping.secondary {
+                        trainedCountMap[m, default: 0] += 1
+                        loadMap[m, default: 0] += baseStim * 0.22 * loadDecay
+                        if back < 14 {
+                            fatigueMap[m, default: 0] += baseStim * 0.48 * decay
+                        }
+                    }
+                }
+            }
+        }
+
+        return MuscleGroupKind.allCases.map { muscle in
+            let trained = trainedCountMap[muscle, default: 0] > 0
+            let rawFatigue = fatigueMap[muscle, default: 0]
+            let freshness = min(max(Int((100.0 - min(rawFatigue, 88.0)).rounded()), 12), 100)
+            let state: MuscleFreshnessState
+            if !trained {
+                state = .calibrating
+            } else if freshness >= 80 {
+                state = .recovered
+            } else if freshness >= 45 {
+                state = .fatigued
+            } else {
+                state = .exhausted
+            }
+            return MuscleGroupSnapshot(
+                muscle: muscle,
+                freshnessPct: trained ? freshness : 100,
+                state: state,
+                recentSets: setsMap[muscle, default: 0],
+                recentVolumeKg: AppleHealthExportImporter.round1(volMap[muscle, default: 0]),
+                loadScore: Int(loadMap[muscle, default: 0].rounded())
+            )
+        }
+    }
+
+    static func inferMusclesForWorkout(_ w: EffortEventItem) -> (primary: [MuscleGroupKind], secondary: [MuscleGroupKind]) {
+        if let explicit = w.targetMuscles, !explicit.isEmpty {
+            let parsed = explicit.compactMap { MuscleGroupKind(rawValue: $0) }
+            if !parsed.isEmpty { return (parsed, []) }
+        }
+        let low = "\(w.title) \(w.categoryLabel)".lowercased()
+        if low.contains("pierna") || low.contains("inferior") || low.contains("sentadilla") {
+            return ([.cuadriceps, .gluteos, .isquiotibiales], [.pantorrillas, .abdominales, .lumbares])
+        }
+        if low.contains("empuje") || low.contains("pecho") || low.contains("push") {
+            return ([.pectorales, .triceps, .hombros], [.abdominales])
+        }
+        if low.contains("tirón") || low.contains("espalda") || low.contains("pull") {
+            return ([.dorsales, .espaldaAlta, .biceps], [.antebrazo, .trapecio])
+        }
+        if low.contains("fuerza") || low.contains("strength") {
+            return ([.pectorales, .dorsales, .triceps], [.hombros, .abdominales])
+        }
+        if low.contains("bici") || low.contains("ciclismo") || low.contains("cycling") {
+            return ([.cuadriceps, .gluteos, .pantorrillas], [.isquiotibiales, .flexoresCadera])
+        }
+        if low.contains("carrera") || low.contains("run") || low.contains("caminat") || low.contains("hiit") {
+            return ([.cuadriceps, .pantorrillas, .isquiotibiales], [.gluteos, .flexoresCadera, .abdominales])
+        }
+        if low.contains("nataci") || low.contains("swim") || low.contains("remo") || low.contains("row") {
+            return ([.dorsales, .hombros, .espaldaAlta], [.abdominales, .triceps, .biceps])
+        }
+        if low.contains("core") || low.contains("abdom") || low.contains("pilates") {
+            return ([.abdominales, .oblicuos], [.lumbares, .flexoresCadera])
+        }
+        return ([.cuadriceps, .gluteos], [.abdominales, .pantorrillas])
+    }
 }

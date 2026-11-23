@@ -235,7 +235,11 @@ struct HoyScreen: View {
                                             .font(ImprovingFont.cardTitle(15.5))
                                             .foregroundColor(BevelColors.textPrimary)
                                     }
-                                    Text(store.lastStressSampleTimeLabel.map { "Última lectura a las \($0)" } ?? "Sin mediciones este día")
+                                    Text(
+                                        store.dayOffset == 0
+                                            ? (store.lastStressSampleTimeLabel.map { "Última lectura a las \($0)" } ?? "Sin mediciones este día")
+                                            : (avail.hasStressData ? "Media diaria · \(store.stressSamplesToday.count) lecturas" : "Sin mediciones este día")
+                                    )
                                         .font(ImprovingFont.caption(12))
                                         .foregroundColor(BevelColors.textMuted)
                                 }
@@ -262,7 +266,7 @@ struct HoyScreen: View {
                             }
                             Spacer()
                             ZStack(alignment: .topTrailing) {
-                                StressRadialDial(score: store.stressScore, statusLabel: store.stressStatusLabel, size: 96, isHeroGauge: false, hasData: avail.hasStressData)
+                                StressRadialDial(score: store.displayStressScore, statusLabel: store.stressStatusLabel, size: 96, isHeroGauge: false, hasData: avail.hasStressData)
                                 Image(systemName: "arrow.right")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundColor(BevelColors.textMuted)

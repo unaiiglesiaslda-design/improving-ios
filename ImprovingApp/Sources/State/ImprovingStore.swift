@@ -45,6 +45,8 @@ final class ImprovingStore: ObservableObject {
         var lastAutoSyncStatus: String?
         var shortcutSyncName: String?
         var autoRunShortcutOnOpen: Bool?
+        var workoutRoutines: [WorkoutRoutineTemplate]?
+        var strengthLogs: [StrengthLoggedSet]?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -113,6 +115,8 @@ final class ImprovingStore: ObservableObject {
     private var lastHeadlineBySection: [CoachingSection: String] = [:]
 
     @Published var strengthSets: [(id: String, exercise: String, reps: Int, weightKg: Double, completed: Bool)] = []
+    @Published var workoutRoutines: [WorkoutRoutineTemplate] = []
+    @Published var strengthLogs: [StrengthLoggedSet] = []
     @Published var restTimerRunning: Bool = false
     @Published var restTimerSeconds: Int = 90
 
@@ -313,7 +317,26 @@ final class ImprovingStore: ObservableObject {
         return []
     }
 
+    /// Daily mean physiological stress (stored in `stressScore` for trends & daily averages).
     var stressScore: Int { currentDaySummary?.stressScore ?? 0 }
+
+    /// Live/Latest real physiological stress reading (exact last 5-min bucket from today's HR timeline!).
+    /// Fixes the "always stuck at 23" issue where the 24h mean barely moves due to 7+ hours of low sleeping stress.
+    var currentStressScore: Int {
+        if let last = stressSamplesToday.last {
+            return min(max(Int(last.value.rounded()), 1), 100)
+        }
+        return stressScore
+    }
+
+    /// Displayed dial value: live/latest reading on Today (`dayOffset == 0`), daily average on past days (`dayOffset > 0`).
+    var displayStressScore: Int {
+        if dayOffset == 0 && !stressSamplesToday.isEmpty {
+            return currentStressScore
+        }
+        return stressAvg ?? stressScore
+    }
+
     var stressMax: Int? {
         let vals = stressSamplesToday.map(\.value)
         return vals.max().map { Int($0.rounded()) }
@@ -323,10 +346,11 @@ final class ImprovingStore: ObservableObject {
         return vals.min().map { Int($0.rounded()) }
     }
     var stressAvg: Int? {
-        if let sc = currentDaySummary?.stressScore { return sc }
         let vals = stressSamplesToday.map(\.value)
-        guard !vals.isEmpty else { return nil }
-        return Int((vals.reduce(0, +) / Double(vals.count)).rounded())
+        if !vals.isEmpty {
+            return Int((vals.reduce(0, +) / Double(vals.count)).rounded())
+        }
+        return currentDaySummary?.stressScore
     }
     var lastStressSampleTimeLabel: String? {
         guard let last = stressSamplesToday.last else { return nil }
@@ -335,9 +359,125 @@ final class ImprovingStore: ObservableObject {
 
     var stressStatusLabel: String {
         guard dataAvailability.hasStressData else { return "Sin datos" }
-        if stressScore < 30 { return "Bajo" }
-        if stressScore < 58 { return "Moderado" }
+        let s = displayStressScore
+        if s < 30 { return "Bajo" }
+        if s < 60 { return "Moderado" }
         return "Alto"
+    }
+
+    var latestVo2MaxRecord: (value: Double, dateIso: String)? {
+        if let today = currentDaySummary?.vo2MaxMlKgMin { return (today, selectedDateIso) }
+        return activeHistory.values
+            .filter { $0.dateIso <= selectedDateIso && $0.vo2MaxMlKgMin != nil }
+            .sorted { $0.dateIso < $1.dateIso }
+            .last
+            .flatMap { d in d.vo2MaxMlKgMin.map { ($0, d.dateIso) } }
+    }
+
+    var latestHrRecoveryRecord: (value: Double, dateIso: String)? {
+        if let today = currentDaySummary?.hrRecoveryBpm { return (today, selectedDateIso) }
+        return activeHistory.values
+            .filter { $0.dateIso <= selectedDateIso && $0.hrRecoveryBpm != nil }
+            .sorted { $0.dateIso < $1.dateIso }
+            .last
+            .flatMap { d in d.hrRecoveryBpm.map { ($0, d.dateIso) } }
+    }
+
+    func trainingLoadAnalysis(tab: TrainingLoadTab, spanDays: Int = 30, windowPageOffset: Int = 0) -> TrainingLoadAnalysis {
+        WhoopPhysiologyEngine.computeTrainingLoadAnalysis(
+            tab: tab,
+            history: activeHistory,
+            strengthLogs: strengthLogs,
+            anchorDate: selectedDate,
+            spanDays: spanDays,
+            windowPageOffset: windowPageOffset
+        )
+    }
+
+    func muscleGroupSnapshots(for date: Date? = nil) -> [MuscleGroupSnapshot] {
+        WhoopPhysiologyEngine.computeMuscleGroupSnapshots(
+            history: activeHistory,
+            strengthLogs: strengthLogs,
+            anchorDate: date ?? selectedDate
+        )
+    }
+
+    func toggleRoutinePin(_ id: String) {
+        if let idx = workoutRoutines.firstIndex(where: { $0.id == id }) {
+            workoutRoutines[idx].isPinned.toggle()
+            persistState()
+        }
+    }
+
+    func saveRoutine(_ routine: WorkoutRoutineTemplate) {
+        if let idx = workoutRoutines.firstIndex(where: { $0.id == routine.id }) {
+            workoutRoutines[idx] = routine
+        } else {
+            workoutRoutines.insert(routine, at: 0)
+        }
+        persistState()
+    }
+
+    func deleteRoutine(_ id: String) {
+        workoutRoutines.removeAll { $0.id == id }
+        persistState()
+    }
+
+    func logCompletedStrengthSession(
+        title: String,
+        durationMin: Int,
+        kcal: Int,
+        sets: [StrengthLoggedSet]
+    ) {
+        let completedOnly = sets.filter(\.completed)
+        for s in completedOnly {
+            strengthLogs.append(s)
+        }
+        let totalSets = completedOnly.count
+        let totalVol = completedOnly.reduce(0.0) { $0 + Double($1.reps) * $1.weightKg }
+        let muscleNames = Array(Set(completedOnly.flatMap { $0.primaryMuscles.map(\.rawValue) }))
+        let estKcal = kcal > 0 ? kcal : max(durationMin * 5, totalSets * 12)
+        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+            durationMin: max(durationMin, 5),
+            kcal: estKcal,
+            avgHrBpm: 0,
+            rhrBpm: restingHrBpm > 30 ? restingHrBpm : 55.0,
+            maxHrBpm: Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: userProfile)),
+            banisterB: userProfile.sex.banisterB
+        )
+        let nowFmt = DateFormatter()
+        nowFmt.dateFormat = "HH:mm"
+        let endStr = nowFmt.string(from: Date())
+        let startStr = nowFmt.string(from: Date().addingTimeInterval(-Double(max(durationMin, 5) * 60)))
+
+        var d = currentDaySummary ?? RealBiometricDaySummary(dateIso: selectedDateIso)
+        let ev = EffortEventItem(
+            id: UUID().uuidString,
+            title: title,
+            timeRange: "\(startStr) - \(endStr)",
+            durationMin: max(durationMin, 5),
+            avgHrBpm: 0,
+            strainScore: ws.strain21,
+            strainPct: ws.strainPct,
+            categoryLabel: "Fuerza",
+            kcal: estKcal,
+            distanceKm: nil,
+            elevationM: nil,
+            dateIso: selectedDateIso,
+            startEpochSec: Int64(Date().timeIntervalSince1970) - Int64(max(durationMin, 5) * 60),
+            totalSets: totalSets > 0 ? totalSets : nil,
+            totalVolumeKg: totalVol > 0 ? AppleHealthExportImporter.round1(totalVol) : nil,
+            targetMuscles: muscleNames.isEmpty ? nil : muscleNames
+        )
+        d.workouts.insert(ev, at: 0)
+        d.strengthMinutes += max(durationMin, 5)
+        if hasImportedOrPairedRealData {
+            realHistory[selectedDateIso] = d
+        } else {
+            simulatedHistory[selectedDateIso] = d
+        }
+        dataRevision += 1
+        persistState()
     }
 
     var energyPercent: Int { currentDaySummary?.energyBankPercent ?? 0 }
@@ -537,7 +677,13 @@ final class ImprovingStore: ObservableObject {
             if av.hasHrvData { facts.append(String(format: "VFC nocturna %.1f ms", locale: Locale(identifier: "es_ES"), hrvMs)) }
             if av.hasRestingHrData { facts.append(String(format: "FCR durmiendo %.1f ppm", locale: Locale(identifier: "es_ES"), restingHrBpm)) }
             if av.hasEnergyData { facts.append("Batería de energía al \(energyPercent)%") }
-            if av.hasStressData { facts.append("Estrés medio \(stressScore)/100 (\(stressStatusLabel))") }
+            if av.hasStressData {
+                if dayOffset == 0 && !stressSamplesToday.isEmpty {
+                    facts.append("Estrés actual \(currentStressScore)/100 (\(stressStatusLabel)) con media diaria \(stressAvg ?? stressScore)/100")
+                } else {
+                    facts.append("Estrés medio \(stressScore)/100 (\(stressStatusLabel))")
+                }
+            }
             if let steps = stepsCount { facts.append("\(steps) pasos acumulados") }
             return (facts, av.hasAnyRecordedData)
 
@@ -606,7 +752,9 @@ final class ImprovingStore: ObservableObject {
 
         case .estres:
             let samples = stressSamplesToday
-            if av.hasStressData { facts.append("Estrés medio \(stressScore)/100 (\(stressStatusLabel)) con \(samples.count) muestras reales") }
+            if av.hasStressData {
+                facts.append("Estrés actual \(displayStressScore)/100 (\(stressStatusLabel)), media diaria \(stressAvg ?? stressScore)/100 con \(samples.count) muestras reales")
+            }
             if let mx = stressMax, let mn = stressMin { facts.append("Rango del día: mínimo \(mn) y pico máximo \(mx)") }
             if let peak = samples.max(by: { $0.value < $1.value }) {
                 let hhmm = String(format: "%02d:%02d", (peak.minuteOfDay / 60) % 24, peak.minuteOfDay % 60)
@@ -1496,7 +1644,15 @@ final class ImprovingStore: ObservableObject {
                             kcal: w.kcal,
                             distanceKm: w.distanceKm,
                             elevationM: w.elevationM,
-                            dateIso: w.dateIso
+                            dateIso: w.dateIso,
+                            startEpochSec: w.startEpochSec,
+                            avgPowerW: w.avgPowerW,
+                            avgCadenceRpm: w.avgCadenceRpm,
+                            hrZoneMinutes6: w.hrZoneMinutes6,
+                            hrRecovery1MinBpm: w.hrRecovery1MinBpm,
+                            totalSets: w.totalSets,
+                            totalVolumeKg: w.totalVolumeKg,
+                            targetMuscles: w.targetMuscles
                         )
                     }
                 }
@@ -2545,7 +2701,7 @@ final class ImprovingStore: ObservableObject {
         if av.hasRestingHrData { highlights.append(String(format: "FC en reposo de %.1f ppm", locale: Locale(identifier: "es_ES"), restingHrBpm)) }
         if av.hasRespData { highlights.append(String(format: "FR de %.1f rpm", locale: Locale(identifier: "es_ES"), respRateRpm)) }
         if let sp = spo2Value { highlights.append(String(format: "SpO2 de %.1f%%", locale: Locale(identifier: "es_ES"), sp)) }
-        if av.hasStressData { highlights.append("estrés medio de \(stressScore) sobre 100") }
+        if av.hasStressData { highlights.append("estrés actual de \(displayStressScore) y media diaria de \(stressAvg ?? stressScore) sobre 100") }
         if av.hasEnergyData { highlights.append("batería de energía al \(energyPercent)%") }
         if let steps = stepsCount { highlights.append("\(steps) pasos") }
 
@@ -2582,7 +2738,8 @@ final class ImprovingStore: ObservableObject {
         metricas["frecuencia_respiratoria_rpm"] = av.hasRespData ? (respRateRpm as Any) : "NO_DISPONIBLE"
         metricas["spo2_pct"] = spo2Value.map { $0 as Any } ?? "NO_DISPONIBLE"
         metricas["temperatura_muneca_c"] = wristTempAbsoluteC.map { $0 as Any } ?? "NO_DISPONIBLE"
-        metricas["estres_medio"] = av.hasStressData ? (stressScore as Any) : "NO_DISPONIBLE"
+        metricas["estres_actual"] = av.hasStressData ? (displayStressScore as Any) : "NO_DISPONIBLE"
+        metricas["estres_medio"] = av.hasStressData ? ((stressAvg ?? stressScore) as Any) : "NO_DISPONIBLE"
         metricas["energia_pct"] = av.hasEnergyData ? (energyPercent as Any) : "NO_DISPONIBLE"
         metricas["pasos"] = stepsCount.map { $0 as Any } ?? "NO_DISPONIBLE"
         metricas["vo2_max"] = latestVo2Max.map { $0 as Any } ?? "NO_DISPONIBLE"
@@ -2708,7 +2865,9 @@ final class ImprovingStore: ObservableObject {
             processedAutoSyncSignatures: Array(processedAutoSyncSignatures.prefix(80)),
             lastAutoSyncStatus: autoSyncStatusText,
             shortcutSyncName: shortcutSyncName,
-            autoRunShortcutOnOpen: autoRunShortcutOnOpen
+            autoRunShortcutOnOpen: autoRunShortcutOnOpen,
+            workoutRoutines: workoutRoutines,
+            strengthLogs: strengthLogs
         )
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: persistenceURL, options: .atomic)
@@ -2744,6 +2903,8 @@ final class ImprovingStore: ObservableObject {
         if let status = snap.lastAutoSyncStatus, !status.isEmpty { autoSyncStatusText = status }
         if let sName = snap.shortcutSyncName, !sName.isEmpty { shortcutSyncName = sName }
         if let autoRun = snap.autoRunShortcutOnOpen { autoRunShortcutOnOpen = autoRun }
+        if let routines = snap.workoutRoutines { workoutRoutines = routines }
+        if let logs = snap.strengthLogs { strengthLogs = logs }
 
         // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
         var sanitizedCorruptStrain = false

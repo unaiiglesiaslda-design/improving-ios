@@ -161,6 +161,89 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
     var distanceKm: Double? = nil
     var elevationM: Double? = nil
     var dateIso: String? = nil
+    var startEpochSec: Int64? = nil
+    var avgPowerW: Double? = nil
+    var avgCadenceRpm: Double? = nil
+    var hrZoneMinutes6: [Int]? = nil // [Z0, Z1, Z2, Z3, Z4, Z5]
+    var hrRecovery1MinBpm: Double? = nil
+    var totalSets: Int? = nil
+    var totalVolumeKg: Double? = nil
+    var targetMuscles: [String]? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, timeRange, durationMin, avgHrBpm, strainScore, strainPct
+        case categoryLabel, kcal, distanceKm, elevationM, dateIso
+        case startEpochSec, avgPowerW, avgCadenceRpm, hrZoneMinutes6
+        case hrRecovery1MinBpm, totalSets, totalVolumeKg, targetMuscles
+    }
+
+    init(
+        id: String,
+        title: String,
+        timeRange: String,
+        durationMin: Int,
+        avgHrBpm: Int,
+        strainScore: Double,
+        strainPct: Int,
+        categoryLabel: String,
+        kcal: Int,
+        distanceKm: Double? = nil,
+        elevationM: Double? = nil,
+        dateIso: String? = nil,
+        startEpochSec: Int64? = nil,
+        avgPowerW: Double? = nil,
+        avgCadenceRpm: Double? = nil,
+        hrZoneMinutes6: [Int]? = nil,
+        hrRecovery1MinBpm: Double? = nil,
+        totalSets: Int? = nil,
+        totalVolumeKg: Double? = nil,
+        targetMuscles: [String]? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.timeRange = timeRange
+        self.durationMin = durationMin
+        self.avgHrBpm = avgHrBpm
+        self.strainScore = strainScore
+        self.strainPct = strainPct
+        self.categoryLabel = categoryLabel
+        self.kcal = kcal
+        self.distanceKm = distanceKm
+        self.elevationM = elevationM
+        self.dateIso = dateIso
+        self.startEpochSec = startEpochSec
+        self.avgPowerW = avgPowerW
+        self.avgCadenceRpm = avgCadenceRpm
+        self.hrZoneMinutes6 = hrZoneMinutes6
+        self.hrRecovery1MinBpm = hrRecovery1MinBpm
+        self.totalSets = totalSets
+        self.totalVolumeKg = totalVolumeKg
+        self.targetMuscles = targetMuscles
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        timeRange = try c.decode(String.self, forKey: .timeRange)
+        durationMin = try c.decode(Int.self, forKey: .durationMin)
+        avgHrBpm = try c.decodeIfPresent(Int.self, forKey: .avgHrBpm) ?? 0
+        strainScore = try c.decodeIfPresent(Double.self, forKey: .strainScore) ?? 0
+        strainPct = try c.decodeIfPresent(Int.self, forKey: .strainPct) ?? 0
+        categoryLabel = try c.decodeIfPresent(String.self, forKey: .categoryLabel) ?? "Actividad"
+        kcal = try c.decodeIfPresent(Int.self, forKey: .kcal) ?? 0
+        distanceKm = try c.decodeIfPresent(Double.self, forKey: .distanceKm)
+        elevationM = try c.decodeIfPresent(Double.self, forKey: .elevationM)
+        dateIso = try c.decodeIfPresent(String.self, forKey: .dateIso)
+        startEpochSec = try c.decodeIfPresent(Int64.self, forKey: .startEpochSec)
+        avgPowerW = try c.decodeIfPresent(Double.self, forKey: .avgPowerW)
+        avgCadenceRpm = try c.decodeIfPresent(Double.self, forKey: .avgCadenceRpm)
+        hrZoneMinutes6 = try c.decodeIfPresent([Int].self, forKey: .hrZoneMinutes6)
+        hrRecovery1MinBpm = try c.decodeIfPresent(Double.self, forKey: .hrRecovery1MinBpm)
+        totalSets = try c.decodeIfPresent(Int.self, forKey: .totalSets)
+        totalVolumeKg = try c.decodeIfPresent(Double.self, forKey: .totalVolumeKg)
+        targetMuscles = try c.decodeIfPresent([String].self, forKey: .targetMuscles)
+    }
 }
 
 struct TimedBiometricPoint: Codable, Equatable, Hashable {
@@ -459,12 +542,31 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var systolicBp: Int?
     var diastolicBp: Int?
     var hrZoneMinutes: [Int]
+    var hrZone0Minutes: Int? = nil
+    var distanceKm: Double? = nil
+    var elevationM: Double? = nil
+    var avgPowerW: Double? = nil
+    var avgCadenceRpm: Double? = nil
     var stressSeries24h: [Double]
     var energySeries24h: [Double]
     var stressSamples5m: [TimedBiometricPoint]
     var energySamples5m: [TimedBiometricPoint]
     var strengthMinutes: Int
     var workouts: [EffortEventItem]
+
+    enum CodingKeys: String, CodingKey {
+        case dateIso, liveHrBpm, restingHrBpm, hrvMs, hrvMethodLabel, syncDiagnosticLine
+        case respRateRpm, wristTempDeltaC, wristTempAbsoluteC, spo2Percent
+        case asleepMinutes, inBedMinutes, deepMinutes, remMinutes, coreMinutes, awakeMinutes
+        case sleepPct, sleepDebtMinutes, sleepSession
+        case strain21, strainPct, recoveryPct, stressScore, energyBankPercent
+        case stepsCount, vo2MaxMlKgMin, hrRecoveryBpm, glucoseMgDl, activeKcal
+        case daylightMinutes, sleepNoiseOver50Db, bodyWeightKg, bodyFatPct, leanMassKg
+        case systolicBp, diastolicBp, hrZoneMinutes, hrZone0Minutes
+        case distanceKm, elevationM, avgPowerW, avgCadenceRpm
+        case stressSeries24h, energySeries24h, stressSamples5m, energySamples5m
+        case strengthMinutes, workouts
+    }
 
     init(
         dateIso: String,
@@ -504,6 +606,11 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         systolicBp: Int? = nil,
         diastolicBp: Int? = nil,
         hrZoneMinutes: [Int] = [0, 0, 0, 0, 0],
+        hrZone0Minutes: Int? = nil,
+        distanceKm: Double? = nil,
+        elevationM: Double? = nil,
+        avgPowerW: Double? = nil,
+        avgCadenceRpm: Double? = nil,
         stressSeries24h: [Double] = [],
         energySeries24h: [Double] = [],
         stressSamples5m: [TimedBiometricPoint] = [],
@@ -548,12 +655,69 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         self.systolicBp = systolicBp
         self.diastolicBp = diastolicBp
         self.hrZoneMinutes = hrZoneMinutes
+        self.hrZone0Minutes = hrZone0Minutes
+        self.distanceKm = distanceKm
+        self.elevationM = elevationM
+        self.avgPowerW = avgPowerW
+        self.avgCadenceRpm = avgCadenceRpm
         self.stressSeries24h = stressSeries24h
         self.energySeries24h = energySeries24h
         self.stressSamples5m = stressSamples5m
         self.energySamples5m = energySamples5m
         self.strengthMinutes = strengthMinutes
         self.workouts = workouts
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dateIso = try c.decode(String.self, forKey: .dateIso)
+        liveHrBpm = try c.decodeIfPresent(Int.self, forKey: .liveHrBpm)
+        restingHrBpm = try c.decodeIfPresent(Double.self, forKey: .restingHrBpm)
+        hrvMs = try c.decodeIfPresent(Double.self, forKey: .hrvMs)
+        hrvMethodLabel = try c.decodeIfPresent(String.self, forKey: .hrvMethodLabel)
+        syncDiagnosticLine = try c.decodeIfPresent(String.self, forKey: .syncDiagnosticLine)
+        respRateRpm = try c.decodeIfPresent(Double.self, forKey: .respRateRpm)
+        wristTempDeltaC = try c.decodeIfPresent(Double.self, forKey: .wristTempDeltaC)
+        wristTempAbsoluteC = try c.decodeIfPresent(Double.self, forKey: .wristTempAbsoluteC)
+        spo2Percent = try c.decodeIfPresent(Double.self, forKey: .spo2Percent)
+        asleepMinutes = try c.decodeIfPresent(Int.self, forKey: .asleepMinutes)
+        inBedMinutes = try c.decodeIfPresent(Int.self, forKey: .inBedMinutes)
+        deepMinutes = try c.decodeIfPresent(Int.self, forKey: .deepMinutes)
+        remMinutes = try c.decodeIfPresent(Int.self, forKey: .remMinutes)
+        coreMinutes = try c.decodeIfPresent(Int.self, forKey: .coreMinutes)
+        awakeMinutes = try c.decodeIfPresent(Int.self, forKey: .awakeMinutes)
+        sleepPct = try c.decodeIfPresent(Int.self, forKey: .sleepPct)
+        sleepDebtMinutes = try c.decodeIfPresent(Int.self, forKey: .sleepDebtMinutes)
+        sleepSession = try c.decodeIfPresent(SleepSessionDetail.self, forKey: .sleepSession)
+        strain21 = try c.decodeIfPresent(Double.self, forKey: .strain21)
+        strainPct = try c.decodeIfPresent(Int.self, forKey: .strainPct)
+        recoveryPct = try c.decodeIfPresent(Int.self, forKey: .recoveryPct)
+        stressScore = try c.decodeIfPresent(Int.self, forKey: .stressScore)
+        energyBankPercent = try c.decodeIfPresent(Int.self, forKey: .energyBankPercent)
+        stepsCount = try c.decodeIfPresent(Int.self, forKey: .stepsCount)
+        vo2MaxMlKgMin = try c.decodeIfPresent(Double.self, forKey: .vo2MaxMlKgMin)
+        hrRecoveryBpm = try c.decodeIfPresent(Double.self, forKey: .hrRecoveryBpm)
+        glucoseMgDl = try c.decodeIfPresent(Int.self, forKey: .glucoseMgDl)
+        activeKcal = try c.decodeIfPresent(Int.self, forKey: .activeKcal)
+        daylightMinutes = try c.decodeIfPresent(Int.self, forKey: .daylightMinutes)
+        sleepNoiseOver50Db = try c.decodeIfPresent(Bool.self, forKey: .sleepNoiseOver50Db)
+        bodyWeightKg = try c.decodeIfPresent(Double.self, forKey: .bodyWeightKg)
+        bodyFatPct = try c.decodeIfPresent(Double.self, forKey: .bodyFatPct)
+        leanMassKg = try c.decodeIfPresent(Double.self, forKey: .leanMassKg)
+        systolicBp = try c.decodeIfPresent(Int.self, forKey: .systolicBp)
+        diastolicBp = try c.decodeIfPresent(Int.self, forKey: .diastolicBp)
+        hrZoneMinutes = try c.decodeIfPresent([Int].self, forKey: .hrZoneMinutes) ?? [0, 0, 0, 0, 0]
+        hrZone0Minutes = try c.decodeIfPresent(Int.self, forKey: .hrZone0Minutes)
+        distanceKm = try c.decodeIfPresent(Double.self, forKey: .distanceKm)
+        elevationM = try c.decodeIfPresent(Double.self, forKey: .elevationM)
+        avgPowerW = try c.decodeIfPresent(Double.self, forKey: .avgPowerW)
+        avgCadenceRpm = try c.decodeIfPresent(Double.self, forKey: .avgCadenceRpm)
+        stressSeries24h = try c.decodeIfPresent([Double].self, forKey: .stressSeries24h) ?? []
+        energySeries24h = try c.decodeIfPresent([Double].self, forKey: .energySeries24h) ?? []
+        stressSamples5m = try c.decodeIfPresent([TimedBiometricPoint].self, forKey: .stressSamples5m) ?? []
+        energySamples5m = try c.decodeIfPresent([TimedBiometricPoint].self, forKey: .energySamples5m) ?? []
+        strengthMinutes = try c.decodeIfPresent(Int.self, forKey: .strengthMinutes) ?? 0
+        workouts = try c.decodeIfPresent([EffortEventItem].self, forKey: .workouts) ?? []
     }
 }
 
@@ -608,6 +772,9 @@ enum CardioMetricRoute: String, CaseIterable, Identifiable {
     case hrRecovery = "Recuperación de frecuencia cardíaca"
     case cardioFocus = "Foco cardiovascular"
     case hrZones = "Zonas de frecuencia cardíaca"
+    case strengthSets = "Total series"
+    case strengthVolume = "Volumen total"
+    case muscleGroups = "Grupos musculares"
 
     var id: String { rawValue }
 }
@@ -617,4 +784,184 @@ enum TrainingLoadTab: String, CaseIterable, Identifiable {
     case muscular = "Muscular"
 
     var id: String { rawValue }
+}
+
+// MARK: - Fitness Training Load, Anatomical Muscle Freshness & Routines Models
+
+enum TrainingLoadState: String, CaseIterable, Codable, Identifiable {
+    case calibrating = "Calibrando"
+    case detraining = "Desentrenamiento"
+    case peaking = "Pico de forma"
+    case maintaining = "Manteniéndose"
+    case productive = "Productivo"
+    case fatigued = "Fatigado"
+    case overtraining = "Entrenamiento excesivo"
+
+    var id: String { rawValue }
+
+    static var cardioOrder: [TrainingLoadState] {
+        [.calibrating, .detraining, .peaking, .maintaining, .productive, .fatigued, .overtraining]
+    }
+
+    static var muscularOrder: [TrainingLoadState] {
+        [.calibrating, .detraining, .peaking, .maintaining, .productive, .overtraining]
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .calibrating: return BevelColors.textSecondary
+        case .detraining: return BevelColors.skyBlue
+        case .peaking: return BevelColors.bioTeal
+        case .maintaining: return BevelColors.greenPrimary
+        case .productive: return BevelColors.emeraldEnd
+        case .fatigued: return BevelColors.amberStart
+        case .overtraining: return BevelColors.coralHigh
+        }
+    }
+}
+
+struct TrainingLoadDayPoint: Identifiable, Equatable {
+    var id: String { dateIso }
+    let dateIso: String
+    let shortDateLabel: String
+    let load: Double
+    let optLow: Double
+    let optHigh: Double
+    let state: TrainingLoadState
+}
+
+struct TrainingLoadBreakdownRow: Identifiable, Equatable {
+    var id: String { state.rawValue }
+    let state: TrainingLoadState
+    let days: Int
+    let percent: Int
+}
+
+struct TrainingLoadAnalysis: Equatable {
+    let tab: TrainingLoadTab
+    let currentLoad: Int
+    let currentState: TrainingLoadState
+    let optimalLow: Int
+    let optimalHigh: Int
+    let gaugeMax: Int
+    let points: [TrainingLoadDayPoint]
+    let breakdown: [TrainingLoadBreakdownRow]
+    let hasAnyData: Bool
+}
+
+struct StandardizedBandEvaluation: Equatable {
+    let labels: [String]
+    let activeSegmentIndex: Int
+    let categoryTitle: String
+    let pointerFraction: Double
+    let cohortSubtitle: String
+    let activeColor: Color
+}
+
+struct MetricTrendPeriodRow: Identifiable, Equatable {
+    let id: Int // periodDays: 3, 7, 14, 30, 90
+    let periodDays: Int
+    let delta: Double?
+    let sparklinePoints: [Double]
+
+    var label: String { "\(periodDays) día(s)" }
+}
+
+enum MuscleGroupKind: String, CaseIterable, Codable, Identifiable {
+    case abdominales = "Abdominales"
+    case pantorrillas = "Pantorrillas"
+    case flexoresCadera = "Flexores de cadera"
+    case gluteos = "Glúteos"
+    case cuadriceps = "Cuádriceps"
+    case isquiotibiales = "Isquiotibiales"
+    case hombros = "Hombros"
+    case triceps = "Tríceps"
+    case pectorales = "Pectorales"
+    case dorsales = "Dorsales"
+    case abductores = "Abductores"
+    case aductores = "Aductores"
+    case antebrazo = "Antebrazo"
+    case biceps = "Bíceps"
+    case cuello = "Cuello"
+    case lumbares = "Lumbares"
+    case manguitoRotador = "Manguito rotador"
+    case oblicuos = "Oblicuos"
+    case espaldaAlta = "Parte superior de la espalda"
+    case trapecio = "Trapecio"
+
+    var id: String { rawValue }
+
+    var isFrontDominant: Bool {
+        switch self {
+        case .pectorales, .hombros, .biceps, .antebrazo, .abdominales, .oblicuos,
+             .flexoresCadera, .cuadriceps, .aductores, .abductores, .cuello:
+            return true
+        case .trapecio, .espaldaAlta, .manguitoRotador, .dorsales, .triceps,
+             .lumbares, .gluteos, .isquiotibiales, .pantorrillas:
+            return false
+        }
+    }
+}
+
+enum MuscleFreshnessState: String, CaseIterable, Codable, Identifiable {
+    case recovered = "Recuperado"
+    case fatigued = "Fatigado"
+    case exhausted = "Agotado"
+    case calibrating = "Calibrando"
+
+    var id: String { rawValue }
+
+    var color: Color {
+        switch self {
+        case .recovered: return BevelColors.greenPrimary
+        case .fatigued: return BevelColors.amberStart
+        case .exhausted: return BevelColors.coralHigh
+        case .calibrating: return BevelColors.textMuted
+        }
+    }
+}
+
+struct MuscleGroupSnapshot: Identifiable, Equatable {
+    var id: String { muscle.rawValue }
+    let muscle: MuscleGroupKind
+    let freshnessPct: Int
+    let state: MuscleFreshnessState
+    let recentSets: Int
+    let recentVolumeKg: Double
+    let loadScore: Int
+
+    var filledBars: Int {
+        if state == .calibrating { return 5 }
+        return min(max(Int((Double(freshnessPct) / 20.0).rounded()), 1), 5)
+    }
+}
+
+struct WorkoutRoutineExercise: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var name: String
+    var targetSets: Int
+    var targetReps: Int
+    var defaultWeightKg: Double
+    var primaryMuscles: [MuscleGroupKind]
+    var secondaryMuscles: [MuscleGroupKind]
+}
+
+struct WorkoutRoutineTemplate: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var name: String
+    var category: String // "Fuerza", "Cardio", "Movilidad"
+    var iconName: String
+    var isPinned: Bool
+    var exercises: [WorkoutRoutineExercise]
+}
+
+struct StrengthLoggedSet: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    let dateIso: String
+    var exercise: String
+    var reps: Int
+    var weightKg: Double
+    var primaryMuscles: [MuscleGroupKind]
+    var secondaryMuscles: [MuscleGroupKind]
+    var completed: Bool
 }

@@ -19,14 +19,58 @@ actor GeminiCoachService {
 
     static let supportedModels = [
         "gemini-2.5-flash",
-        "gemini-4-hydrogen",
-        "gemini-4-argon",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
         "gemini-2.0-flash",
     ]
 
     private let interactionsEndpoint = "https://generativelanguage.googleapis.com/v1/interactions"
     private let apiRevision = "2026-05-20"
     private let keylessEndpoint = "https://text.pollinations.ai/openai"
+
+    nonisolated static func sanitizeApiKey(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.lowercased().hasPrefix("bearer ") {
+            s = String(s.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        s = s.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return s.filter { !$0.isWhitespace && !$0.isNewline }
+    }
+
+    private static func extractGeminiErrorMessage(from data: Data, statusCode: Int) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let err = json["error"] as? [String: Any],
+           let msg = err["message"] as? String, !msg.isEmpty {
+            let short = msg.count > 120 ? String(msg.prefix(120)) + "…" : msg
+            return "HTTP \(statusCode): \(short)"
+        }
+        return "HTTP \(statusCode)"
+    }
+
+    func testGeminiConnection(apiKey: String, selectedModel: String) async -> (ok: Bool, detail: String) {
+        let cleanKey = Self.sanitizeApiKey(apiKey)
+        let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
+        guard !cleanKey.isEmpty else {
+            // Test keyless cloud fallback when user has no API key
+            if let _ = await callKeylessCloudChat(prompt: "Di solo OK", sysPrompt: "Responde únicamente OK.", history: [], seed: nextSeed()) {
+                return (true, "✓ Motor cloud Improving IA activo (sin API Key)")
+            }
+            return (false, "Introduce una API Key de Google AI Studio o revisa tu conexión.")
+        }
+        let start = Date()
+        let attempt = await callGeminiChatGenerateContent(
+            prompt: "Responde únicamente con la palabra OK.",
+            sysPrompt: "Responde en español brevemente.",
+            history: [],
+            apiKey: cleanKey,
+            model: model
+        )
+        let ms = Int((Date().timeIntervalSince(start) * 1000.0).rounded())
+        if attempt.result != nil {
+            return (true, "✓ Conectado a \(model) (\(ms) ms)")
+        }
+        return (false, "Error con \(model): \(attempt.errorDetail ?? "sin respuesta")")
+    }
 
     private let coachingStyles = [
         "Abre con una observación fisiológica concreta conectando dos números reales del usuario y cierra con una decisión táctica para las próximas 4 horas.",
@@ -245,12 +289,12 @@ actor GeminiCoachService {
             missingCategories: missingCategories,
             isFollowUp: isFollowUp
         )
-        let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanKey = Self.sanitizeApiKey(apiKey)
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
+        var lastCloudError: String? = nil
 
-        // Tier 1: User's Gemini API Key
+        // Tier 1: User's Gemini API Key (auto-cascade across active free/paid Gemini models!)
         if !cleanKey.isEmpty {
-            // For gemini-4* try Interactions API first, always falling back to multi-turn generateContent if unavailable
             if model.hasPrefix("gemini-4"),
                let res = await callGeminiInteractionsChat(
                 prompt: prompt,
@@ -263,37 +307,46 @@ actor GeminiCoachService {
                 return res
             }
 
-            let candidates: [String]
-            if model.hasPrefix("gemini-4") {
-                candidates = ["gemini-2.5-flash", "gemini-2.0-flash"]
-            } else {
-                candidates = Array(NSOrderedSet(array: [model, "gemini-2.5-flash", "gemini-2.0-flash"]) as? [String] ?? [model])
-            }
+            let rawCandidates: [String] = model.hasPrefix("gemini-4")
+                ? ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+                : [model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]
+            var seen = Set<String>()
+            let candidates = rawCandidates.filter { seen.insert($0).inserted }
+
             for m in candidates {
-                if let res = await callGeminiChatGenerateContent(
+                let attempt = await callGeminiChatGenerateContent(
                     prompt: prompt,
                     sysPrompt: sysPrompt,
                     history: history,
                     apiKey: cleanKey,
                     model: m
-                ) {
+                )
+                if let res = attempt.result {
                     return res
+                }
+                if let err = attempt.errorDetail {
+                    lastCloudError = err
+                    // Invalid API key (400 API_KEY_INVALID / 403) won't succeed on other Gemini models -> jump straight to Tier 2!
+                    if err.contains("API_KEY_INVALID") || err.contains("API key not valid") {
+                        break
+                    }
                 }
             }
         }
 
-        // Tier 2: Out-of-the-box Keyless Cloud LLM with full multi-turn history
+        // Tier 2: Out-of-the-box Keyless Cloud LLM with full multi-turn history & multi-model retry
         if let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
             return cloudRes
         }
 
-        // Tier 3: Honest offline conversational fallback
+        // Tier 3: Honest offline conversational fallback with real diagnostic cause
         return buildOfflineChatFallback(
             prompt: prompt,
             userName: userName,
             currentDate: currentDate,
             availableHighlights: availableHighlights,
-            missingCategories: missingCategories
+            missingCategories: missingCategories,
+            diagnosticNote: lastCloudError
         )
     }
 
@@ -358,38 +411,74 @@ actor GeminiCoachService {
         history: [CoachChatMessage],
         apiKey: String,
         model: String
-    ) async -> GeminiCoachResult? {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else { return nil }
+    ) async -> (result: GeminiCoachResult?, errorDetail: String?) {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
+            return (nil, "URL de modelo inválida")
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 25
+        req.timeoutInterval = 26
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
         let contents = buildNormalizedGeminiContents(history: history, currentPrompt: prompt)
+        var genConfig: [String: Any] = [
+            "temperature": 0.78,
+            "maxOutputTokens": model.contains("pro") ? 2400 : 1600
+        ]
+        if model.hasPrefix("gemini-2.5-flash") {
+            genConfig["thinkingConfig"] = ["thinkingBudget": 0]
+        }
         let body: [String: Any] = [
             "system_instruction": ["parts": [["text": sysPrompt]]],
             "contents": contents,
-            "generationConfig": [
-                "temperature": 0.78,
-                "maxOutputTokens": 1200
-            ]
+            "generationConfig": genConfig
         ]
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else {
+            return (nil, "Error serializando consulta")
+        }
         req.httpBody = httpBody
 
-        do {
-            let (respData, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                  let candidates = json["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { return nil }
-            let joined = parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !joined.isEmpty else { return nil }
-            return parseConversationalReply(rawText: joined, interactionId: nil, modelUsed: model)
-        } catch {
-            return nil
+        for attemptIdx in 0..<2 {
+            do {
+                let (respData, resp) = try await URLSession.shared.data(for: req)
+                guard let http = resp as? HTTPURLResponse else {
+                    return (nil, "Respuesta de red inválida")
+                }
+                if (200...299).contains(http.statusCode) {
+                    if let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                       let candidates = json["candidates"] as? [[String: Any]],
+                       let content = candidates.first?["content"] as? [String: Any],
+                       let parts = content["parts"] as? [[String: Any]] {
+                        // Prefer non-thought text parts; fall back to any text part
+                        let visible = parts.compactMap { part -> String? in
+                            if (part["thought"] as? Bool) == true { return nil }
+                            return part["text"] as? String
+                        }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                        let joined = visible.isEmpty
+                            ? parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                            : visible
+                        if !joined.isEmpty {
+                            return (parseConversationalReply(rawText: joined, interactionId: nil, modelUsed: model), nil)
+                        }
+                    }
+                    return (nil, "Respuesta vacía de \(model)")
+                }
+                let errTxt = Self.extractGeminiErrorMessage(from: respData, statusCode: http.statusCode)
+                if (http.statusCode == 500 || http.statusCode == 503) && attemptIdx == 0 {
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    continue
+                }
+                return (nil, errTxt)
+            } catch {
+                if attemptIdx == 0 {
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    continue
+                }
+                return (nil, error.localizedDescription)
+            }
         }
+        return (nil, "Sin respuesta de Gemini")
     }
 
     private func callKeylessCloudChat(
@@ -399,34 +488,48 @@ actor GeminiCoachService {
         seed: Int
     ) async -> GeminiCoachResult? {
         guard let url = URL(string: keylessEndpoint) else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 26
-        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-
         let messages = buildNormalizedOpenAIMessages(sysPrompt: sysPrompt, history: history, currentPrompt: prompt)
-        let body: [String: Any] = [
-            "model": "openai",
-            "messages": messages,
-            "temperature": 0.8,
-            "seed": seed + Int(Date().timeIntervalSince1970) % 10000
-        ]
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = httpBody
 
-        do {
-            let (respData, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                  let choices = root["choices"] as? [[String: Any]],
-                  let msg = choices.first?["message"] as? [String: Any],
-                  let content = msg["content"] as? String,
-                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return parseConversationalReply(rawText: content, interactionId: root["id"] as? String, modelUsed: "improving-live-ai")
-        } catch {
-            return nil
+        for (idx, cloudModel) in ["openai-fast", "openai-fast"].enumerated() {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 24
+            req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue("Improving-iOS/2.0", forHTTPHeaderField: "User-Agent")
+
+            let body: [String: Any] = [
+                "model": cloudModel,
+                "messages": messages,
+                "temperature": 0.78
+            ]
+            guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { continue }
+            req.httpBody = httpBody
+
+            do {
+                let (respData, resp) = try await URLSession.shared.data(for: req)
+                guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                    if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                    continue
+                }
+                if let root = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                   let choices = root["choices"] as? [[String: Any]],
+                   let msg = choices.first?["message"] as? [String: Any],
+                   let content = msg["content"] as? String,
+                   !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return parseConversationalReply(rawText: content, interactionId: root["id"] as? String, modelUsed: "improving-live-ai")
+                }
+                // Some keyless providers return plain text directly on HTTP 200
+                if let plain = String(data: respData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !plain.isEmpty, !plain.hasPrefix("{"), !plain.hasPrefix("<") {
+                    return parseConversationalReply(rawText: plain, interactionId: nil, modelUsed: "improving-live-ai")
+                }
+            } catch {
+                if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                continue
+            }
         }
+        return nil
     }
 
     private func parseConversationalReply(rawText: String, interactionId: String?, modelUsed: String) -> GeminiCoachResult {
@@ -477,14 +580,25 @@ actor GeminiCoachService {
         userName: String,
         currentDate: Date,
         availableHighlights: [String],
-        missingCategories: [String]
+        missingCategories: [String],
+        diagnosticNote: String? = nil
     ) -> GeminiCoachResult {
         let namePrefix = userName.trimmingCharacters(in: .whitespaces).isEmpty ? "" : "\(userName.trimmingCharacters(in: .whitespaces)), "
         let moment = describeLocalMoment(currentDate)
+        let diagSuffix: String = {
+            guard let d = diagnosticNote, !d.isEmpty else { return "" }
+            if d.contains("400") || d.contains("403") || d.contains("API_KEY") {
+                return " Revisa tu API Key de Gemini en Dispositivos y Ajustes — Google respondió \(d)."
+            }
+            if d.contains("429") || d.contains("RESOURCE_EXHAUSTED") {
+                return " Tu cuota gratuita de Gemini llegó al límite temporal — \(d). Prueba el modelo gemini-2.5-flash-lite en Ajustes."
+            }
+            return " Detalle de red: \(d)."
+        }()
         if availableHighlights.isEmpty {
             return GeminiCoachResult(
                 verdictTitle: "",
-                text: "\(namePrefix)son las \(moment.hhmm) y ahora mismo estoy sin conexión a internet; además no tengo mediciones reales registradas en esta fecha para afinar la respuesta a «\(prompt)». Cuando recuperes conexión o sincronices Apple Health seguimos la charla con tus datos exactos.",
+                text: "\(namePrefix)son las \(moment.hhmm) y ahora mismo no pude completar la llamada a la nube para responder a «\(prompt)».\(diagSuffix) Cuando se restablezca la conexión seguimos la charla con tus datos reales.",
                 bullets: [],
                 actionLabel: nil,
                 interactionId: nil,
@@ -494,7 +608,7 @@ actor GeminiCoachService {
         }
         return GeminiCoachResult(
             verdictTitle: "",
-            text: "\(namePrefix)ahora mismo a las \(moment.hhmm) no puedo conectar con la nube de Gemini para responder en detalle a «\(prompt)», pero viendo tus lecturas reales activas — \(availableHighlights.joined(separator: ", ")) — ajusta la intensidad a lo que te queda de jornada y vuelve a escribirme en cuanto tengas señal.",
+            text: "\(namePrefix)ahora mismo a las \(moment.hhmm) no pude completar la conexión en vivo para responder en detalle a «\(prompt)», pero viendo tus lecturas reales activas — \(availableHighlights.joined(separator: ", ")) — ajusta la intensidad a lo que te queda de jornada.\(diagSuffix)",
             bullets: [],
             actionLabel: nil,
             interactionId: nil,
@@ -600,14 +714,16 @@ actor GeminiCoachService {
 
         let userPrompt = "Genera el mensaje de coaching de las \(moment.hhmm) para el apartado \(section.displayName) de \(name). Semilla de variación: \(seed)-\(moment.blockIndex)-\(sectionIndex)."
 
-        let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanKey = Self.sanitizeApiKey(apiKey)
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
 
         // Tier 1: User's Gemini API Key
         if !cleanKey.isEmpty {
-            let candidates: [String] = model.hasPrefix("gemini-4")
-                ? ["gemini-2.5-flash", "gemini-2.0-flash"]
-                : Array(NSOrderedSet(array: [model, "gemini-2.5-flash", "gemini-2.0-flash"]) as? [String] ?? [model])
+            let rawCandidates: [String] = model.hasPrefix("gemini-4")
+                ? ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+                : [model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+            var seen = Set<String>()
+            let candidates = rawCandidates.filter { seen.insert($0).inserted }
 
             for m in candidates {
                 if let raw = await callGeminiJsonOneShot(prompt: userPrompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: m),
@@ -653,20 +769,25 @@ actor GeminiCoachService {
     }
 
     private func callGeminiJsonOneShot(prompt: String, sysPrompt: String, apiKey: String, model: String) async -> String? {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else { return nil }
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 20
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
+        var genConfig: [String: Any] = [
+            "temperature": 0.9,
+            "maxOutputTokens": 600,
+            "responseMimeType": "application/json"
+        ]
+        if model.hasPrefix("gemini-2.5-flash") {
+            genConfig["thinkingConfig"] = ["thinkingBudget": 0]
+        }
         let body: [String: Any] = [
             "system_instruction": ["parts": [["text": sysPrompt]]],
             "contents": [["role": "user", "parts": [["text": prompt]]]],
-            "generationConfig": [
-                "temperature": 0.92,
-                "maxOutputTokens": 480,
-                "responseMimeType": "application/json"
-            ]
+            "generationConfig": genConfig
         ]
         guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         req.httpBody = httpBody
@@ -678,7 +799,10 @@ actor GeminiCoachService {
                   let candidates = json["candidates"] as? [[String: Any]],
                   let content = candidates.first?["content"] as? [String: Any],
                   let parts = content["parts"] as? [[String: Any]] else { return nil }
-            let joined = parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            let joined = parts.compactMap { part -> String? in
+                if (part["thought"] as? Bool) == true { return nil }
+                return part["text"] as? String
+            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
             return joined.isEmpty ? nil : joined
         } catch {
             return nil
@@ -687,36 +811,43 @@ actor GeminiCoachService {
 
     private func callKeylessCloudOneShot(prompt: String, sysPrompt: String, seed: Int) async -> String? {
         guard let url = URL(string: keylessEndpoint) else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 22
-        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        for (idx, cloudModel) in ["openai-fast", "openai-fast"].enumerated() {
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 22
+            req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue("Improving-iOS/2.0", forHTTPHeaderField: "User-Agent")
 
-        let body: [String: Any] = [
-            "model": "openai",
-            "temperature": 0.92,
-            "seed": seed + Int(Date().timeIntervalSince1970) % 10000,
-            "messages": [
-                ["role": "system", "content": sysPrompt],
-                ["role": "user", "content": prompt]
+            let body: [String: Any] = [
+                "model": cloudModel,
+                "temperature": 0.9,
+                "messages": [
+                    ["role": "system", "content": sysPrompt],
+                    ["role": "user", "content": prompt]
+                ]
             ]
-        ]
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = httpBody
+            guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { continue }
+            req.httpBody = httpBody
 
-        do {
-            let (respData, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                  let choices = root["choices"] as? [[String: Any]],
-                  let msg = choices.first?["message"] as? [String: Any],
-                  let content = msg["content"] as? String,
-                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return content
-        } catch {
-            return nil
+            do {
+                let (respData, resp) = try await URLSession.shared.data(for: req)
+                guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                      let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                      let choices = root["choices"] as? [[String: Any]],
+                      let msg = choices.first?["message"] as? [String: Any],
+                      let content = msg["content"] as? String,
+                      !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                    continue
+                }
+                return content
+            } catch {
+                if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                continue
+            }
         }
+        return nil
     }
 
     private func parseSectionCoachingJson(

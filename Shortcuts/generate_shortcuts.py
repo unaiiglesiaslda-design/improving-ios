@@ -119,17 +119,21 @@ def dict_text_item(key: str, output_uuid: str, output_name: str) -> dict:
 
 
 def build_common_health_actions(variant: str):
-    """Builds the 8 Find Health Samples blocks + Get Details + unified Dictionary action."""
+    """Builds HealthKit Find Health Samples blocks (Vitals + Full 30-90d Fitness Metrics + Workouts) + Dictionary."""
     metrics = [
         # (key_prefix, ActionKit English picker label, days_back, include_end_date, group_by)
-        ("hr", "Heart Rate", 2, False, None),
-        ("hrv", "Heart Rate Variability", 7, False, None),
-        ("rhr", "Resting Heart Rate", 7, False, None),
-        ("sleep", "Sleep", 3, True, None),
-        ("resp", "Respiratory Rate", 7, False, None),
-        ("spo2", "Blood Oxygen", 7, False, None),
-        ("steps", "Steps", 3, False, "Day"),
-        ("kcal", "Active Calories", 3, False, "Day"),
+        ("hr", "Heart Rate", 3, False, None),
+        ("hrv", "Heart Rate Variability", 14, False, None),
+        ("rhr", "Resting Heart Rate", 14, False, None),
+        ("sleep", "Sleep", 4, True, None),
+        ("resp", "Respiratory Rate", 14, False, None),
+        ("spo2", "Blood Oxygen", 14, False, None),
+        ("steps", "Steps", 30, False, "Day"),
+        ("kcal", "Active Calories", 30, False, "Day"),
+        ("vo2", "VO2 Max", 90, False, None),
+        ("distance", "Walking + Running Distance", 30, False, "Day"),
+        ("cycling_distance", "Cycling Distance", 30, False, "Day"),
+        ("flights", "Flights Climbed", 30, False, "Day"),
     ]
 
     actions = []
@@ -152,6 +156,27 @@ def build_common_health_actions(variant: str):
             dict_items.append(dict_text_item(f"{prefix}_ends", end_id, "End Date"))
         else:
             dict_items.append(dict_text_item(f"{prefix}_dates", start_id, "Start Date"))
+
+    # Workouts (last 30 days: Name, Start Date, End Date, Duration, Active Energy Value)
+    wk_find = make_uuid(f"{variant}.workouts.find")
+    wk_name = make_uuid(f"{variant}.workouts.name")
+    wk_start = make_uuid(f"{variant}.workouts.start")
+    wk_end = make_uuid(f"{variant}.workouts.end")
+    wk_dur = make_uuid(f"{variant}.workouts.duration")
+    wk_val = make_uuid(f"{variant}.workouts.val")
+
+    actions.append(find_health_samples_action(wk_find, "Workouts", 30, group_by=None))
+    actions.append(get_health_detail_action(wk_name, wk_find, "Name"))
+    actions.append(get_health_detail_action(wk_start, wk_find, "Start Date"))
+    actions.append(get_health_detail_action(wk_end, wk_find, "End Date"))
+    actions.append(get_health_detail_action(wk_dur, wk_find, "Duration"))
+    actions.append(get_health_detail_action(wk_val, wk_find, "Value"))
+
+    dict_items.append(dict_text_item("workout_names", wk_name, "Name"))
+    dict_items.append(dict_text_item("workout_starts", wk_start, "Start Date"))
+    dict_items.append(dict_text_item("workout_ends", wk_end, "End Date"))
+    dict_items.append(dict_text_item("workout_durations", wk_dur, "Duration"))
+    dict_items.append(dict_text_item("workout_kcals", wk_val, "Value"))
 
     dict_id = make_uuid(f"{variant}.dictionary")
     actions.append(

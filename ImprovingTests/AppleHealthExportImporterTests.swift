@@ -717,4 +717,190 @@ final class AppleHealthExportImporterTests: XCTestCase {
         )
         XCTAssertEqual(eval.statusLabel, "Normal")
     }
+
+    @MainActor
+    func testLiveStressScoreTracksLatestReadingWhileAvgTracksDailyMean() throws {
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        let todayIso = store.selectedDateIso
+
+        // Simulate realistic day: low sleeping stress (8-12) overnight keeping 24h mean at 23,
+        // while the latest evening reading at 21:30 jumps to 68!
+        var day = RealBiometricDaySummary(dateIso: todayIso)
+        day.restingHrBpm = 49.0
+        day.stressScore = 23
+        day.stressSamples5m = [
+            TimedBiometricPoint(minuteOfDay: 120, value: 8.0, epochSec: nil),
+            TimedBiometricPoint(minuteOfDay: 240, value: 10.0, epochSec: nil),
+            TimedBiometricPoint(minuteOfDay: 360, value: 12.0, epochSec: nil),
+            TimedBiometricPoint(minuteOfDay: 600, value: 24.0, epochSec: nil),
+            TimedBiometricPoint(minuteOfDay: 900, value: 30.0, epochSec: nil),
+            TimedBiometricPoint(minuteOfDay: 1290, value: 68.0, epochSec: nil)
+        ]
+        store.realHistory = [todayIso: day]
+        store.dayOffset = 0
+
+        // On Today, displayStressScore MUST reflect live latest reading (68), NOT stay frozen at daily average (23)!
+        XCTAssertEqual(store.currentStressScore, 68)
+        XCTAssertEqual(store.displayStressScore, 68)
+        XCTAssertEqual(store.stressAvg, 25)
+        XCTAssertEqual(store.stressStatusLabel, "Alto")
+
+        // Merging a fresh partial sync later at 22:00 (value 41) preserves earlier samples & updates live reading!
+        var incoming = RealBiometricDaySummary(dateIso: todayIso)
+        incoming.stressSamples5m = [
+            TimedBiometricPoint(minuteOfDay: 1320, value: 41.0, epochSec: nil)
+        ]
+        let merged = WhoopExportImporter.mergeDays(existing: [todayIso: day], imported: [todayIso: incoming])
+        let mergedDay = try XCTUnwrap(merged[todayIso])
+        XCTAssertEqual(mergedDay.stressSamples5m.count, 7)
+        XCTAssertEqual(mergedDay.stressSamples5m.last?.minuteOfDay, 1320)
+        XCTAssertEqual(Int((mergedDay.stressSamples5m.last?.value ?? 0).rounded()), 41)
+    }
+
+    func testShortcutsFitnessWorkoutsVo2DistanceFlightsAndAutoHrrExtraction() throws {
+        // Full Shortcuts payload with workouts, VO2 Max, distance, flights climbed, AND intraday HR
+        // spanning during the workout (18:00-18:45) + 1 minute post-workout (18:46) for genuine auto-HRR!
+        let json = """
+        {
+          "source": "Atajos de Apple",
+          "rhr_values": "50.0",
+          "rhr_dates": "23 nov 2026, 6:00",
+          "vo2_values": "44,3 mL/kg·min",
+          "vo2_dates": "23 nov 2026, 18:45",
+          "distance_values": "4,25 km",
+          "distance_dates": "23 nov 2026, 18:45",
+          "cycling_distance_values": "12,80 km",
+          "cycling_distance_dates": "23 nov 2026, 18:45",
+          "flights_values": "12",
+          "flights_dates": "23 nov 2026, 18:45",
+          "workout_names": "Entrenamiento de fuerza tradicional\\nBici al aire libre",
+          "workout_starts": "23 nov 2026, 18:00\\n23 nov 2026, 19:00",
+          "workout_ends": "23 nov 2026, 18:45\\n23 nov 2026, 19:40",
+          "workout_durations": "45\\n40",
+          "workout_kcals": "320 kcal\\n380 kcal",
+          "hr_values": "118\\n142\\n154\\n160\\n132\\n126\\n148\\n152\\n124",
+          "hr_dates": "23 nov 2026, 18:05\\n23 nov 2026, 18:15\\n23 nov 2026, 18:30\\n23 nov 2026, 18:44\\n23 nov 2026, 18:46\\n23 nov 2026, 19:10\\n23 nov 2026, 19:25\\n23 nov 2026, 19:39\\n23 nov 2026, 19:41"
+        }
+        """
+        let res = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(json.data(using: .utf8)))
+        XCTAssertNil(res.errorMessage)
+        let day = try XCTUnwrap(res.days["2026-11-23"])
+
+        XCTAssertEqual(day.vo2MaxMlKgMin ?? 0, 44.3, accuracy: 0.1)
+        XCTAssertEqual(day.distanceKm ?? 0, 17.05, accuracy: 0.1)
+        // 12 flights * 3.05m = 36.6m
+        XCTAssertEqual(day.elevationM ?? 0, 36.6, accuracy: 0.5)
+        XCTAssertEqual(day.workouts.count, 2)
+        XCTAssertEqual(day.workouts.first?.title, "Entrenamiento de fuerza tradicional")
+        XCTAssertEqual(day.workouts.first?.kcal, 320)
+        // Enriched from intraday HR samples: average HR & 6-zone array populated!
+        XCTAssertGreaterThan(day.workouts.first?.avgHrBpm ?? 0, 120)
+        XCTAssertEqual(day.workouts.first?.hrZoneMinutes6?.count, 6)
+        // Auto-computed 1-min post-workout HRR: 160 -> 132 = 28 ppm & 152 -> 124 = 28 ppm!
+        let autoHrr = try XCTUnwrap(day.hrRecoveryBpm)
+        XCTAssertEqual(autoHrr, 28.0, accuracy: 2.0)
+    }
+
+    @MainActor
+    func testEwmaTrainingLoadVo2StandardizationTrendsMuscleFreshnessAndRoutines() throws {
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        let profile = UserPhysiologyProfile(userName: "Unai", ageYears: 22, sex: .male, weightKg: 72, heightCm: 178)
+        store.userProfile = profile
+
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        var hist: [String: RealBiometricDaySummary] = [:]
+        for back in 0..<26 {
+            let dt = cal.date(byAdding: .day, value: -back, to: today)!
+            let iso = store.isoFormatter.string(from: dt)
+            var d = RealBiometricDaySummary(dateIso: iso)
+            d.vo2MaxMlKgMin = 42.5 + Double(26 - back) * 0.08
+            d.hrRecoveryBpm = 27.0 + Double(back % 4)
+            d.strainPct = back % 2 == 0 ? 48 : 22
+            if back % 2 == 0 {
+                d.workouts = [
+                    EffortEventItem(
+                        id: "w_\(back)",
+                        title: back % 4 == 0 ? "Entrenamiento de fuerza tradicional" : "Bici al aire libre",
+                        timeRange: "18:00 - 18:45",
+                        durationMin: 45,
+                        avgHrBpm: 138,
+                        strainScore: 10.5,
+                        strainPct: 42,
+                        categoryLabel: back % 4 == 0 ? "Fuerza" : "Cardio",
+                        kcal: 340,
+                        distanceKm: back % 4 == 0 ? nil : 16.5,
+                        dateIso: iso,
+                        hrZoneMinutes6: [4, 15, 16, 8, 2, 0]
+                    )
+                ]
+            }
+            hist[iso] = d
+        }
+        store.realHistory = hist
+        store.dayOffset = 0
+
+        // 1. Cardio & Muscular EWMA load + breakdown sums to exact span (31 days)
+        let cardio = store.trainingLoadAnalysis(tab: .cardio, spanDays: 31, windowPageOffset: 0)
+        XCTAssertTrue(cardio.hasAnyData)
+        XCTAssertEqual(cardio.breakdown.count, 7)
+        XCTAssertEqual(cardio.breakdown.reduce(0) { $0 + $1.days }, 31)
+        XCTAssertLessThanOrEqual(cardio.optimalLow, cardio.optimalHigh)
+
+        let muscular = store.trainingLoadAnalysis(tab: .muscular, spanDays: 31, windowPageOffset: 0)
+        XCTAssertEqual(muscular.breakdown.count, 6)
+        XCTAssertEqual(muscular.breakdown.reduce(0) { $0 + $1.days }, 31)
+
+        // 2. Standardized 5-segment VO2 Max & HRR bands
+        let vo2Eval = WhoopPhysiologyEngine.standardizeVo2Max(44.3, profile: profile)
+        XCTAssertEqual(vo2Eval.labels.count, 5)
+        XCTAssertEqual(vo2Eval.categoryTitle, "Aceptable")
+
+        let hrrEval = WhoopPhysiologyEngine.standardizeHrRecovery(27.0, profile: profile)
+        XCTAssertEqual(hrrEval.labels.count, 5)
+        XCTAssertEqual(hrrEval.categoryTitle, "Aceptable")
+
+        // 3. Multi-period rolling-7d Trend Analysis rows (3d / 7d / 14d / 30d / 90d)
+        let trends = WhoopPhysiologyEngine.computeMultiPeriodTrendRows(history: hist, anchorDate: today) { $0.vo2MaxMlKgMin }
+        XCTAssertEqual(trends.map(\.label), ["3 días", "7 días", "14 días", "30 días", "90 días"])
+        XCTAssertGreaterThan(trends[1].delta ?? -99, 0.0)
+
+        // 4. Routines + Strength Logger + 20-Muscle Freshness Decay
+        let routine = WorkoutRoutineTemplate(
+            id: "r_push", name: "Empuje", category: "Fuerza",
+            iconName: "figure.strengthtraining.traditional", isPinned: true,
+            exercises: [
+                WorkoutRoutineExercise(
+                    id: "ex1", name: "Press banca", targetSets: 4, targetReps: 10, defaultWeightKg: 60,
+                    primaryMuscles: [.pectorales], secondaryMuscles: [.triceps, .hombros]
+                )
+            ]
+        )
+        store.saveRoutine(routine)
+        XCTAssertEqual(store.workoutRoutines.count, 1)
+        store.toggleRoutinePin("r_push")
+        XCTAssertFalse(store.workoutRoutines.first?.isPinned ?? true)
+
+        let todaySets = (0..<6).map { idx in
+            StrengthLoggedSet(
+                id: "s_\(idx)", dateIso: store.selectedDateIso, exercise: "Press banca",
+                reps: 10, weightKg: 65, primaryMuscles: [.pectorales], secondaryMuscles: [.triceps], completed: true
+            )
+        }
+        store.logCompletedStrengthSession(title: "Empuje", durationMin: 50, kcal: 310, sets: todaySets)
+        let snaps = store.muscleGroupSnapshots(for: today)
+        XCTAssertEqual(snaps.count, MuscleGroupKind.allCases.count)
+        let pecs = try XCTUnwrap(snaps.first(where: { $0.muscle == .pectorales }))
+        XCTAssertTrue(pecs.state == .fatigued || pecs.state == .exhausted)
+        XCTAssertLessThan(pecs.freshnessPct, 80)
+    }
+
+    func testGeminiApiKeySanitizationAndSupportedModels() {
+        XCTAssertEqual(GeminiCoachService.sanitizeApiKey("  \"Bearer AIzaSyTestKey123 \" \n"), "AIzaSyTestKey123")
+        XCTAssertEqual(GeminiCoachService.sanitizeApiKey("'AIzaSyClean456'"), "AIzaSyClean456")
+        XCTAssertEqual(GeminiCoachService.supportedModels.first, "gemini-2.5-flash")
+        XCTAssertTrue(GeminiCoachService.supportedModels.contains("gemini-2.5-flash-lite"))
+    }
 }

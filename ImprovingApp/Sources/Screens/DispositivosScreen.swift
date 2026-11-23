@@ -15,6 +15,8 @@ struct DispositivosScreen: View {
     @State private var shortcutNameDraft: String = "Sync Improving (Automático)"
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
+    @State private var aiTestResult: (ok: Bool, text: String)? = nil
+    @State private var testingAi: Bool = false
     @State private var profileSavedBanner: Bool = false
     @State private var darkToggle: Bool = BevelColors.isDarkMode
 
@@ -420,29 +422,71 @@ struct DispositivosScreen: View {
                             }
                         }
 
-                        HStack {
+                        HStack(spacing: 10) {
                             Button {
                                 store.updateGeminiConfig(apiKey: apiKeyDraft, model: selectedModelDraft)
                                 savedBanner = true
+                                aiTestResult = nil
                             } label: {
-                                Text("Guardar configuración IA")
-                                    .font(ImprovingFont.caption(13))
+                                Text("Guardar IA")
+                                    .font(ImprovingFont.caption(12.5))
                                     .fontWeight(.bold)
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 16)
+                                    .padding(.horizontal, 14)
                                     .padding(.vertical, 10)
                                     .background(Capsule().fill(BevelColors.emeraldEnd))
                             }
 
-                            if savedBanner {
-                                Label("Guardado", systemImage: "checkmark.circle.fill")
-                                    .font(ImprovingFont.caption(12))
-                                    .foregroundColor(BevelColors.greenPrimary)
+                            Button {
+                                store.updateGeminiConfig(apiKey: apiKeyDraft, model: selectedModelDraft)
+                                testingAi = true
+                                aiTestResult = nil
+                                let k = apiKeyDraft
+                                let m = selectedModelDraft
+                                Task {
+                                    let res = await GeminiCoachService.shared.testGeminiConnection(apiKey: k, selectedModel: m)
+                                    await MainActor.run {
+                                        testingAi = false
+                                        aiTestResult = (res.ok, res.detail)
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    if testingAi {
+                                        ProgressView().scaleEffect(0.75).tint(.white)
+                                    } else {
+                                        Image(systemName: "bolt.horizontal.circle.fill")
+                                    }
+                                    Text(testingAi ? "Probando…" : "Probar conexión")
+                                }
+                                .font(ImprovingFont.caption(12.5))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 13)
+                                .padding(.vertical, 10)
+                                .background(Capsule().fill(BevelColors.indigoEnd))
                             }
+                            .disabled(testingAi)
+
                             Spacer()
                         }
 
-                        Text("Con tu clave de Gemini usa la API oficial directamente. Sin clave funciona igualmente en vivo con el motor cloud de respaldo.")
+                        if let tr = aiTestResult {
+                            Text(tr.text)
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.semibold)
+                                .foregroundColor(tr.ok ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(tr.ok ? BevelColors.greenSoftBg : BevelColors.coralSoftBg))
+                        } else if savedBanner {
+                            Label("Guardado", systemImage: "checkmark.circle.fill")
+                                .font(ImprovingFont.caption(12))
+                                .foregroundColor(BevelColors.greenPrimary)
+                        }
+
+                        Text("Con tu clave de Gemini usa la API oficial (v1beta con cabecera segura x-goog-api-key) y cambia automáticamente a gemini-2.5-flash-lite o nube de respaldo si un modelo se satura.")
                             .font(ImprovingFont.caption(11))
                             .foregroundColor(BevelColors.textMuted)
                     }
@@ -693,7 +737,7 @@ private struct ShortcutsAutomationGuideSheet: View {
                     title: "Crea el Atajo (sin bucles, 1 minuto)",
                     lines: [
                         "Abre la app Atajos de Apple y pulsa + (Nuevo atajo) → llámalo «Sync Improving».",
-                        "Añade una acción «Buscar muestras de Salud» por cada métrica (Últimos 2 días): Frecuencia cardíaca, Variabilidad de la frecuencia cardíaca (VFC), FC en reposo, Sueño, Frecuencia respiratoria, Oxígeno en sangre, Temperatura de la muñeca, Pasos y Energía activa.",
+                        "Añade una acción «Buscar muestras de Salud» por cada métrica: Frecuencia cardíaca (3 d), VFC (14 d), FC en reposo (14 d), Sueño (4 d), Frecuencia respiratoria, Oxígeno en sangre, Temperatura de la muñeca, Pasos (30 d), Energía activa (30 d), VO₂ máx. (90 d), Distancia a pie/carrera (30 d), Distancia en bici (30 d), Pisos subidos (30 d) y Entrenamientos (30 d).",
                         "Al final añade la acción nativa de Improving: «Sincronizar Salud en Improving» (búscala escribiendo Improving).",
                         "En cada campo (Valores FC, Fechas FC, Valores VFC, Fechas VFC, Fases de Sueño, Inicios/Fines de Sueño…), selecciona la variable de su «Buscar muestras de Salud» y toca la variable para elegir Valor, Fecha de inicio o Fecha de finalización."
                     ]
