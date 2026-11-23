@@ -299,6 +299,7 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var restingHrBpm: Double?
     var hrvMs: Double?
     var hrvMethodLabel: String?
+    var syncDiagnosticLine: String?
     var respRateRpm: Double?
     var wristTempDeltaC: Double?
     var wristTempAbsoluteC: Double?
@@ -343,6 +344,7 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         restingHrBpm: Double? = nil,
         hrvMs: Double? = nil,
         hrvMethodLabel: String? = nil,
+        syncDiagnosticLine: String? = nil,
         respRateRpm: Double? = nil,
         wristTempDeltaC: Double? = nil,
         wristTempAbsoluteC: Double? = nil,
@@ -386,6 +388,7 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
         self.restingHrBpm = restingHrBpm
         self.hrvMs = hrvMs
         self.hrvMethodLabel = hrvMethodLabel
+        self.syncDiagnosticLine = syncDiagnosticLine
         self.respRateRpm = respRateRpm
         self.wristTempDeltaC = wristTempDeltaC
         self.wristTempAbsoluteC = wristTempAbsoluteC

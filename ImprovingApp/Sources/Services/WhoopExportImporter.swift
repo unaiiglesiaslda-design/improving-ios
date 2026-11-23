@@ -158,6 +158,7 @@ enum WhoopExportImporter {
                     restingHrBpm: imp.restingHrBpm ?? cur.restingHrBpm,
                     hrvMs: imp.hrvMs ?? cur.hrvMs,
                     hrvMethodLabel: imp.hrvMethodLabel ?? cur.hrvMethodLabel,
+                    syncDiagnosticLine: imp.syncDiagnosticLine ?? cur.syncDiagnosticLine,
                     respRateRpm: imp.respRateRpm ?? cur.respRateRpm,
                     wristTempDeltaC: imp.wristTempDeltaC ?? cur.wristTempDeltaC,
                     wristTempAbsoluteC: imp.wristTempAbsoluteC ?? cur.wristTempAbsoluteC,

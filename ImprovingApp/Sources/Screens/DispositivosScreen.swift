@@ -308,6 +308,15 @@ struct DispositivosScreen: View {
                                 .font(ImprovingFont.cardTitle(13.5))
                                 .foregroundColor(BevelColors.textPrimary)
                         }
+                        if let diag = store.currentDaySummary?.syncDiagnosticLine, !diag.isEmpty {
+                            Text(diag)
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(BevelColors.cardSubtle))
+                        }
                         HStack {
                             Text("FC máx. Tanaka").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)
                             Spacer()

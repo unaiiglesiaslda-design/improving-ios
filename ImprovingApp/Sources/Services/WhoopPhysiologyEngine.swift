@@ -168,6 +168,65 @@ enum WhoopPhysiologyEngine {
         return (3.0...350.0).contains(rmssd) ? rmssd : nil
     }
 
+    /// Computes true beat-to-beat RMSSD (ms) from Apple Health `<InstantaneousBeatsPerMinute bpm="..." time="..."/>` readings.
+    /// Uses exact sub-second beat-to-beat `time` differences when available (identical to HealthKit `HKHeartbeatSeriesQuery`),
+    /// splits segments across sensor dropouts (> 2.2s gaps), and falls back to `60_000 / bpm` when `time` lacks sub-second precision.
+    static func computeRmssdFromBeatEntries(_ entries: [(timeSec: Double?, hasSubsecond: Bool, bpm: Double)]) -> Double? {
+        guard entries.count >= 5 else { return nil }
+
+        let subsecondCount = entries.filter { $0.timeSec != nil && $0.hasSubsecond }.count
+        if subsecondCount >= 5 {
+            var segments: [[Double]] = []
+            var cur: [Double] = []
+            var prevT: Double? = nil
+            for e in entries {
+                guard let t = e.timeSec else {
+                    if !cur.isEmpty { segments.append(cur); cur = [] }
+                    prevT = nil
+                    continue
+                }
+                if let p = prevT {
+                    var dt = t - p
+                    if dt < -43_200.0 { dt += 86_400.0 } // midnight wrap
+                    let rrMs = dt * 1000.0
+                    if (300.0...2000.0).contains(rrMs) {
+                        cur.append(rrMs)
+                    } else {
+                        if !cur.isEmpty { segments.append(cur); cur = [] }
+                    }
+                }
+                prevT = t
+            }
+            if !cur.isEmpty { segments.append(cur) }
+            if let exactRmssd = computeRmssdFromRRSegments(segments) {
+                return exactRmssd
+            }
+        }
+
+        // Fallback when timestamps are integer-only or absent: convert BPM -> RR and split across > 2.2s time gaps
+        var segments: [[Double]] = []
+        var cur: [Double] = []
+        var prevT: Double? = nil
+        for e in entries {
+            guard (30.0...200.0).contains(e.bpm) else {
+                if !cur.isEmpty { segments.append(cur); cur = [] }
+                prevT = e.timeSec
+                continue
+            }
+            if let t = e.timeSec, let p = prevT {
+                var dt = t - p
+                if dt < -43_200.0 { dt += 86_400.0 }
+                if dt > 2.2 || dt < 0 {
+                    if !cur.isEmpty { segments.append(cur); cur = [] }
+                }
+            }
+            cur.append(60_000.0 / e.bpm)
+            prevT = e.timeSec
+        }
+        if !cur.isEmpty { segments.append(cur) }
+        return computeRmssdFromRRSegments(segments)
+    }
+
     /// Computes true beat-to-beat RMSSD (ms) from Apple Health `<InstantaneousBeatsPerMinute>` BPM readings.
     static func computeRmssdFromBeatBpms(_ bpms: [Double]) -> Double? {
         let rr = bpms.compactMap { bpm -> Double? in
@@ -175,6 +234,27 @@ enum WhoopPhysiologyEngine {
             return 60_000.0 / bpm
         }
         return computeRmssdFromRRSegments([rr])
+    }
+
+    /// Outlier-cleaned mean for sleeping HR (strips single brief motion/sensor spikes > 3 MAD while preserving real sleeping mean).
+    static func aggregateSleepingHr(_ samples: [Double]) -> Double? {
+        let valid = samples.filter { (28.0...160.0).contains($0) && $0.isFinite }
+        guard !valid.isEmpty else { return nil }
+        if valid.count < 5 {
+            return valid.reduce(0, +) / Double(valid.count)
+        }
+        let sorted = valid.sorted()
+        let med = sorted.count % 2 == 1
+            ? sorted[sorted.count / 2]
+            : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2.0
+        let absDevs = sorted.map { abs($0 - med) }.sorted()
+        let mad = absDevs.count % 2 == 1
+            ? absDevs[absDevs.count / 2]
+            : (absDevs[absDevs.count / 2 - 1] + absDevs[absDevs.count / 2]) / 2.0
+        let sigma = max(1.4826 * mad, 4.0)
+        let cleaned = valid.filter { abs($0 - med) <= 3.0 * sigma }
+        let pool = cleaned.isEmpty ? valid : cleaned
+        return pool.reduce(0, +) / Double(pool.count)
     }
 
     /// Aggregates HRV readings across Entire Sleep ("Todo el sueño") using Bevel's outlier-cleaned mean:

@@ -125,8 +125,8 @@ enum ShortcutsHealthSyncImporter {
         let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
         let sz = vals?.fileSize ?? 0
-        // v3 prefix forces automatic re-parse with Entire Sleep clustering + Bevel RMSSD engine
-        return "v3#\(url.lastPathComponent)#\(sz)#\(mtime)"
+        // v4 prefix forces automatic re-parse with Bevel ASLEEP-only (zero InBed/Awake) HR & HRV engine
+        return "v4#\(url.lastPathComponent)#\(sz)#\(mtime)"
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)
@@ -330,15 +330,31 @@ enum ShortcutsHealthSyncImporter {
         }
     }
 
+    /// Splits a Shortcuts newline-joined parallel list while preserving internal empty lines so
+    /// parallel indices (`values[i]`, `starts[i]`, `ends[i]`) NEVER shift out of alignment!
+    private static func expandParallelLines(_ raw: [String]?) -> [String] {
+        guard let raw, !raw.isEmpty else { return [] }
+        if raw.count == 1 {
+            var lines = raw[0]
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            while lines.last?.isEmpty == true { lines.removeLast() }
+            while lines.first?.isEmpty == true { lines.removeFirst() }
+            return lines
+        }
+        return expandLines(raw)
+    }
+
     private static func ingestParallelSeries(
         kind: SyncMetricKind,
         values rawVals: [String]?,
         dates rawDates: [String]?,
         into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
     ) {
-        let vals = expandLines(rawVals)
+        let vals = expandParallelLines(rawVals)
         guard !vals.isEmpty else { return }
-        let dates = expandLines(rawDates)
+        let dates = expandParallelLines(rawDates)
         let fallbackNow = Date()
         let allowDotThousands = (kind == .steps)
 
@@ -374,9 +390,9 @@ enum ShortcutsHealthSyncImporter {
         sourceName: String,
         into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
     ) {
-        let starts = expandLines(rawStarts)
-        let ends = expandLines(rawEnds)
-        let vals = expandLines(rawVals)
+        let starts = expandParallelLines(rawStarts)
+        let ends = expandParallelLines(rawEnds)
+        let vals = expandParallelLines(rawVals)
         let count = min(starts.count, ends.count)
         guard count > 0 else { return }
 
@@ -386,7 +402,7 @@ enum ShortcutsHealthSyncImporter {
             let sEp = Int64(s.date.timeIntervalSince1970)
             let eEp = Int64(e.date.timeIntervalSince1970)
             guard eEp > sEp else { continue }
-            let stageRaw = i < vals.count ? vals[i] : "Asleep"
+            let stageRaw = (i < vals.count && !vals[i].isEmpty) ? vals[i] : "Asleep"
             addSleepInterval(startEpoch: sEp, endEpoch: eEp, endDayIso: e.wall.iso, stageRaw: stageRaw, sourceName: sourceName, into: &days)
         }
     }
@@ -802,7 +818,7 @@ enum ShortcutsHealthSyncImporter {
         } else if low.contains("core") || low.contains("esencial") || low.contains("central") || low.contains("liger") {
             day.coreIntervals.append(span)
             day.rawStageBlocks.append(SleepStageBlock(id: "sh_c_\(s)", stage: .core, startEpochSec: s, endEpochSec: e))
-        } else if low.contains("inbed") || low.contains("in bed") || low.contains("en cama") || low.contains("en la cama") {
+        } else if low.contains("inbed") || low.contains("in bed") || low.contains("en cama") || low.contains("en la cama") || low.contains("acostad") {
             day.inBedIntervals.append(span)
         } else if low.contains("awake") || low.contains("despiert") || low.contains("vigilia") {
             day.awakeIntervals.append(span)
@@ -867,6 +883,8 @@ enum ShortcutsHealthSyncImporter {
             ("dd/MM/yyyy, H:mm", "es_ES"),
             ("d/M/yy, H:mm:ss", "es_ES"),
             ("d/M/yy, H:mm", "es_ES"),
+            ("d/M/yy, h:mm a", "es_ES"),
+            ("dd/MM/yyyy, h:mm a", "es_ES"),
             ("d/M/yy H:mm:ss", "es_ES"),
             ("d/M/yy H:mm", "es_ES"),
             ("d/M/yy 'a las' H:mm", "es_ES"),
@@ -885,6 +903,8 @@ enum ShortcutsHealthSyncImporter {
             ("d MMM yyyy 'a la' H:mm:ss", "es_ES"),
             ("d MMM yyyy 'a la' H:mm", "es_ES"),
             ("d MMM yyyy, h:mm a", "es_ES"),
+            ("d MMM yyyy 'a las' h:mm a", "es_ES"),
+            ("d MMM yyyy 'a la' h:mm a", "es_ES"),
             ("d 'de' MMMM 'de' yyyy, H:mm", "es_ES"),
             ("d 'de' MMMM 'de' yyyy 'a las' H:mm", "es_ES"),
             ("d 'de' MMMM 'de' yyyy 'a la' H:mm", "es_ES"),
@@ -1042,11 +1062,11 @@ enum ShortcutsHealthSyncImporter {
     }
 
     private static func extractStringList(_ raw: Any?) -> [String] {
-        if let arr = raw as? [String] { return expandLines(arr) }
+        if let arr = raw as? [String] { return expandParallelLines(arr) }
         if let arr = raw as? [Any] {
-            return expandLines(arr.map { "\($0)" })
+            return expandParallelLines(arr.map { "\($0)" })
         }
-        if let s = raw as? String { return expandLines([s]) }
+        if let s = raw as? String { return expandParallelLines([s]) }
         return []
     }
 

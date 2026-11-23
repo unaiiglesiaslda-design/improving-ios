@@ -280,23 +280,27 @@ enum AppleHealthExportImporter {
             let candAllSpans = candDeep + candRem + candCore + candUnspec + candAwake + candInBed
             let candAsleepSpans = candDeep + candRem + candCore + candUnspec
 
-            // Cluster contiguous sleep sessions (gap <= 90 min) and pick the primary longest sleep session (ignores naps!)
-            let primarySleepRange: ClosedRange<Int64>? = primarySleepSessionRange(
-                allSpans: candAllSpans,
+            // Cluster contiguous ACTUAL ASLEEP intervals first (gap <= 90 min) so iPhone `InBed` bedtime schedules
+            // NEVER stretch the sleep window into awake evening/morning hours!
+            let primaryAsleepRange: ClosedRange<Int64>? = primarySleepSessionRange(
+                allSpans: !candAsleepSpans.isEmpty ? candAsleepSpans : candAllSpans,
                 asleepSpans: candAsleepSpans
             )
 
-            func inPrimary(_ spans: [ClosedRange<Int64>]) -> [ClosedRange<Int64>] {
-                guard let pr = primarySleepRange else { return spans }
-                return spans.filter { $0.upperBound >= pr.lowerBound && $0.lowerBound <= pr.upperBound }
+            func inPrimaryAsleep(_ spans: [ClosedRange<Int64>], marginBefore: Int64 = 0, marginAfter: Int64 = 0) -> [ClosedRange<Int64>] {
+                guard let pr = primaryAsleepRange else { return spans }
+                let lo = pr.lowerBound - marginBefore
+                let hi = pr.upperBound + marginAfter
+                return spans.filter { $0.upperBound >= lo && $0.lowerBound <= hi }
             }
 
-            let primaryDeep = inPrimary(candDeep)
-            let primaryRem = inPrimary(candRem)
-            let primaryCore = inPrimary(candCore)
-            let primaryUnspec = inPrimary(candUnspec)
-            let primaryAwake = inPrimary(candAwake)
-            let primaryInBed = inPrimary(candInBed)
+            let primaryDeep = inPrimaryAsleep(candDeep)
+            let primaryRem = inPrimaryAsleep(candRem)
+            let primaryCore = inPrimaryAsleep(candCore)
+            let primaryUnspec = inPrimaryAsleep(candUnspec)
+            let primaryAwake = inPrimaryAsleep(candAwake)
+            // Only attach InBed blocks within 60m before falling asleep / 30m after waking (rejects multi-hour awake iPhone schedules!)
+            let primaryInBed = inPrimaryAsleep(candInBed, marginBefore: 60 * 60, marginAfter: 30 * 60)
 
             let deepSec = mergeIntervalSeconds(primaryDeep)
             let remSec = mergeIntervalSeconds(primaryRem)
@@ -321,8 +325,11 @@ enum AppleHealthExportImporter {
                 return min(max(Int((Double(asleep) / Double(bed) * 100.0).rounded()), 1), 100)
             }()
 
-            // 2. Build SleepSessionDetail & extract exact overnight vitals strictly across Primary Entire Sleep
+            // 2. Build SleepSessionDetail & extract overnight vitals STRICTLY during ACTUAL ASLEEP stages
+            //    (Matches Bevel "Entire Sleep": explicitly EXCLUDES `InBed` before falling asleep AND `Awake` periods!)
             let allAsleepSpans = primaryDeep + primaryRem + primaryCore + primaryUnspec
+            let mergedAsleepSpans = mergeIntervals(allAsleepSpans)
+            let mergedAwakeSpans = mergeIntervals(primaryAwake)
             let allSleepSpans = allAsleepSpans + primaryAwake + primaryInBed
             var sleepSession: SleepSessionDetail? = nil
             var sleepNoiseOver50: Bool? = nil
@@ -333,14 +340,31 @@ enum AppleHealthExportImporter {
             var sleepSpo2Vals: [Double] = []
             var hrDipPct: Double? = nil
 
-            let sleepWindowStart = primarySleepRange?.lowerBound ?? allSleepSpans.map(\.lowerBound).min()
-            let sleepWindowEnd = primarySleepRange?.upperBound ?? allSleepSpans.map(\.upperBound).max()
+            let asleepWindowStart = mergedAsleepSpans.first?.lowerBound ?? primaryAsleepRange?.lowerBound
+            let asleepWindowEnd = mergedAsleepSpans.last?.upperBound ?? primaryAsleepRange?.upperBound
+            let displayStart = min(asleepWindowStart ?? Int64.max, primaryInBed.map(\.lowerBound).min() ?? Int64.max)
+            let displayEnd = max(asleepWindowEnd ?? Int64.min, primaryAwake.map(\.upperBound).max() ?? Int64.min)
+            let sleepWindowStart: Int64? = displayStart < Int64.max ? displayStart : allSleepSpans.map(\.lowerBound).min()
+            let sleepWindowEnd: Int64? = displayEnd > Int64.min ? displayEnd : allSleepSpans.map(\.upperBound).max()
 
             let combinedRmssdHrv = (prevRaw?.hrvRmssdSamples ?? []) + raw.hrvRmssdSamples
             let combinedSdnnHrv = (prevRaw?.hrvSamples ?? []) + raw.hrvSamples
 
-            if let sStart = sleepWindowStart, let sEnd = sleepWindowEnd, sEnd > sStart, asleepOrNil != nil {
-                let firstAsleep = allAsleepSpans.map(\.lowerBound).min()
+            // Bevel "Entire Sleep" filter: sample must occur during an actual ASLEEP interval (not InBed, not Awake!)
+            func isDuringAsleep(_ ep: Int64, tolerance: Int64) -> Bool {
+                guard !mergedAsleepSpans.isEmpty else { return false }
+                // Exclude readings strictly inside an Awake period (> 2 min awake gap)
+                for aw in mergedAwakeSpans where (aw.upperBound - aw.lowerBound) >= 120 {
+                    if ep > aw.lowerBound + 30 && ep < aw.upperBound - 30 {
+                        return false
+                    }
+                }
+                return mergedAsleepSpans.contains { ep >= ($0.lowerBound - tolerance) && ep <= ($0.upperBound + tolerance) }
+            }
+
+            if let sStart = sleepWindowStart, let sEnd = sleepWindowEnd, sEnd > sStart, asleepOrNil != nil,
+               let aStart = asleepWindowStart, let aEnd = asleepWindowEnd, aEnd > aStart {
+                let firstAsleep = mergedAsleepSpans.first?.lowerBound
                 let inBedStart = primaryInBed.map(\.lowerBound).min()
                 let latencyMin: Int? = {
                     guard let ib = inBedStart, let fa = firstAsleep, fa >= ib else { return nil }
@@ -357,28 +381,26 @@ enum AppleHealthExportImporter {
                     return (prevStages + curStages).sorted { $0.startEpochSec < $1.startEpochSec }
                 }()
 
-                let winStart = sStart - 300
-                let winEnd = sEnd + 300
-
+                // Strict ASLEEP-only filtering (matches Bevel "Entire Sleep": excludes InBed & Awake!)
                 let sleepHr = combinedHr
-                    .filter { $0.0 >= winStart && $0.0 <= winEnd }
+                    .filter { isDuringAsleep($0.0, tolerance: 30) }
                     .sorted { $0.0 < $1.0 }
                     .map { TimedBiometricPoint(minuteOfDay: minuteOfDay(epochSec: $0.0), value: round1($0.2), epochSec: $0.0) }
                 let sleepRmssdPts = combinedRmssdHrv
-                    .filter { $0.0 >= winStart && $0.0 <= winEnd }
+                    .filter { isDuringAsleep($0.0, tolerance: 90) }
                     .sorted { $0.0 < $1.0 }
                     .map { TimedBiometricPoint(minuteOfDay: minuteOfDay(epochSec: $0.0), value: round1($0.1), epochSec: $0.0) }
                 let sleepSdnnPts = combinedSdnnHrv
-                    .filter { $0.0 >= winStart && $0.0 <= winEnd }
+                    .filter { isDuringAsleep($0.0, tolerance: 90) }
                     .sorted { $0.0 < $1.0 }
                     .map { TimedBiometricPoint(minuteOfDay: minuteOfDay(epochSec: $0.0), value: round1($0.1), epochSec: $0.0) }
                 let sleepHrv = !sleepRmssdPts.isEmpty ? sleepRmssdPts : sleepSdnnPts
                 let sleepResp = combinedResp
-                    .filter { $0.0 >= winStart && $0.0 <= winEnd }
+                    .filter { isDuringAsleep($0.0, tolerance: 120) }
                     .sorted { $0.0 < $1.0 }
                     .map { TimedBiometricPoint(minuteOfDay: minuteOfDay(epochSec: $0.0), value: round1($0.1), epochSec: $0.0) }
                 let sleepSpo2 = combinedSpo2
-                    .filter { $0.0 >= winStart && $0.0 <= winEnd }
+                    .filter { isDuringAsleep($0.0, tolerance: 120) }
                     .sorted { $0.0 < $1.0 }
                     .map { TimedBiometricPoint(minuteOfDay: minuteOfDay(epochSec: $0.0), value: round1($0.1), epochSec: $0.0) }
 
@@ -388,13 +410,13 @@ enum AppleHealthExportImporter {
                 sleepRespVals = sleepResp.map(\.value)
                 sleepSpo2Vals = sleepSpo2.map(\.value)
 
-                let sleepAudio = combinedAudio.filter { $0.0 >= winStart && $0.0 <= winEnd }
+                let sleepAudio = combinedAudio.filter { $0.0 >= aStart && $0.0 <= aEnd }
                 if !sleepAudio.isEmpty {
                     sleepNoiseOver50 = sleepAudio.contains { $0.1 >= 50.0 }
                 }
 
-                let daytimeHrVals = raw.hrSamples.filter { $0.0 > sEnd }.map(\.2)
-                if let dayMean = mean(daytimeHrVals), let slpMean = mean(sleepHrVals), dayMean > 35 {
+                let daytimeHrVals = raw.hrSamples.filter { $0.0 > aEnd }.map(\.2)
+                if let dayMean = mean(daytimeHrVals), let slpMean = WhoopPhysiologyEngine.aggregateSleepingHr(sleepHrVals), dayMean > 35 {
                     hrDipPct = round1(((dayMean - slpMean) / dayMean) * 100.0)
                 }
 
@@ -429,11 +451,7 @@ enum AppleHealthExportImporter {
                 )
             }
 
-            // 3. Bevel / WHOOP Aligned Vitals — RMSSD + Entire Sleep ("Todo el sueño") Priority!
-            //    Priority 1: True beat-to-beat RMSSD during Entire Sleep
-            //    Priority 2: Apple Health SDNN during Entire Sleep (when source lacks beat-to-beat series, e.g. Shortcuts)
-            //    Priority 3: Nocturnal window (22:00 prev day – 11:00) if no sleep session recorded (prevents low daytime HRV drag!)
-            //    Priority 4: Full-day readings only if zero sleep & zero nocturnal samples exist
+            // 3. Bevel / WHOOP Aligned Vitals — RMSSD + Entire Sleep (Asleep-Only) Priority!
             let (hrvMs, hrvMethodLabel): (Double?, String?) = {
                 if !sleepHrvRmssdVals.isEmpty, let v = WhoopPhysiologyEngine.aggregateEntireSleepHrv(sleepHrvRmssdVals) {
                     return (round1(v), "RMSSD · Todo el sueño")
@@ -442,8 +460,9 @@ enum AppleHealthExportImporter {
                     return (round1(v), "SDNN · Todo el sueño")
                 }
                 if let dStart = dayStartEp {
-                    let noctStart = dStart - 2 * 3600 // 22:00 prev evening
-                    let noctEnd = dStart + 11 * 3600  // 11:00 morning
+                    // Narrow nocturnal fallback (00:00 – 08:30) when no sleep session exists, avoiding daytime stress HRV
+                    let noctStart = dStart
+                    let noctEnd = dStart + 8 * 3600 + 1800
                     let noctRmssd = combinedRmssdHrv.filter { $0.0 >= noctStart && $0.0 <= noctEnd }.map(\.1)
                     if !noctRmssd.isEmpty, let v = WhoopPhysiologyEngine.aggregateEntireSleepHrv(noctRmssd) {
                         return (round1(v), "RMSSD · Nocturna")
@@ -464,10 +483,31 @@ enum AppleHealthExportImporter {
                 return (nil, nil)
             }()
 
-            // - Resting HR: Bevel uses SLEEPING HR average when >= 5 sleeping HR samples exist; falls back to Apple RHR!
+            // - Resting HR: Bevel uses outlier-cleaned ASLEEP HR mean when >= 3 sleeping HR samples exist; falls back to Apple RHR!
             let appleRhr = mean(raw.rhrValues)
-            let sleepMeanHr = sleepHrVals.count >= 5 ? mean(sleepHrVals) : nil
+            let sleepMeanHr = sleepHrVals.count >= 3 ? WhoopPhysiologyEngine.aggregateSleepingHr(sleepHrVals) : nil
             let rhrBpm: Double? = (sleepMeanHr ?? appleRhr).map(round1)
+
+            // Concise transparent diagnostic line so exact sleep window, sample counts, and RMSSD vs SDNN are 100% inspectable!
+            let syncDiagLine: String = {
+                var parts: [String] = []
+                if let ss = sleepSession {
+                    parts.append("Sueño \(ss.startTimeLabel)–\(ss.endTimeLabel)")
+                } else {
+                    parts.append("Sin bloques de sueño")
+                }
+                if let sm = sleepMeanHr {
+                    parts.append(String(format: "FC sueño %.1f (%d)", round1(sm), sleepHrVals.count))
+                } else if let ar = appleRhr {
+                    parts.append(String(format: "FCR Apple %.1f (0 sueño)", round1(ar)))
+                }
+                let hrvSleepCount = !sleepHrvRmssdVals.isEmpty ? sleepHrvRmssdVals.count : sleepHrvSdnnVals.count
+                let totalHrvDay = raw.hrvRmssdSamples.count + raw.hrvSamples.count
+                if let h = hrvMs {
+                    parts.append(String(format: "VFC %.1f (%d sueño/%d día)", h, hrvSleepCount, totalHrvDay))
+                }
+                return parts.joined(separator: " · ")
+            }()
 
             // - Daytime HR: strictly outside sleep window!
             let daytimeHrOnly: [Double] = {
@@ -615,6 +655,7 @@ enum AppleHealthExportImporter {
                 restingHrBpm: rhrBpm,
                 hrvMs: hrvMs,
                 hrvMethodLabel: hrvMethodLabel,
+                syncDiagnosticLine: syncDiagLine,
                 respRateRpm: respRate,
                 wristTempDeltaC: tempDelta,
                 wristTempAbsoluteC: dayTempAbs,
@@ -821,12 +862,12 @@ enum AppleHealthExportImporter {
         private var activeWorkoutIdx: Int = -1
         private var activeWorkoutHasKcal = false
 
-        // Active HRV context: ALWAYS prefer beat-to-beat RMSSD from <InstantaneousBeatsPerMinute> (Bevel / WHOOP standard!),
-        // falling back to Apple's scalar SDNN only if no beat-to-beat readings exist inside the <Record>.
+        // Active HRV context: ALWAYS prefer beat-to-beat RMSSD from <InstantaneousBeatsPerMinute bpm="..." time="..."/>
+        // using exact sub-second beat timestamps (identical to HealthKit HKHeartbeatSeriesQuery!).
         private var activeHrvDateIso: String?
         private var activeHrvEndEpoch: Int64 = 0
         private var activeHrvFallbackSdnn: Double? = nil
-        private var activeHrvBeatBpms: [Double] = []
+        private var activeHrvBeatEntries: [(timeSec: Double?, hasSubsecond: Bool, bpm: Double)] = []
 
         func feed(_ chunk: Data) {
             if !carry.isEmpty {
@@ -922,7 +963,8 @@ enum AppleHealthExportImporter {
                     if let s = String(bytes: UnsafeBufferPointer(start: ptr, count: length), encoding: .utf8) {
                         let attrs = parseAttributes(s)
                         if let bStr = attrs["bpm"], let bpm = Double(bStr.replacingOccurrences(of: ",", with: ".")), (30...200).contains(bpm) {
-                            activeHrvBeatBpms.append(bpm)
+                            let parsedTime = Self.parseInstantaneousBeatTime(attrs["time"])
+                            activeHrvBeatEntries.append((parsedTime?.seconds, parsedTime?.hasSubsecond ?? false, bpm))
                         }
                     }
                 }
@@ -937,15 +979,43 @@ enum AppleHealthExportImporter {
             }
         }
 
+        /// Parses Apple Health `<InstantaneousBeatsPerMinute time="4:38:38.36 PM" />` or `"03:30:01,42"` into seconds since midnight.
+        private static func parseInstantaneousBeatTime(_ raw: String?) -> (seconds: Double, hasSubsecond: Bool)? {
+            guard let raw else { return nil }
+            let s = raw
+                .replacingOccurrences(of: "\u{00A0}", with: " ")
+                .replacingOccurrences(of: "\u{202F}", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard !s.isEmpty else { return nil }
+            let isPm = s.contains("pm") || s.contains("p. m") || s.contains("p.m")
+            let isAm = s.contains("am") || s.contains("a. m") || s.contains("a.m")
+            guard let range = s.range(of: #"(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d+))?"#, options: .regularExpression) else {
+                return nil
+            }
+            let token = String(s[range])
+            let colonParts = token.split(separator: ":")
+            guard colonParts.count == 3,
+                  var hh = Int(colonParts[0]),
+                  let mm = Int(colonParts[1]) else { return nil }
+            let secPart = String(colonParts[2]).replacingOccurrences(of: ",", with: ".")
+            let hasSub = secPart.contains(".")
+            guard let ss = Double(secPart) else { return nil }
+            if isPm && hh < 12 { hh += 12 }
+            if isAm && hh == 12 { hh = 0 }
+            guard (0...23).contains(hh), (0...59).contains(mm), ss >= 0 && ss < 60.0 else { return nil }
+            return (Double(hh * 3600 + mm * 60) + ss, hasSub)
+        }
+
         private func flushPendingHrvIfNeeded() {
             defer {
                 activeHrvDateIso = nil
                 activeHrvFallbackSdnn = nil
-                activeHrvBeatBpms.removeAll(keepingCapacity: true)
+                activeHrvBeatEntries.removeAll(keepingCapacity: true)
             }
             guard let iso = activeHrvDateIso, let day = days[iso] else { return }
-            // Priority 1: TRUE beat-to-beat RMSSD with Bevel/WHOOP artifact filtering
-            if let rmssd = WhoopPhysiologyEngine.computeRmssdFromBeatBpms(activeHrvBeatBpms) {
+            // Priority 1: TRUE beat-to-beat RMSSD (sub-second RR intervals first, gap-split BPM fallback second)
+            if let rmssd = WhoopPhysiologyEngine.computeRmssdFromBeatEntries(activeHrvBeatEntries) {
                 day.hrvRmssdSamples.append((activeHrvEndEpoch, rmssd))
                 return
             }
@@ -1080,7 +1150,7 @@ enum AppleHealthExportImporter {
                     activeHrvDateIso = day.dateIso
                     activeHrvEndEpoch = endEp
                     activeHrvFallbackSdnn = scalarSdnn
-                    activeHrvBeatBpms.removeAll(keepingCapacity: true)
+                    activeHrvBeatEntries.removeAll(keepingCapacity: true)
                 }
                 return
             }
@@ -1315,6 +1385,26 @@ enum AppleHealthExportImporter {
             }
         }
         return best
+    }
+
+    private static func mergeIntervals(_ intervals: [ClosedRange<Int64>]) -> [ClosedRange<Int64>] {
+        guard !intervals.isEmpty else { return [] }
+        let sorted = intervals.sorted { $0.lowerBound < $1.lowerBound }
+        var merged: [ClosedRange<Int64>] = []
+        merged.reserveCapacity(sorted.count)
+        var curStart = sorted[0].lowerBound
+        var curEnd = sorted[0].upperBound
+        for span in sorted.dropFirst() {
+            if span.lowerBound <= curEnd {
+                curEnd = max(curEnd, span.upperBound)
+            } else {
+                merged.append(curStart...curEnd)
+                curStart = span.lowerBound
+                curEnd = span.upperBound
+            }
+        }
+        merged.append(curStart...curEnd)
+        return merged
     }
 
     private static func mergeIntervalSeconds(_ intervals: [ClosedRange<Int64>]) -> Int64 {

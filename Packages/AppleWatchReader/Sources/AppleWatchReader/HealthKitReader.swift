@@ -103,6 +103,60 @@ public struct NightlySleepSession: Sendable {
     public let isPrimary: Bool
     public let sourceName: String?
     public let stages: [SleepStageSample]
+    public let asleepIntervals: [(Date, Date)]
+    public let awakeIntervals: [(Date, Date)]
+
+    public init(
+        startDate: Date,
+        endDate: Date,
+        inBedMinutes: Double,
+        totalAsleepMinutes: Double,
+        deepMinutes: Double,
+        remMinutes: Double,
+        coreMinutes: Double,
+        awakeMinutes: Double,
+        latencyMinutes: Int?,
+        efficiencyPct: Double,
+        restorativePct: Double,
+        isPrimary: Bool,
+        sourceName: String?,
+        stages: [SleepStageSample],
+        asleepIntervals: [(Date, Date)] = [],
+        awakeIntervals: [(Date, Date)] = []
+    ) {
+        self.startDate = startDate
+        self.endDate = endDate
+        self.inBedMinutes = inBedMinutes
+        self.totalAsleepMinutes = totalAsleepMinutes
+        self.deepMinutes = deepMinutes
+        self.remMinutes = remMinutes
+        self.coreMinutes = coreMinutes
+        self.awakeMinutes = awakeMinutes
+        self.latencyMinutes = latencyMinutes
+        self.efficiencyPct = efficiencyPct
+        self.restorativePct = restorativePct
+        self.isPrimary = isPrimary
+        self.sourceName = sourceName
+        self.stages = stages
+        self.asleepIntervals = asleepIntervals
+        self.awakeIntervals = awakeIntervals
+    }
+
+    /// Bevel "Entire Sleep" predicate: returns true ONLY when timestamp falls inside an actual ASLEEP interval
+    /// (Core / Deep / REM / Asleep), explicitly excluding `InBed` before falling asleep and `Awake` interruptions!
+    public func isDuringAsleep(_ date: Date, toleranceSec: TimeInterval) -> Bool {
+        for (awS, awE) in awakeIntervals where awE.timeIntervalSince(awS) >= 120 {
+            if date > awS.addingTimeInterval(30) && date < awE.addingTimeInterval(-30) {
+                return false
+            }
+        }
+        if !asleepIntervals.isEmpty {
+            return asleepIntervals.contains { (s, e) in
+                date >= s.addingTimeInterval(-toleranceSec) && date <= e.addingTimeInterval(toleranceSec)
+            }
+        }
+        return date >= startDate.addingTimeInterval(-toleranceSec) && date <= endDate.addingTimeInterval(toleranceSec)
+    }
 }
 
 public struct ProcessedNightlyHRV: Sendable {
@@ -454,15 +508,19 @@ public final class HealthKitReader: ObservableObject {
         let totalAsleep = stagedAsleep > 0 ? stagedAsleep : unspecMin
         guard totalAsleep > 0 else { return nil }
 
-        let inBedMin = max(rawInBedMin, totalAsleep + awakeMin)
         let allAsleep = deepRanges + remRanges + coreRanges + unspecRanges
-        let allSpans = allAsleep + awakeRanges + inBedRanges
-        guard let overallStart = allSpans.map(\.0).min(),
-              let overallEnd = allSpans.map(\.1).max() else { return nil }
+        guard let asleepStart = allAsleep.map(\.0).min(),
+              let asleepEnd = allAsleep.map(\.1).max() else { return nil }
+        // Only keep InBed spans within 60m before falling asleep / 30m after waking (drops awake bedtime schedules)
+        let nearInBed = inBedRanges.filter { $0.1 >= asleepStart.addingTimeInterval(-3600) && $0.0 <= asleepEnd.addingTimeInterval(1800) }
+        let nearInBedMin = mergeMinutes(nearInBed)
+        let inBedMin = max(nearInBedMin, totalAsleep + awakeMin)
+        let overallStart = min(asleepStart, nearInBed.map(\.0).min() ?? asleepStart)
+        let overallEnd = max(asleepEnd, awakeRanges.map(\.1).max() ?? asleepEnd)
 
         let latencyMin: Int? = {
-            guard let ib = inBedRanges.map(\.0).min(), let fa = allAsleep.map(\.0).min(), fa >= ib else { return nil }
-            return min(Int((fa.timeIntervalSince(ib) / 60.0).rounded()), 120)
+            guard let ib = nearInBed.map(\.0).min(), asleepStart >= ib else { return nil }
+            return min(Int((asleepStart.timeIntervalSince(ib) / 60.0).rounded()), 120)
         }()
 
         let efficiency = inBedMin > 0 ? min(100.0, (totalAsleep / inBedMin) * 100.0) : 0.0
@@ -482,7 +540,9 @@ public final class HealthKitReader: ObservableObject {
             restorativePct: restorative,
             isPrimary: totalAsleep >= 120,
             sourceName: sourceName,
-            stages: stageBlocks.sorted { $0.startDate < $1.startDate }
+            stages: stageBlocks.sorted { $0.startDate < $1.startDate },
+            asleepIntervals: allAsleep,
+            awakeIntervals: awakeRanges
         )
     }
 
@@ -638,14 +698,16 @@ public final class HealthKitReader: ObservableObject {
         var methodLabel = "RMSSD · Todo el sueño"
 
         if let sl = sleepSession {
-            let winStart = sl.startDate.addingTimeInterval(-300)
-            let winEnd = sl.endDate.addingTimeInterval(300)
-            let rmssdSleep = await extractHeartbeatSeriesRmssd(from: winStart, to: winEnd)
+            let winStart = sl.startDate.addingTimeInterval(-120)
+            let winEnd = sl.endDate.addingTimeInterval(120)
+            let rmssdSleep = (await extractHeartbeatSeriesRmssd(from: winStart, to: winEnd))
+                .filter { sl.isDuringAsleep($0.date, toleranceSec: 90) }
             if !rmssdSleep.isEmpty {
                 sleepSamples = rmssdSleep
                 methodLabel = "RMSSD · Todo el sueño"
             } else {
-                let sdnnSleep = await querySdnn(from: winStart, to: winEnd)
+                let sdnnSleep = (await querySdnn(from: winStart, to: winEnd))
+                    .filter { sl.isDuringAsleep($0.date, toleranceSec: 90) }
                 if !sdnnSleep.isEmpty {
                     sleepSamples = sdnnSleep
                     methodLabel = "SDNN · Todo el sueño"
@@ -744,17 +806,15 @@ public final class HealthKitReader: ObservableObject {
                 if s.startDate >= dayStart && s.startDate < dayEnd {
                     intraday.append(sample)
                 }
-                if let sl = sleepSession,
-                   s.startDate >= sl.startDate.addingTimeInterval(-300),
-                   s.startDate <= sl.endDate.addingTimeInterval(300) {
+                if let sl = sleepSession, sl.isDuringAsleep(s.startDate, toleranceSec: 30) {
                     sleepHr.append(sample)
                 }
             }
         }
 
-        // Bevel RHR = sleeping average heart rate during sleep (falls back to Apple RHR if no sleep HR)
+        // Bevel RHR = sleeping average heart rate strictly during ASLEEP stages (excludes InBed & Awake!)
         let sleepMean: Double = sleepHr.isEmpty ? 0 : (sleepHr.map(\.value).reduce(0, +) / Double(sleepHr.count))
-        let effectiveRhr: Double = sleepHr.count >= 5 ? sleepMean : (appleRhr > 0 ? appleRhr : sleepMean)
+        let effectiveRhr: Double = sleepHr.count >= 3 ? sleepMean : (appleRhr > 0 ? appleRhr : sleepMean)
 
         var minHr: Double = 0
         var minHrDate: Date? = nil
