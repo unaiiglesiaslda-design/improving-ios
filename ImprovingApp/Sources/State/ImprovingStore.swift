@@ -854,8 +854,39 @@ final class ImprovingStore: ObservableObject {
         ]
     }
 
+    /// Returns Bevel-style 60-day personal normal range for a Health Monitor vital (falling back to clinical
+    /// age/sex/height/weight norms when fewer than 5 real readings exist in the trailing 60-day window).
+    func personalVitalNormalBand(for kind: HealthMetricKind) -> (low: Double, high: Double, isPersonal: Bool) {
+        let window60 = trailingCalendarSummaries(days: 60)
+        let extractor: (RealBiometricDaySummary) -> Double? = { d in
+            switch kind {
+            case .respiratoryRate: return d.respRateRpm
+            case .restingHeartRate: return d.restingHrBpm
+            case .hrv: return d.hrvMs
+            case .oxygenSaturation: return d.spo2Percent
+            case .wristTemperature:
+                return d.wristTempAbsoluteC ?? d.wristTempDeltaC.map { AppleHealthExportImporter.round1(35.8 + $0) }
+            case .sleepDuration:
+                return d.asleepMinutes.map { Double($0) / 60.0 }
+            }
+        }
+        // Prefer strictly prior days when >= 7 prior days exist so today's anomaly doesn't mask itself
+        let priorOnly = window60.dropLast().compactMap { $0.summary.flatMap(extractor) }
+        let pool = priorOnly.count >= 7 ? priorOnly : window60.compactMap { $0.summary.flatMap(extractor) }
+        return WhoopPhysiologyEngine.computePersonalVitalNormalBand(
+            kind: kind,
+            trailingValues: pool,
+            profile: userProfile
+        )
+    }
+
     var recoveryTrends: [EffortTrendItem] {
         let window = trailingCalendarSummaries(days: 14)
+        let hrvBand = personalVitalNormalBand(for: .hrv)
+        let rhrBand = personalVitalNormalBand(for: .restingHeartRate)
+        let respBand = personalVitalNormalBand(for: .respiratoryRate)
+        let spo2Band = personalVitalNormalBand(for: .oxygenSaturation)
+        let tempBand = personalVitalNormalBand(for: .wristTemperature)
         return [
             buildTrendItem(
                 id: "r_rec", title: "Puntuación de Recuperación",
@@ -870,7 +901,7 @@ final class ImprovingStore: ObservableObject {
                 currentValue: currentDaySummary?.hrvMs,
                 valueFormatter: { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }, unitText: "ms",
                 series: window.map { $0.summary?.hrvMs },
-                bandLow: 55, bandHigh: 95, lineColorHex: 0x3BD671,
+                bandLow: hrvBand.low, bandHigh: hrvBand.high, lineColorHex: 0x3BD671,
                 detailNote: "Variabilidad de la frecuencia cardíaca consolidada durante el sueño."
             ),
             buildTrendItem(
@@ -878,7 +909,7 @@ final class ImprovingStore: ObservableObject {
                 currentValue: currentDaySummary?.restingHrBpm,
                 valueFormatter: { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }, unitText: "ppm",
                 series: window.map { $0.summary?.restingHrBpm },
-                bandLow: 45, bandHigh: 56, lineColorHex: 0x3BD671,
+                bandLow: rhrBand.low, bandHigh: rhrBand.high, lineColorHex: 0x3BD671,
                 detailNote: "Frecuencia cardíaca media sostenida durante el descanso nocturno."
             ),
             buildTrendItem(
@@ -886,7 +917,7 @@ final class ImprovingStore: ObservableObject {
                 currentValue: currentDaySummary?.respRateRpm,
                 valueFormatter: { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }, unitText: "rpm",
                 series: window.map { $0.summary?.respRateRpm },
-                bandLow: 13.8, bandHigh: 16.8, lineColorHex: 0x3BD671,
+                bandLow: respBand.low, bandHigh: respBand.high, lineColorHex: 0x3BD671,
                 detailNote: "Respiraciones por minuto registradas durante el sueño."
             ),
             buildTrendItem(
@@ -894,7 +925,7 @@ final class ImprovingStore: ObservableObject {
                 currentValue: currentDaySummary?.spo2Percent,
                 valueFormatter: { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }, unitText: "%",
                 series: window.map { $0.summary?.spo2Percent },
-                bandLow: 95.0, bandHigh: 100.0, lineColorHex: 0x3BD671,
+                bandLow: spo2Band.low, bandHigh: spo2Band.high, lineColorHex: 0x3BD671,
                 detailNote: "Porcentaje de saturación capilar periférica de oxígeno."
             ),
             buildTrendItem(
@@ -904,7 +935,7 @@ final class ImprovingStore: ObservableObject {
                 series: window.map { item in
                     item.summary?.wristTempAbsoluteC ?? item.summary?.wristTempDeltaC.map { 35.8 + $0 }
                 },
-                bandLow: 35.4, bandHigh: 36.4, lineColorHex: 0x3BD671,
+                bandLow: tempBand.low, bandHigh: tempBand.high, lineColorHex: 0x3BD671,
                 detailNote: "Temperatura media de la piel durante la noche anterior."
             )
         ]
@@ -912,6 +943,7 @@ final class ImprovingStore: ObservableObject {
 
     var sleepTrends: [EffortTrendItem] {
         let window = trailingCalendarSummaries(days: 14)
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
         let hmFmt: (Double) -> String = { mins in
             let m = Int(mins.rounded())
             return "\(m / 60) h \(m % 60) min"
@@ -930,7 +962,7 @@ final class ImprovingStore: ObservableObject {
                 currentValue: currentDaySummary?.asleepMinutes.map { Double($0) },
                 valueFormatter: hmFmt, unitText: "",
                 series: window.map { $0.summary?.asleepMinutes.map { Double($0) } },
-                bandLow: 400, bandHigh: 540, lineColorHex: 0x93A8F8,
+                bandLow: norms.sleepLowHours * 60.0, bandHigh: norms.sleepHighHours * 60.0, lineColorHex: 0x93A8F8,
                 detailNote: "Horas netas de sueño excluyendo despertares nocturnos."
             ),
             buildTrendItem(

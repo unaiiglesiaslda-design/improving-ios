@@ -527,9 +527,11 @@ enum WhoopPhysiologyEngine {
         return computeRmssdFromRRSegments([rr])
     }
 
-    /// Outlier-cleaned mean for sleeping HR (strips single brief motion/sensor spikes > 3 MAD while preserving real sleeping mean).
+    /// Outlier-cleaned mean for sleeping HR:
+    /// Preserves genuine REM-sleep HR rises (e.g. 60–72 bpm during dreaming) while stripping extreme
+    /// optical/motion glitches (> max(4.5 * robustSigma, 28 bpm) away from night median).
     static func aggregateSleepingHr(_ samples: [Double]) -> Double? {
-        let valid = samples.filter { (28.0...160.0).contains($0) && $0.isFinite }
+        let valid = samples.filter { (28.0...135.0).contains($0) && $0.isFinite }
         guard !valid.isEmpty else { return nil }
         if valid.count < 5 {
             return valid.reduce(0, +) / Double(valid.count)
@@ -542,10 +544,98 @@ enum WhoopPhysiologyEngine {
         let mad = absDevs.count % 2 == 1
             ? absDevs[absDevs.count / 2]
             : (absDevs[absDevs.count / 2 - 1] + absDevs[absDevs.count / 2]) / 2.0
-        let sigma = max(1.4826 * mad, 4.0)
-        let cleaned = valid.filter { abs($0 - med) <= 3.0 * sigma }
+        let maxDev = max(4.5 * 1.4826 * mad, 28.0)
+        let cleaned = valid.filter { abs($0 - med) <= maxDev }
         let pool = cleaned.isEmpty ? valid : cleaned
         return pool.reduce(0, +) / Double(pool.count)
+    }
+
+    /// Computes Bevel-style 60-day personal normal range for a Health Monitor vital.
+    /// Uses the user's own trailing 60-day rolling baseline (robust median/MAD) once >= 5 real readings exist,
+    /// and seamlessly falls back to clinical age/sex/body norms when sparse (or for sleep duration target).
+    static func computePersonalVitalNormalBand(
+        kind: HealthMetricKind,
+        trailingValues: [Double],
+        profile: UserPhysiologyProfile
+    ) -> (low: Double, high: Double, isPersonal: Bool) {
+        let norms = computePersonalizedNorms(profile: profile)
+        let r1 = AppleHealthExportImporter.round1
+        let vals = Array(trailingValues.filter(\.isFinite).suffix(60))
+
+        switch kind {
+        case .hrv:
+            let valid = vals.filter { (3.0...350.0).contains($0) }
+            guard valid.count >= 5 else { return (norms.hrvLowMs, norms.hrvHighMs, false) }
+            let lnVals = valid.map { log($0) }
+            let base = computeRollingBaseline(
+                priorValues: lnVals,
+                populationMean: log(max(norms.hrvExpectedMs, 15.0)),
+                populationSigma: 0.22,
+                floorSigma: 0.14
+            )
+            let low = r1(max(exp(base.mean - 1.25 * base.sigma), 12.0))
+            let high = r1(min(exp(base.mean + 1.25 * base.sigma), 180.0))
+            return (low, max(high, low + 8.0), true)
+
+        case .restingHeartRate:
+            let valid = vals.filter { (28.0...130.0).contains($0) }
+            guard valid.count >= 5 else { return (norms.rhrLowBpm, norms.rhrHighBpm, false) }
+            let base = computeRollingBaseline(
+                priorValues: valid,
+                populationMean: norms.restingHrExpected,
+                populationSigma: 3.5,
+                floorSigma: 2.2
+            )
+            let low = r1(max(base.mean - 1.35 * base.sigma, 34.0))
+            let high = r1(min(base.mean + 1.35 * base.sigma, 105.0))
+            return (low, max(high, low + 5.0), true)
+
+        case .respiratoryRate:
+            let valid = vals.filter { (6.0...38.0).contains($0) }
+            guard valid.count >= 5 else { return (norms.respLowRpm, norms.respHighRpm, false) }
+            let center = (norms.respLowRpm + norms.respHighRpm) / 2.0
+            let base = computeRollingBaseline(
+                priorValues: valid,
+                populationMean: center,
+                populationSigma: 0.9,
+                floorSigma: 0.55
+            )
+            let low = r1(max(base.mean - 1.35 * base.sigma, 9.0))
+            let high = r1(min(base.mean + 1.35 * base.sigma, 26.0))
+            return (low, max(high, low + 1.4), true)
+
+        case .oxygenSaturation:
+            let valid = vals.filter { (70.0...100.0).contains($0) }
+            guard valid.count >= 5 else { return (norms.spo2LowPct, norms.spo2HighPct, false) }
+            let base = computeRollingBaseline(
+                priorValues: valid,
+                populationMean: max(norms.spo2LowPct + 1.8, 97.0),
+                populationSigma: 1.0,
+                floorSigma: 0.7
+            )
+            // Keep clinical safety floor so hypoxemia (< norms.spo2LowPct) is never labeled Normal
+            let low = r1(max(norms.spo2LowPct, min(base.mean - 1.35 * base.sigma, 96.5)))
+            let high = r1(min(100.0, max(base.mean + 1.20 * base.sigma, norms.spo2HighPct)))
+            return (low, max(high, low + 1.5), true)
+
+        case .wristTemperature:
+            let valid = vals.filter { (30.0...41.0).contains($0) }
+            guard valid.count >= 5 else { return (norms.wristTempLowC, norms.wristTempHighC, false) }
+            let center = (norms.wristTempLowC + norms.wristTempHighC) / 2.0
+            let base = computeRollingBaseline(
+                priorValues: valid,
+                populationMean: center,
+                populationSigma: 0.35,
+                floorSigma: 0.25
+            )
+            let low = r1(max(base.mean - 1.40 * base.sigma, 33.5))
+            let high = r1(min(base.mean + 1.40 * base.sigma, 38.5))
+            return (low, max(high, low + 0.6), true)
+
+        case .sleepDuration:
+            // Sleep duration normal band stays anchored to clinical NSF/AASM age targets
+            return (norms.sleepLowHours, norms.sleepHighHours, false)
+        }
     }
 
     /// Aggregates HRV readings across Entire Sleep ("Todo el sueño") using Bevel's outlier-cleaned mean:

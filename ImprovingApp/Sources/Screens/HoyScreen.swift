@@ -9,15 +9,21 @@ struct HoyScreen: View {
 
     var body: some View {
         let avail = store.dataAvailability
-        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
-        let respEval = WhoopPhysiologyEngine.evaluateVital(value: store.respRateRpm, bandLow: norms.respLowRpm, bandHigh: norms.respHighRpm, lowerIsBetter: true, hasData: avail.hasRespData)
-        let rhrEval = WhoopPhysiologyEngine.evaluateVital(value: store.restingHrBpm, bandLow: norms.rhrLowBpm, bandHigh: norms.rhrHighBpm, lowerIsBetter: true, hasData: avail.hasRestingHrData)
-        let hrvEval = WhoopPhysiologyEngine.evaluateVital(value: store.hrvMs, bandLow: norms.hrvLowMs, bandHigh: norms.hrvHighMs, higherIsBetter: true, hasData: avail.hasHrvData)
-        let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: store.spo2DisplayDouble, bandLow: norms.spo2LowPct, bandHigh: norms.spo2HighPct, higherIsBetter: true, hasData: avail.hasSpo2Data)
+        let respBand = store.personalVitalNormalBand(for: .respiratoryRate)
+        let rhrBand = store.personalVitalNormalBand(for: .restingHeartRate)
+        let hrvBand = store.personalVitalNormalBand(for: .hrv)
+        let spo2Band = store.personalVitalNormalBand(for: .oxygenSaturation)
+        let tempBand = store.personalVitalNormalBand(for: .wristTemperature)
+        let sleepBand = store.personalVitalNormalBand(for: .sleepDuration)
+
+        let respEval = WhoopPhysiologyEngine.evaluateVital(value: store.respRateRpm, bandLow: respBand.low, bandHigh: respBand.high, lowerIsBetter: true, hasData: avail.hasRespData)
+        let rhrEval = WhoopPhysiologyEngine.evaluateVital(value: store.restingHrBpm, bandLow: rhrBand.low, bandHigh: rhrBand.high, lowerIsBetter: true, hasData: avail.hasRestingHrData)
+        let hrvEval = WhoopPhysiologyEngine.evaluateVital(value: store.hrvMs, bandLow: hrvBand.low, bandHigh: hrvBand.high, higherIsBetter: true, hasData: avail.hasHrvData)
+        let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: store.spo2DisplayDouble, bandLow: spo2Band.low, bandHigh: spo2Band.high, higherIsBetter: true, hasData: avail.hasSpo2Data)
         let tempAbs = store.wristTempAbsoluteC ?? 0
-        let tempEval = WhoopPhysiologyEngine.evaluateVital(value: tempAbs, bandLow: norms.wristTempLowC, bandHigh: norms.wristTempHighC, hasData: avail.hasTempData)
+        let tempEval = WhoopPhysiologyEngine.evaluateVital(value: tempAbs, bandLow: tempBand.low, bandHigh: tempBand.high, hasData: avail.hasTempData)
         let sleepHours = Double(store.currentDaySummary?.asleepMinutes ?? 0) / 60.0
-        let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: norms.sleepLowHours, bandHigh: norms.sleepHighHours, higherIsBetter: true, hasData: avail.hasSleepData)
+        let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: sleepBand.low, bandHigh: sleepBand.high, higherIsBetter: true, hasData: avail.hasSleepData)
 
         let vitalsList = [respEval, rhrEval, hrvEval, spo2Eval, tempEval, sleepEval]
         let recordedVitals = vitalsList.filter { $0.severity != .noData }

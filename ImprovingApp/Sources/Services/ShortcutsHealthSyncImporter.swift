@@ -125,8 +125,8 @@ enum ShortcutsHealthSyncImporter {
         let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
         let sz = vals?.fileSize ?? 0
-        // v5 prefix forces automatic re-parse with strict staged-sleep priority (excludes secondary Durmiendo daytime blocks)
-        return "v5#\(url.lastPathComponent)#\(sz)#\(mtime)"
+        // v6 prefix forces automatic re-parse with REM-preserving sleeping HR & 60-day personal vital bands
+        return "v6#\(url.lastPathComponent)#\(sz)#\(mtime)"
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)

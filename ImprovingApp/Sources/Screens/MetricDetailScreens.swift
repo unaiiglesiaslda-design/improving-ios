@@ -79,17 +79,11 @@ struct HealthMetricDetailScreen: View {
 
     var body: some View {
         let kind = store.selectedHealthMetric
-        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
+        let personalBand = store.personalVitalNormalBand(for: kind)
         let window = store.metricWindowSeries(for: kind, spanDays: spanDays, windowPageOffset: windowPageOffset)
         let realPoints = window.realPoints
-        let (bandLow, bandHigh): (Double, Double) = switch kind {
-        case .respiratoryRate: (norms.respLowRpm, norms.respHighRpm)
-        case .restingHeartRate: (norms.rhrLowBpm, norms.rhrHighBpm)
-        case .hrv: (norms.hrvLowMs, norms.hrvHighMs)
-        case .oxygenSaturation: (norms.spo2LowPct, norms.spo2HighPct)
-        case .wristTemperature: (norms.wristTempLowC, norms.wristTempHighC)
-        case .sleepDuration: (norms.sleepLowHours, norms.sleepHighHours)
-        }
+        let bandLow = personalBand.low
+        let bandHigh = personalBand.high
         let currentNumeric: Double? = switch kind {
         case .respiratoryRate: store.dataAvailability.hasRespData ? store.respRateRpm : nil
         case .restingHeartRate: store.dataAvailability.hasRestingHrData ? store.restingHrBpm : nil

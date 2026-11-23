@@ -291,8 +291,10 @@ struct SuenoDetailScreen: View {
     var body: some View {
         let avail = store.dataAvailability
         let sess = store.currentDaySummary?.sleepSession
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
+        let baseNeedMin = Int((norms.sleepTargetHours * 60.0).rounded())
         let debt = store.currentDaySummary?.sleepDebtMinutes ?? 0
-        let needMin = 480 + debt + (store.strainPercent > 75 ? 25 : 0)
+        let needMin = baseNeedMin + debt + (store.strainPercent > 75 ? 25 : 0)
         let needText = "\(needMin / 60) h \(String(format: "%02d", needMin % 60)) min"
 
         ScrollView {

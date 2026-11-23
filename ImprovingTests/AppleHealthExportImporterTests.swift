@@ -685,4 +685,36 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertGreaterThan(strain2, strain1)
         XCTAssertGreaterThan(sleep2, sleep1)
     }
+
+    func testSleepingHrPreservesRemPeaksAndPersonal60DayBandAdaptsToUserHistory() throws {
+        // 1. Sleeping HR with steady ~48 bpm + genuine REM peaks (62..69 bpm) + 1 optical sensor glitch (118 bpm):
+        //    Must preserve the REM peaks (~50.1 bpm) while rejecting the 118 bpm glitch!
+        let samples: [Double] = [
+            47, 48, 48, 48, 49, 48, 47, 48, 48, 49,
+            48, 47, 48, 49, 48, 47, 48, 48, 49, 48,
+            62, 65, 67, 69, 118
+        ]
+        let agg = try XCTUnwrap(WhoopPhysiologyEngine.aggregateSleepingHr(samples))
+        // Without 118, exact mean of 24 real readings (20 ~48 bpm + 4 REM 62..69) = (960 + 263) / 24 = 50.96 bpm
+        // (Old 3*MAD cutoff stripped 62..69 and dropped it to 48.0 bpm!)
+        XCTAssertEqual(agg, 51.0, accuracy: 0.25)
+
+        // 2. 60-day personal normal band adapts to user's actual ~56 ms HRV history so 53.7 ms evaluates as Normal (green),
+        //    rather than falsely flagging "Bajo" against a generic young-adult ~78 ms population mean!
+        let youngProfile = UserPhysiologyProfile(userName: "Aitor", ageYears: 20, sex: .male, weightKg: 70, heightCm: 176)
+        let sparseBand = WhoopPhysiologyEngine.computePersonalVitalNormalBand(kind: .hrv, trailingValues: [55, 58], profile: youngProfile)
+        XCTAssertFalse(sparseBand.isPersonal)
+
+        let personalHistory: [Double] = [54, 57, 52, 61, 55, 59, 53, 56, 60, 54, 58, 55]
+        let personalBand = WhoopPhysiologyEngine.computePersonalVitalNormalBand(kind: .hrv, trailingValues: personalHistory, profile: youngProfile)
+        XCTAssertTrue(personalBand.isPersonal)
+        let eval = WhoopPhysiologyEngine.evaluateVital(
+            value: 53.7,
+            bandLow: personalBand.low,
+            bandHigh: personalBand.high,
+            higherIsBetter: true,
+            hasData: true
+        )
+        XCTAssertEqual(eval.statusLabel, "Normal")
+    }
 }
