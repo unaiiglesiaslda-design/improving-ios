@@ -1206,16 +1206,38 @@ enum AppleHealthExportImporter {
     ) -> [Int] {
         guard samples.count >= 2 else { return [0, 0, 0, 0, 0] }
         let sorted = samples.sorted { $0.0 < $1.0 }
+
+        // Collapse identical timestamps (e.g. Apple Shortcuts minute-truncated HR readings) by averaging BPM
+        var deduped: [(Int64, Double)] = []
+        deduped.reserveCapacity(sorted.count)
+        var curEp = sorted[0].0
+        var sumBpm = sorted[0].1
+        var cnt = 1.0
+        for item in sorted.dropFirst() {
+            if item.0 == curEp {
+                sumBpm += item.1
+                cnt += 1.0
+            } else {
+                deduped.append((curEp, sumBpm / cnt))
+                curEp = item.0
+                sumBpm = item.1
+                cnt = 1.0
+            }
+        }
+        deduped.append((curEp, sumBpm / cnt))
+        guard deduped.count >= 2 else { return [0, 0, 0, 0, 0] }
+
         let hrr = max(maxHr - rhr, 40.0)
         var secs = [0.0, 0.0, 0.0, 0.0, 0.0]
-        for idx in 0..<(sorted.count - 1) {
-            let ep = sorted[idx].0
-            let rawDt = Double(sorted[idx + 1].0 - ep)
+        for idx in 0..<(deduped.count - 1) {
+            let ep = deduped[idx].0
+            let rawDt = Double(deduped[idx + 1].0 - ep)
+            guard rawDt > 0 else { continue }
             let inWorkout = workoutSpans.contains { $0.contains(ep) }
             // Cap dt conservatively so sparse background samples never inflate passive time into huge fake Zone 1/2 minutes!
             let maxCap = inWorkout ? 30.0 : 90.0
-            let dt = min(max(rawDt, 1.0), maxCap)
-            let pctHrr = (sorted[idx].1 - rhr) / hrr
+            let dt = min(rawDt, maxCap)
+            let pctHrr = (deduped[idx].1 - rhr) / hrr
             if pctHrr >= 0.90 { secs[4] += dt }
             else if pctHrr >= 0.80 { secs[3] += dt }
             else if pctHrr >= 0.70 { secs[2] += dt }

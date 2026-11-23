@@ -754,6 +754,10 @@
 					<key>WFSerializationType</key>
 					<string>WFContentPredicateTableTemplate</string>
 				</dict>
+				<key>WFHKSampleFilteringFillMissing</key>
+				<false/>
+				<key>WFHKSampleFilteringGroupBy</key>
+				<string>Day</string>
 			</dict>
 		</dict>
 		<dict>
@@ -865,6 +869,10 @@
 					<key>WFSerializationType</key>
 					<string>WFContentPredicateTableTemplate</string>
 				</dict>
+				<key>WFHKSampleFilteringFillMissing</key>
+				<false/>
+				<key>WFHKSampleFilteringGroupBy</key>
+				<string>Day</string>
 			</dict>
 		</dict>
 		<dict>

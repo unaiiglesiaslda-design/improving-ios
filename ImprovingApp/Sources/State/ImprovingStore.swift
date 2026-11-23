@@ -1542,7 +1542,10 @@ final class ImprovingStore: ObservableObject {
                     self.applyImportedResult(result, navigateToLatest: shouldJump)
                     let hhmm = Self.currentHHMM()
                     let hrvCount = result.days.values.filter { $0.hrvMs != nil }.count
-                    self.autoSyncStatusText = "✓ Sync automática \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)"
+                    let latestDay = result.latestDateIso.flatMap { result.days[$0] }
+                    let kcalTag = latestDay?.activeKcal.map { " · \($0) kcal" } ?? ""
+                    let strainTag = latestDay?.strainPct.map { " · Esf \($0)%" } ?? ""
+                    self.autoSyncStatusText = "✓ Sync \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)\(kcalTag)\(strainTag)"
                     self.persistState()
                 } else if force {
                     self.autoSyncStatusText = result.errorMessage ?? "Archivo detectado sin muestras válidas"
@@ -1611,7 +1614,10 @@ final class ImprovingStore: ObservableObject {
                     self.applyImportedResult(result, navigateToLatest: shouldJump)
                     let hhmm = Self.currentHHMM()
                     let hrvCount = result.days.values.filter { $0.hrvMs != nil }.count
-                    self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)"
+                    let latestDay = result.latestDateIso.flatMap { result.days[$0] }
+                    let kcalTag = latestDay?.activeKcal.map { " · \($0) kcal" } ?? ""
+                    let strainTag = latestDay?.strainPct.map { " · Esf \($0)%" } ?? ""
+                    self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)\(kcalTag)\(strainTag)"
                     self.persistState()
                 } else {
                     self.autoSyncStatusText = result.errorMessage ?? "Sin lecturas válidas en \(sourceLabel)"
@@ -2291,5 +2297,21 @@ final class ImprovingStore: ObservableObject {
         if let cached = snap.sectionCoachingCache { sectionCoachingCache = cached }
         if let sigs = snap.processedAutoSyncSignatures { processedAutoSyncSignatures = Set(sigs) }
         if let status = snap.lastAutoSyncStatus, !status.isEmpty { autoSyncStatusText = status }
+
+        // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
+        var sanitizedCorruptStrain = false
+        for (iso, day) in realHistory {
+            if let k = day.activeKcal, k > 6_000 {
+                var clean = day
+                clean.activeKcal = nil
+                clean.strainPct = nil
+                clean.strain21 = nil
+                realHistory[iso] = clean
+                sanitizedCorruptStrain = true
+            }
+        }
+        if sanitizedCorruptStrain {
+            processedAutoSyncSignatures.removeAll()
+        }
     }
 }

@@ -144,7 +144,10 @@ enum WhoopExportImporter {
         var merged = imported
         for (iso, cur) in existing {
             if let imp = merged[iso] {
-                let zones = cur.hrZoneMinutes.reduce(0, +) > imp.hrZoneMinutes.reduce(0, +) ? cur.hrZoneMinutes : imp.hrZoneMinutes
+                let impHasFreshActivity = imp.activeKcal != nil || !imp.stressSamples5m.isEmpty || !imp.workouts.isEmpty
+                let zones = impHasFreshActivity
+                    ? imp.hrZoneMinutes
+                    : (cur.hrZoneMinutes.reduce(0, +) > imp.hrZoneMinutes.reduce(0, +) ? cur.hrZoneMinutes : imp.hrZoneMinutes)
                 var combinedWorkouts = imp.workouts
                 for w in cur.workouts where !combinedWorkouts.contains(where: { $0.title == w.title && $0.timeRange == w.timeRange }) {
                     combinedWorkouts.append(w)
@@ -167,8 +170,8 @@ enum WhoopExportImporter {
                     sleepPct: imp.sleepPct ?? cur.sleepPct,
                     sleepDebtMinutes: imp.sleepDebtMinutes ?? cur.sleepDebtMinutes,
                     sleepSession: imp.sleepSession ?? cur.sleepSession,
-                    strain21: imp.strain21 ?? cur.strain21,
-                    strainPct: imp.strainPct ?? cur.strainPct,
+                    strain21: impHasFreshActivity ? imp.strain21 : (imp.strain21 ?? cur.strain21),
+                    strainPct: impHasFreshActivity ? imp.strainPct : (imp.strainPct ?? cur.strainPct),
                     recoveryPct: imp.recoveryPct ?? cur.recoveryPct,
                     stressScore: imp.stressScore ?? cur.stressScore,
                     energyBankPercent: imp.energyBankPercent ?? cur.energyBankPercent,
@@ -176,7 +179,7 @@ enum WhoopExportImporter {
                     vo2MaxMlKgMin: imp.vo2MaxMlKgMin ?? cur.vo2MaxMlKgMin,
                     hrRecoveryBpm: imp.hrRecoveryBpm ?? cur.hrRecoveryBpm,
                     glucoseMgDl: imp.glucoseMgDl ?? cur.glucoseMgDl,
-                    activeKcal: imp.activeKcal ?? cur.activeKcal,
+                    activeKcal: impHasFreshActivity ? imp.activeKcal : (imp.activeKcal ?? cur.activeKcal),
                     daylightMinutes: imp.daylightMinutes ?? cur.daylightMinutes,
                     sleepNoiseOver50Db: imp.sleepNoiseOver50Db ?? cur.sleepNoiseOver50Db,
                     bodyWeightKg: imp.bodyWeightKg ?? cur.bodyWeightKg,

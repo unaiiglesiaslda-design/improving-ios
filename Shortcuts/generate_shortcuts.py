@@ -55,43 +55,47 @@ def plain_token_string(text: str) -> dict:
     }
 
 
-def find_health_samples_action(action_uuid: str, sample_type_label: str, days_back: int) -> dict:
+def find_health_samples_action(action_uuid: str, sample_type_label: str, days_back: int, group_by: str = None) -> dict:
+    params = {
+        "UUID": action_uuid,
+        "WFContentItemFilter": {
+            "Value": {
+                "WFActionParameterFilterPrefix": 1,
+                "WFContentPredicateBoundedDate": False,
+                "WFActionParameterFilterTemplates": [
+                    {
+                        "Bounded": True,
+                        "Operator": 4,  # is
+                        "Property": "Type",
+                        "Removable": False,
+                        "Values": {
+                            "Enumeration": {
+                                "Value": sample_type_label,
+                                "WFSerializationType": "WFStringSubstitutableState",
+                            }
+                        },
+                    },
+                    {
+                        "Bounded": True,
+                        "Operator": 1001,  # is in the last
+                        "Property": "Start Date",
+                        "Removable": False,
+                        "Values": {
+                            "Number": str(days_back),
+                            "Unit": 16,  # NSCalendarUnitDay (days)
+                        },
+                    },
+                ],
+            },
+            "WFSerializationType": "WFContentPredicateTableTemplate",
+        },
+    }
+    if group_by:
+        params["WFHKSampleFilteringGroupBy"] = group_by
+        params["WFHKSampleFilteringFillMissing"] = False
     return {
         "WFWorkflowActionIdentifier": "is.workflow.actions.filter.health.quantity",
-        "WFWorkflowActionParameters": {
-            "UUID": action_uuid,
-            "WFContentItemFilter": {
-                "Value": {
-                    "WFActionParameterFilterPrefix": 1,
-                    "WFContentPredicateBoundedDate": False,
-                    "WFActionParameterFilterTemplates": [
-                        {
-                            "Bounded": True,
-                            "Operator": 4,  # is
-                            "Property": "Type",
-                            "Removable": False,
-                            "Values": {
-                                "Enumeration": {
-                                    "Value": sample_type_label,
-                                    "WFSerializationType": "WFStringSubstitutableState",
-                                }
-                            },
-                        },
-                        {
-                            "Bounded": True,
-                            "Operator": 1001,  # is in the last
-                            "Property": "Start Date",
-                            "Removable": False,
-                            "Values": {
-                                "Number": str(days_back),
-                                "Unit": 16,  # NSCalendarUnitDay (days)
-                            },
-                        },
-                    ],
-                },
-                "WFSerializationType": "WFContentPredicateTableTemplate",
-            },
-        },
+        "WFWorkflowActionParameters": params,
     }
 
 
@@ -117,26 +121,26 @@ def dict_text_item(key: str, output_uuid: str, output_name: str) -> dict:
 def build_common_health_actions(variant: str):
     """Builds the 8 Find Health Samples blocks + Get Details + unified Dictionary action."""
     metrics = [
-        # (key_prefix, ActionKit English picker label, days_back, include_end_date)
-        ("hr", "Heart Rate", 2, False),
-        ("hrv", "Heart Rate Variability", 7, False),
-        ("rhr", "Resting Heart Rate", 7, False),
-        ("sleep", "Sleep", 3, True),
-        ("resp", "Respiratory Rate", 7, False),
-        ("spo2", "Blood Oxygen", 7, False),
-        ("steps", "Steps", 3, False),
-        ("kcal", "Active Calories", 3, False),
+        # (key_prefix, ActionKit English picker label, days_back, include_end_date, group_by)
+        ("hr", "Heart Rate", 2, False, None),
+        ("hrv", "Heart Rate Variability", 7, False, None),
+        ("rhr", "Resting Heart Rate", 7, False, None),
+        ("sleep", "Sleep", 3, True, None),
+        ("resp", "Respiratory Rate", 7, False, None),
+        ("spo2", "Blood Oxygen", 7, False, None),
+        ("steps", "Steps", 3, False, "Day"),
+        ("kcal", "Active Calories", 3, False, "Day"),
     ]
 
     actions = []
     dict_items = []
 
-    for prefix, label, days, include_end in metrics:
+    for prefix, label, days, include_end, group_by in metrics:
         find_id = make_uuid(f"{variant}.{prefix}.find")
         val_id = make_uuid(f"{variant}.{prefix}.val")
         start_id = make_uuid(f"{variant}.{prefix}.start")
 
-        actions.append(find_health_samples_action(find_id, label, days))
+        actions.append(find_health_samples_action(find_id, label, days, group_by=group_by))
         actions.append(get_health_detail_action(val_id, find_id, "Value"))
         actions.append(get_health_detail_action(start_id, find_id, "Start Date"))
 
@@ -247,7 +251,7 @@ def build_background_file_shortcut() -> dict:
                 "WFInput": token_attachment(rename_id, "Renamed Item"),
                 "WFAskWhereToSave": False,
                 "WFSaveFileOverwrite": True,
-                "WFFileDestinationPath": "health_sync.json",
+                "WFFileDestinationPath": "",
             },
         }
     )

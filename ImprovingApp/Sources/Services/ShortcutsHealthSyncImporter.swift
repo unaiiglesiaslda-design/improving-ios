@@ -77,25 +77,43 @@ enum ShortcutsHealthSyncImporter {
         }
     }
 
-    /// Lists all supported sync files placed in `En mi iPhone/Improving/` or `En mi iPhone/Improving/AutoSync/`.
+    /// Lists all supported sync files placed in `En mi iPhone/Improving/` (including 1-level subfolders like `AutoSync/`).
     static func discoverInboxFiles() -> [URL] {
         let fm = FileManager.default
         let exts: Set<String> = ["json", "txt", "csv", "xml", "zip"]
         var found: [URL] = []
-        for dir in [publicDocumentsURL, autoSyncInboxURL] {
-            if let urls = try? fm.contentsOfDirectory(
+        var seenPaths: Set<String> = []
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey, .isDirectoryKey]
+
+        func scanDir(_ dir: URL, depth: Int) {
+            guard let urls = try? fm.contentsOfDirectory(
                 at: dir,
-                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey],
+                includingPropertiesForKeys: keys,
                 options: [.skipsHiddenFiles]
-            ) {
-                for u in urls {
-                    let ext = u.pathExtension.lowercased()
-                    if exts.contains(ext) {
+            ) else { return }
+            for u in urls {
+                let vals = try? u.resourceValues(forKeys: Set(keys))
+                if vals?.isDirectory == true {
+                    if depth < 1 {
+                        scanDir(u, depth: depth + 1)
+                    }
+                    continue
+                }
+                guard vals?.isRegularFile == true else { continue }
+                let ext = u.pathExtension.lowercased()
+                let isNamedHealthFile = u.lastPathComponent.lowercased().contains("health") || u.lastPathComponent.lowercased().contains("sync")
+                if exts.contains(ext) || (ext.isEmpty && isNamedHealthFile) {
+                    let canon = u.standardizedFileURL.path
+                    if seenPaths.insert(canon).inserted {
                         found.append(u)
                     }
                 }
             }
         }
+
+        scanDir(publicDocumentsURL, depth: 0)
+        scanDir(autoSyncInboxURL, depth: 1)
+
         return found.sorted { a, b in
             let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
@@ -107,7 +125,8 @@ enum ShortcutsHealthSyncImporter {
         let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
         let sz = vals?.fileSize ?? 0
-        return "\(url.lastPathComponent)#\(sz)#\(mtime)"
+        // v2 prefix forces automatic re-parse of existing inbox files after the 3-decimal kcal/HRV parser fix
+        return "v2#\(url.lastPathComponent)#\(sz)#\(mtime)"
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)
@@ -320,11 +339,29 @@ enum ShortcutsHealthSyncImporter {
         guard !vals.isEmpty else { return }
         let dates = expandLines(rawDates)
         let fallbackNow = Date()
+        let allowDotThousands = (kind == .steps)
+
+        // Deduplicate exact (day, minute, roundedValue) collisions caused by ungrouped Watch + iPhone Shortcuts samples
+        var seenSamples: Set<String> = []
+        seenSamples.reserveCapacity(vals.count)
 
         for idx in 0..<vals.count {
-            guard let num = parseLocalizedNumber(vals[idx]) else { continue }
-            let rawDateStr = idx < dates.count ? dates[idx] : (dates.last ?? "")
-            let parsed = parseFlexibleDate(rawDateStr) ?? (fallbackNow, wallClock(for: fallbackNow))
+            guard let num = parseLocalizedNumber(vals[idx], allowDotThousands: allowDotThousands) else { continue }
+            let parsed: (date: Date, wall: (iso: String, minuteOfDay: Int))
+            if !dates.isEmpty {
+                let rawDateStr = idx < dates.count ? dates[idx] : ""
+                // Never collapse unparseable multi-day dates onto `today` (prevents summing 3 days of kcal onto today!)
+                guard let ok = parseFlexibleDate(rawDateStr) else { continue }
+                parsed = ok
+            } else {
+                parsed = (fallbackNow, wallClock(for: fallbackNow))
+            }
+
+            let dedupeKey = "\(parsed.wall.iso)#\(parsed.wall.minuteOfDay)#\(Int((num * 100.0).rounded()))"
+            if !seenSamples.insert(dedupeKey).inserted {
+                continue
+            }
+
             recordSample(kind: kind, value: num, date: parsed.date, wall: parsed.wall, unitHint: vals[idx], into: &days)
         }
     }
@@ -450,11 +487,12 @@ enum ShortcutsHealthSyncImporter {
                 recordSample(kind: kind, value: num, date: defaultDatePair.date, wall: defaultDatePair.wall, unitHint: "", into: &days)
             } else {
                 let items = extractStringList(rawVal)
+                let allowStepsDot = (kind == .steps)
                 for item in items {
                     let parts = splitDelimited(item)
-                    if parts.count >= 2, let parsed = parseFlexibleDate(parts[0]), let num = parseLocalizedNumber(parts[1]) {
+                    if parts.count >= 2, let parsed = parseFlexibleDate(parts[0]), let num = parseLocalizedNumber(parts[1], allowDotThousands: allowStepsDot) {
                         recordSample(kind: kind, value: num, date: parsed.date, wall: parsed.wall, unitHint: parts[1], into: &days)
-                    } else if let num = parseLocalizedNumber(item) {
+                    } else if let num = parseLocalizedNumber(item, allowDotThousands: allowStepsDot) {
                         recordSample(kind: kind, value: num, date: defaultDatePair.date, wall: defaultDatePair.wall, unitHint: item, into: &days)
                     }
                 }
@@ -635,9 +673,10 @@ enum ShortcutsHealthSyncImporter {
         }
 
         guard let kind = classifyMetricKey(parts[0]) else { return }
-        if parts.count >= 3, let parsed = parseFlexibleDate(parts[1]), let num = parseLocalizedNumber(parts[2]) {
+        let allowStepsDot = (kind == .steps)
+        if parts.count >= 3, let parsed = parseFlexibleDate(parts[1]), let num = parseLocalizedNumber(parts[2], allowDotThousands: allowStepsDot) {
             recordSample(kind: kind, value: num, date: parsed.date, wall: parsed.wall, unitHint: parts[2], into: &days)
-        } else if let num = parseLocalizedNumber(parts[1]) {
+        } else if let num = parseLocalizedNumber(parts[1], allowDotThousands: allowStepsDot) {
             let now = Date()
             recordSample(kind: kind, value: num, date: now, wall: wallClock(for: now), unitHint: parts[1], into: &days)
         }
@@ -674,7 +713,8 @@ enum ShortcutsHealthSyncImporter {
                 day.hrSamples.append((ep, wall.minuteOfDay, num))
             }
         case .hrv:
-            let ms = (!lowUnit.contains("ms") && lowUnit.contains("s") && num < 2.0) ? num * 1000.0 : num
+            // Shortcuts may emit HRV in seconds (e.g. "0.068") without attaching the "s" unit label
+            let ms = (num >= 0.003 && num < 2.0) ? num * 1000.0 : num
             if (3.0...350.0).contains(ms) {
                 day.hrvSamples.append((ep, ms))
             }
@@ -703,7 +743,8 @@ enum ShortcutsHealthSyncImporter {
             }
         case .kcal:
             let kcal = lowUnit.contains("kj") ? num / 4.184 : num
-            if (0.0...15_000.0).contains(kcal) {
+            // Guard against corrupted/unitless spikes (> 4,500 kcal in a single Apple Health sample)
+            if (0.0...4_500.0).contains(kcal) {
                 day.activeKcalSum += kcal
                 day.hasActiveKcal = true
             }
@@ -817,17 +858,35 @@ enum ShortcutsHealthSyncImporter {
             ("yyyy-MM-dd", "en_US_POSIX"),
             ("dd/MM/yyyy, H:mm:ss", "es_ES"),
             ("dd/MM/yyyy, H:mm", "es_ES"),
+            ("d/M/yy, H:mm:ss", "es_ES"),
             ("d/M/yy, H:mm", "es_ES"),
+            ("d/M/yy H:mm:ss", "es_ES"),
+            ("d/M/yy H:mm", "es_ES"),
+            ("d/M/yy 'a las' H:mm", "es_ES"),
+            ("d/M/yy 'a la' H:mm", "es_ES"),
             ("d/M/yyyy H:mm:ss", "es_ES"),
             ("d/M/yyyy H:mm", "es_ES"),
+            ("d/M/yyyy 'a las' H:mm", "es_ES"),
+            ("d/M/yyyy 'a la' H:mm", "es_ES"),
             ("dd/MM/yyyy", "es_ES"),
             ("d MMM yyyy, H:mm:ss", "es_ES"),
             ("d MMM yyyy, H:mm", "es_ES"),
+            ("d MMM yyyy H:mm:ss", "es_ES"),
+            ("d MMM yyyy H:mm", "es_ES"),
+            ("d MMM yyyy 'a las' H:mm:ss", "es_ES"),
             ("d MMM yyyy 'a las' H:mm", "es_ES"),
+            ("d MMM yyyy 'a la' H:mm:ss", "es_ES"),
+            ("d MMM yyyy 'a la' H:mm", "es_ES"),
+            ("d MMM yyyy, h:mm a", "es_ES"),
             ("d 'de' MMMM 'de' yyyy, H:mm", "es_ES"),
+            ("d 'de' MMMM 'de' yyyy 'a las' H:mm", "es_ES"),
+            ("d 'de' MMMM 'de' yyyy 'a la' H:mm", "es_ES"),
             ("d 'de' MMM 'de' yyyy, H:mm", "es_ES"),
+            ("d 'de' MMM 'de' yyyy 'a las' H:mm", "es_ES"),
+            ("d 'de' MMM 'de' yyyy 'a la' H:mm", "es_ES"),
             ("MMM d, yyyy 'at' h:mm a", "en_US"),
             ("MMM d, yyyy, h:mm a", "en_US"),
+            ("MMM d, yyyy 'at' H:mm", "en_US"),
             ("d MMM yyyy 'at' HH:mm", "en_GB")
         ]
         return specs.map { fmt, loc in
@@ -836,6 +895,10 @@ enum ShortcutsHealthSyncImporter {
             f.dateFormat = fmt
             return f
         }
+    }()
+
+    private static let cachedDateDetector: NSDataDetector? = {
+        try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
     }()
 
     private static let isoDayFmt: DateFormatter = {
@@ -890,15 +953,18 @@ enum ShortcutsHealthSyncImporter {
         }
 
         // Strip period after abbreviated Spanish month ("23 nov. 2026" -> "23 nov 2026")
-        let normalized = s.replacingOccurrences(of: ".", with: "")
+        let normalized = s
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: " sept ", with: " sep ", options: .caseInsensitive)
+        let normalizedWithSept = s.replacingOccurrences(of: ".", with: "")
         for fmt in cachedFormatters {
-            if let d = fmt.date(from: s) ?? fmt.date(from: normalized) {
+            if let d = fmt.date(from: s) ?? fmt.date(from: normalizedWithSept) ?? fmt.date(from: normalized) {
                 return (d, explicitWall ?? wallClock(for: d))
             }
         }
 
-        // Fallback via NSDataDetector
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue),
+        // Cached NSDataDetector fallback (avoids allocating a detector per sample)
+        if let detector = cachedDateDetector,
            let match = detector.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
            let d = match.date {
             return (d, explicitWall ?? wallClock(for: d))
@@ -906,24 +972,15 @@ enum ShortcutsHealthSyncImporter {
         return nil
     }
 
-    static func parseLocalizedNumber(_ raw: String) -> Double? {
+    static func parseLocalizedNumber(_ raw: String, allowDotThousands: Bool = false) -> Double? {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
-        // Extract first numeric token (supports "68,4 ms", "5.420 pasos", "97.5%", "-0,2 °C")
+        // Extract first numeric token (supports "68,4 ms", "1.245", "5.420 pasos", "97.5%", "-0,2 °C")
         guard let range = s.range(of: #"-?\d+(?:[.,]\d+)*"#, options: .regularExpression) else { return nil }
         var token = String(s[range])
+        let low = s.lowercased()
 
-        // If Spanish thousands format like "5.420" (dot followed by exactly 3 digits and no comma), remove dot
-        if token.contains(".") && !token.contains(",") {
-            let parts = token.split(separator: ".")
-            if parts.count >= 2 && parts.dropFirst().allSatisfy({ $0.count == 3 }) && (parts.first?.count ?? 0) <= 3 {
-                // Only treat as thousands if integer >= 1000 (steps/kcal), never "1.000" spo2
-                if let asInt = Int(token.replacingOccurrences(of: ".", with: "")), asInt >= 1000 && !s.contains("%") {
-                    return Double(asInt)
-                }
-            }
-        }
-        // If both '.' and ',', determine decimal separator by last occurrence
+        // Both '.' and ',' present -> whichever appears last is the decimal separator
         if token.contains(".") && token.contains(",") {
             if let lastDot = token.lastIndex(of: "."), let lastComma = token.lastIndex(of: ",") {
                 if lastComma > lastDot {
@@ -932,9 +989,40 @@ enum ShortcutsHealthSyncImporter {
                     token = token.replacingOccurrences(of: ",", with: "")
                 }
             }
-        } else {
-            token = token.replacingOccurrences(of: ",", with: ".")
+            return Double(token)
         }
+
+        // Multiple dots (e.g. "1.234.567") -> Spanish thousands separator
+        let dotCount = token.filter { $0 == "." }.count
+        if dotCount > 1 {
+            return Double(token.replacingOccurrences(of: ".", with: ""))
+        }
+
+        // Multiple commas (e.g. "1,234,567") -> English thousands separator
+        let commaCount = token.filter { $0 == "," }.count
+        if commaCount > 1 {
+            return Double(token.replacingOccurrences(of: ",", with: ""))
+        }
+
+        // Single dot: ONLY treat as thousands separator for whole-integer step counts (e.g. "5.420 pasos")!
+        // NEVER multiply 3-decimal Apple Watch samples like "1.245" kcal or "68.412" ms HRV by 1,000!
+        if dotCount == 1 {
+            let isStepContext = allowDotThousands || low.contains("paso") || low.contains("step")
+            if isStepContext && !low.contains("%") {
+                let parts = token.split(separator: ".")
+                if parts.count == 2 && parts[1].count == 3 && parts[0].count <= 3,
+                   let asInt = Int(token.replacingOccurrences(of: ".", with: "")), asInt >= 1000 {
+                    return Double(asInt)
+                }
+            }
+            return Double(token)
+        }
+
+        // Single comma: always decimal separator in Spanish/European locales (e.g. "68,4", "1,245")
+        if commaCount == 1 {
+            return Double(token.replacingOccurrences(of: ",", with: "."))
+        }
+
         return Double(token)
     }
 

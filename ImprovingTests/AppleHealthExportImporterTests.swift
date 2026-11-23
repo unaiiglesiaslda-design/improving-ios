@@ -296,4 +296,38 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(d2.restingHrBpm ?? 0, 48.0, accuracy: 0.2)
         XCTAssertEqual(d2.stepsCount, 8200)
     }
+
+    func testShortcutsThreeDecimalActiveCaloriesDoesNotInflateStrainTo100() throws {
+        // Reproduces real Apple Watch Shortcuts export: 3-decimal active kcal samples ("1.245", "2.318", ...),
+        // 3-decimal HRV ("68.412") + seconds HRV ("0.072"), Spanish "a la" / "a las" dates, and Watch+iPhone duplicates!
+        let json = """
+        {
+          "hr_values": "64.125\\n72.250\\n68.500\\n74.000\\n74.000",
+          "hr_dates": "23 nov 2026 a la 1:05\\n23 nov 2026 a las 9:15\\n23/11/26 11:30\\n23/11/26, 13:45\\n23/11/26, 13:45",
+          "hrv_values": "68.412\\n0.072",
+          "hrv_dates": "23 nov 2026 a las 4:10\\n23 nov 2026 a las 5:30",
+          "rhr_values": "52.125",
+          "rhr_dates": "23 nov 2026 a las 6:00",
+          "kcal_values": "1.245\\n2.318\\n1.612\\n3.050\\n1.893\\n2.456\\n1.245\\n4.125\\n1.500\\n2.100\\n12.450\\n8.320\\n15.100\\n18.600\\n6.250",
+          "kcal_dates": "23 nov 2026 a las 8:05\\n23 nov 2026 a las 8:10\\n23 nov 2026 a las 8:15\\n23 nov 2026 a las 8:20\\n23 nov 2026 a las 8:25\\n23 nov 2026 a las 8:30\\n23 nov 2026 a las 8:05\\n23 nov 2026 a las 9:00\\n23 nov 2026 a las 9:10\\n23 nov 2026 a las 9:20\\n23 nov 2026 a las 10:00\\n23 nov 2026 a las 10:30\\n23 nov 2026 a las 11:00\\n23 nov 2026 a las 12:00\\n23 nov 2026 a las 13:00",
+          "steps_values": "5.420\\n5.420",
+          "steps_dates": "23 nov 2026 a las 12:00\\n23 nov 2026 a las 12:00"
+        }
+        """
+        let res = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(json.data(using: .utf8)))
+        XCTAssertNil(res.errorMessage)
+        let day = try XCTUnwrap(res.days["2026-11-23"])
+
+        // Real deduplicated sum is ~81 kcal (NOT 45,000+ kcal!)
+        XCTAssertEqual(Double(day.activeKcal ?? 0), 81.0, accuracy: 2.0)
+        // Strain for 81 kcal passive morning MUST be low (~4-10%), NEVER 100%!
+        let strain = try XCTUnwrap(day.strainPct)
+        XCTAssertLessThan(strain, 20)
+        // 3-decimal HRV ("68.412") + seconds HRV ("0.072" -> 72.0) -> mean ~70.2 ms
+        XCTAssertEqual(day.hrvMs ?? 0, 70.2, accuracy: 0.3)
+        // 3-decimal RHR ("52.125") must NOT be turned into 52125 and dropped!
+        XCTAssertEqual(day.restingHrBpm ?? 0, 52.1, accuracy: 0.2)
+        // Steps "5.420" parsed as 5420 AND duplicate timestamp deduplicated (not 10840!)
+        XCTAssertEqual(day.stepsCount, 5420)
+    }
 }

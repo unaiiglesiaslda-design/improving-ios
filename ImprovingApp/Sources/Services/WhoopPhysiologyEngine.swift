@@ -293,14 +293,9 @@ enum WhoopPhysiologyEngine {
         // 3. Passive daily active energy load (normalized to personal BMR)
         let passiveKcalLoad = kcal > 0 ? (kcal / max(bmr, 1100.0)) * 95.0 : 0.0
 
-        // Avoid double-counting: take the stronger cardiovascular signal (HR zones vs workouts) + passive baseline movement
+        // Smooth monotonic load: never drops when adding a small HR-zone signal on top of passive calories
         let cardioCore = max(zoneTrimp, workoutLoad)
-        let totalLoad: Double
-        if cardioCore > 0 {
-            totalLoad = cardioCore + passiveKcalLoad * 0.35
-        } else {
-            totalLoad = passiveKcalLoad
-        }
+        let totalLoad = max(passiveKcalLoad, cardioCore + passiveKcalLoad * 0.35)
 
         // Exponential diminishing-return Bevel curve: 100 * (1 - exp(-L / 108))
         let pctDouble = 100.0 * (1.0 - exp(-max(totalLoad, 0.5) / 108.0))

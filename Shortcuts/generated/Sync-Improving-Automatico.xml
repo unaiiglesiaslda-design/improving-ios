@@ -754,6 +754,10 @@
 					<key>WFSerializationType</key>
 					<string>WFContentPredicateTableTemplate</string>
 				</dict>
+				<key>WFHKSampleFilteringFillMissing</key>
+				<false/>
+				<key>WFHKSampleFilteringGroupBy</key>
+				<string>Day</string>
 			</dict>
 		</dict>
 		<dict>
@@ -865,6 +869,10 @@
 					<key>WFSerializationType</key>
 					<string>WFContentPredicateTableTemplate</string>
 				</dict>
+				<key>WFHKSampleFilteringFillMissing</key>
+				<false/>
+				<key>WFHKSampleFilteringGroupBy</key>
+				<string>Day</string>
 			</dict>
 		</dict>
 		<dict>
@@ -1620,7 +1628,7 @@
 				<key>WFAskWhereToSave</key>
 				<false/>
 				<key>WFFileDestinationPath</key>
-				<string>health_sync.json</string>
+				<string></string>
 				<key>WFInput</key>
 				<dict>
 					<key>Value</key>
