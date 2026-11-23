@@ -15,6 +15,13 @@ struct MetricWindowSeries {
     let canStepBackward: Bool
 }
 
+enum SyncBannerState: Equatable {
+    case hidden
+    case syncing(String)
+    case synced(String)
+    case notice(String)
+}
+
 @MainActor
 final class ImprovingStore: ObservableObject {
 
@@ -36,6 +43,8 @@ final class ImprovingStore: ObservableObject {
         var sectionCoachingCache: [String: SectionCoachingCard]?
         var processedAutoSyncSignatures: [String]?
         var lastAutoSyncStatus: String?
+        var shortcutSyncName: String?
+        var autoRunShortcutOnOpen: Bool?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -77,7 +86,15 @@ final class ImprovingStore: ObservableObject {
     // Automatic Apple Shortcuts / Files Folder Bridge (Zero Paid Entitlements!)
     @Published var isAutoSyncing: Bool = false
     @Published var autoSyncStatusText: String = "Listo · Esperando Atajos o carpeta Improving"
+    @Published var syncBannerState: SyncBannerState = .hidden
+    @Published var shortcutSyncName: String = "Sync Improving (Automático)"
+    @Published var autoRunShortcutOnOpen: Bool = true
     private var processedAutoSyncSignatures: Set<String> = []
+    private var lastShortcutTriggerAt: Date? = nil
+    private var awaitingShortcutCallback: Bool = false
+    private var syncBannerDismissTask: Task<Void, Never>? = nil
+    private var shortcutTimeoutTask: Task<Void, Never>? = nil
+    private var inboxDirectorySource: DispatchSourceFileSystemObject? = nil
 
     @Published var importStatus: ExportImportStatus = ExportImportStatus()
     @Published var geminiApiKey: String = ""
@@ -124,14 +141,18 @@ final class ImprovingStore: ObservableObject {
         seedPreviewOnlyItemsIfNeeded()
         bindWhoopBle()
         bindHealthKit()
-        // Ensure `En mi iPhone / Improving` folder is visible in Files app & scan immediately on startup
+        // Ensure `En mi iPhone / Improving` folder is visible in Files app, watch for live writes & scan on startup
         _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
-        scanAutoSyncInboxIfNeeded()
+        startInboxDirectoryWatcher()
+        scanAutoSyncInboxIfNeeded(showBanner: true)
     }
 
     deinit {
         bleStreamTask?.cancel()
         timerTask?.cancel()
+        syncBannerDismissTask?.cancel()
+        shortcutTimeoutTask?.cancel()
+        inboxDirectorySource?.cancel()
         for task in coachingTasks.values { task.cancel() }
     }
 
@@ -1507,9 +1528,159 @@ final class ImprovingStore: ObservableObject {
         self.persistState()
     }
 
-    // MARK: - Zero-Entitlement Automatic Sync Bridge (Apple Shortcuts AppIntent + Files Folder + improving://sync)
+    // MARK: - Zero-Entitlement Automatic Sync Bridge (Apple Shortcuts x-callback-url + Files Watcher + Top Floating Bubble)
 
-    func scanAutoSyncInboxIfNeeded(force: Bool = false) {
+    /// Builds Apple's official `shortcuts://x-callback-url/run-shortcut` URL so Shortcuts runs the user's sync shortcut
+    /// and automatically returns straight back into Improving (`improving://sync?from=shortcut_ok`).
+    static func buildShortcutCallbackURL(shortcutName: String) -> URL? {
+        let trimmed = shortcutName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var comps = URLComponents()
+        comps.scheme = "shortcuts"
+        comps.host = "x-callback-url"
+        comps.path = "/run-shortcut"
+        comps.queryItems = [
+            URLQueryItem(name: "name", value: trimmed),
+            URLQueryItem(name: "x-success", value: "improving://sync?from=shortcut_ok"),
+            URLQueryItem(name: "x-cancel", value: "improving://sync?from=shortcut_cancel"),
+            URLQueryItem(name: "x-error", value: "improving://sync?from=shortcut_error")
+        ]
+        return comps.url
+    }
+
+    func updateShortcutSyncConfig(name: String, autoRunOnOpen: Bool) {
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        shortcutSyncName = cleaned.isEmpty ? "Sync Improving (Automático)" : cleaned
+        autoRunShortcutOnOpen = autoRunOnOpen
+        persistState()
+    }
+
+    func presentSyncBanner(_ state: SyncBannerState, autoDismissAfter seconds: Double? = nil) {
+        syncBannerDismissTask?.cancel()
+        withAnimation(.spring(response: 0.44, dampingFraction: 0.80)) {
+            syncBannerState = state
+        }
+        if let seconds {
+            syncBannerDismissTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                    self.syncBannerState = .hidden
+                }
+            }
+        }
+    }
+
+    /// Pull-to-refresh on `HoyScreen` ALWAYS triggers the Apple Shortcut (zero cooldown) and drives the top floating bubble.
+    func handlePullToRefresh() async {
+        triggerShortcutRefreshSync(userInitiated: true)
+        try? await Task.sleep(nanoseconds: 350_000_000)
+    }
+
+    /// Called whenever the app becomes `.active` (reopen / reload / returning from Shortcuts).
+    /// Enforces a 90s anti-loop cooldown so returning from `x-callback-url` NEVER triggers an infinite loop!
+    func handleAppBecameActive() {
+        // 1. Returned manually from Shortcuts without x-callback firing yet -> read fresh file immediately
+        if awaitingShortcutCallback {
+            awaitingShortcutCallback = false
+            shortcutTimeoutTask?.cancel()
+            presentSyncBanner(.syncing("Sincronizando…"))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+            }
+            return
+        }
+
+        // 2. Anti-loop cooldown (90s): if we just ran/returned from the shortcut, only check folder silently
+        if let last = lastShortcutTriggerAt, Date().timeIntervalSince(last) < 90.0 {
+            scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+            return
+        }
+
+        // 3. Reopening / reloading app after > 90s -> auto-run shortcut if enabled!
+        if autoRunShortcutOnOpen && !shortcutSyncName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Task { @MainActor [weak self] in
+                // Brief frame settle so the floating "Sincronizando…" bubble appears smoothly before hopping to Shortcuts
+                try? await Task.sleep(nanoseconds: 320_000_000)
+                guard let self else { return }
+                self.triggerShortcutRefreshSync(userInitiated: false)
+            }
+        } else {
+            scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+        }
+    }
+
+    /// Launches the user's Apple Shortcut via `shortcuts://x-callback-url/run-shortcut`, shows the floating
+    /// `"Sincronizando…"` bubble above the date, and automatically reloads + updates all metrics on return.
+    @discardableResult
+    func triggerShortcutRefreshSync(userInitiated: Bool) -> Bool {
+        if !userInitiated, let last = lastShortcutTriggerAt, Date().timeIntervalSince(last) < 90.0 {
+            return false
+        }
+
+        guard let url = Self.buildShortcutCallbackURL(shortcutName: shortcutSyncName) else {
+            scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+            return false
+        }
+
+        if userInitiated {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+
+        lastShortcutTriggerAt = Date()
+        awaitingShortcutCallback = true
+        autoSyncStatusText = "Ejecutando atajo «\(shortcutSyncName)»…"
+        presentSyncBanner(.syncing("Sincronizando…"))
+
+        // Safety timeout: never let the floating bubble stay stuck if user switches away from Shortcuts
+        shortcutTimeoutTask?.cancel()
+        shortcutTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 22_000_000_000)
+            guard !Task.isCancelled, let self, self.awaitingShortcutCallback else { return }
+            self.awaitingShortcutCallback = false
+            self.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+        }
+
+        #if os(iOS)
+        UIApplication.shared.open(url, options: [:]) { [weak self] opened in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !opened {
+                    self.awaitingShortcutCallback = false
+                    self.shortcutTimeoutTask?.cancel()
+                    self.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+                }
+            }
+        }
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// Live filesystem watcher on `En mi iPhone / Improving`: detects `health_sync.json` writes even from background
+    /// iOS Personal Automations while Improving is already open!
+    private func startInboxDirectoryWatcher() {
+        let dirPath = ShortcutsHealthSyncImporter.publicDocumentsURL.path
+        let fd = open(dirPath, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend], queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+            }
+        }
+        source.setCancelHandler {
+            close(fd)
+        }
+        inboxDirectorySource = source
+        source.resume()
+    }
+
+    func scanAutoSyncInboxIfNeeded(force: Bool = false, showBanner: Bool = false) {
         guard !isAutoSyncing else { return }
         let files = ShortcutsHealthSyncImporter.discoverInboxFiles()
         let pending: [(URL, String)] = files.compactMap { url in
@@ -1521,12 +1692,18 @@ final class ImprovingStore: ObservableObject {
             if force {
                 let hhmm = Self.currentHHMM()
                 autoSyncStatusText = "Revisado a las \(hhmm) · Sin archivos nuevos en Atajos/Carpeta"
+                if showBanner {
+                    presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 1.8)
+                }
             }
             return
         }
 
         isAutoSyncing = true
         autoSyncStatusText = "Sincronizando desde Atajos / Carpeta..."
+        if showBanner || syncBannerState != .hidden {
+            presentSyncBanner(.syncing("Sincronizando…"))
+        }
         let profileSnapshot = userProfile
         let priorSnapshot = realHistory
         let pendingURLs = pending.map(\.0)
@@ -1547,8 +1724,17 @@ final class ImprovingStore: ObservableObject {
                     let strainTag = latestDay?.strainPct.map { " · Esf \($0)%" } ?? ""
                     self.autoSyncStatusText = "✓ Sync \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)\(kcalTag)\(strainTag)"
                     self.persistState()
-                } else if force {
-                    self.autoSyncStatusText = result.errorMessage ?? "Archivo detectado sin muestras válidas"
+                    if showBanner || self.syncBannerState != .hidden {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        self.presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 2.1)
+                    }
+                } else {
+                    if force {
+                        self.autoSyncStatusText = result.errorMessage ?? "Archivo detectado sin muestras válidas"
+                    }
+                    if showBanner || self.syncBannerState != .hidden {
+                        self.presentSyncBanner(.hidden)
+                    }
                 }
             }
         }
@@ -1561,20 +1747,48 @@ final class ImprovingStore: ObservableObject {
             return
         }
 
-        // 2. Custom URL Scheme: improving://sync[?source=clipboard | ?data=... | ?payload=...]
+        // 2. Custom URL Scheme: improving://sync[?from=shortcut_ok | ?source=clipboard | ?data=... | ?payload=...]
         guard url.scheme?.lowercased() == "improving" else { return }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let items = comps?.queryItems ?? []
+        let fromParam = items.first(where: { $0.name.lowercased() == "from" })?.value?.lowercased()
         let sourceParam = items.first(where: { $0.name.lowercased() == "source" })?.value?.lowercased()
         let rawParam = items.first(where: { $0.name.lowercased() == "data" || $0.name.lowercased() == "payload" || $0.name.lowercased() == "text" })?.value
 
+        // Clear pending shortcut callback & refresh anti-loop timestamp immediately!
+        if let from = fromParam, from.hasPrefix("shortcut") {
+            awaitingShortcutCallback = false
+            shortcutTimeoutTask?.cancel()
+            lastShortcutTriggerAt = Date()
+
+            if from == "shortcut_cancel" {
+                autoSyncStatusText = "Sincronización cancelada"
+                presentSyncBanner(.hidden)
+                return
+            }
+            if from == "shortcut_error" {
+                autoSyncStatusText = "No se pudo ejecutar «\(shortcutSyncName)» · Revisa el nombre en Dispositivos"
+                presentSyncBanner(.notice("Revisa nombre del atajo"), autoDismissAfter: 2.6)
+                return
+            }
+            // from == "shortcut_ok": keep floating "Sincronizando…" bubble while parsing the newly written file!
+            presentSyncBanner(.syncing("Sincronizando…"))
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 280_000_000)
+                self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+            }
+            return
+        }
+
         if sourceParam == "clipboard" {
+            presentSyncBanner(.syncing("Sincronizando…"))
             let paste = UIPasteboard.general.string ?? ""
             ingestRawShortcutsPayload(paste, sourceLabel: "Atajos (Portapapeles)")
             return
         }
 
         if let raw = rawParam, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            presentSyncBanner(.syncing("Sincronizando…"))
             let decoded: String = {
                 if let b64 = Data(base64Encoded: raw), let str = String(data: b64, encoding: .utf8), !str.isEmpty {
                     return str
@@ -1586,17 +1800,19 @@ final class ImprovingStore: ObservableObject {
         }
 
         // Default: scan `En mi iPhone / Improving` & `AutoSync` inbox immediately!
-        scanAutoSyncInboxIfNeeded(force: true)
+        scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
     }
 
     func ingestRawShortcutsPayload(_ text: String, sourceLabel: String = "Atajos de Apple") {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             autoSyncStatusText = "No había datos de Salud en \(sourceLabel)"
+            presentSyncBanner(.hidden)
             return
         }
         isAutoSyncing = true
         autoSyncStatusText = "Procesando \(sourceLabel)..."
+        presentSyncBanner(.syncing("Sincronizando…"))
         let profileSnapshot = userProfile
         let priorSnapshot = realHistory
 
@@ -1619,8 +1835,11 @@ final class ImprovingStore: ObservableObject {
                     let strainTag = latestDay?.strainPct.map { " · Esf \($0)%" } ?? ""
                     self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)\(kcalTag)\(strainTag)"
                     self.persistState()
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    self.presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 2.1)
                 } else {
                     self.autoSyncStatusText = result.errorMessage ?? "Sin lecturas válidas en \(sourceLabel)"
+                    self.presentSyncBanner(.hidden)
                 }
             }
         }
@@ -2269,7 +2488,9 @@ final class ImprovingStore: ObservableObject {
             visibleTabs: Array(visibleTabs),
             sectionCoachingCache: sectionCoachingCache,
             processedAutoSyncSignatures: Array(processedAutoSyncSignatures.prefix(80)),
-            lastAutoSyncStatus: autoSyncStatusText
+            lastAutoSyncStatus: autoSyncStatusText,
+            shortcutSyncName: shortcutSyncName,
+            autoRunShortcutOnOpen: autoRunShortcutOnOpen
         )
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: persistenceURL, options: .atomic)
@@ -2298,6 +2519,8 @@ final class ImprovingStore: ObservableObject {
         if let cached = snap.sectionCoachingCache { sectionCoachingCache = cached }
         if let sigs = snap.processedAutoSyncSignatures { processedAutoSyncSignatures = Set(sigs) }
         if let status = snap.lastAutoSyncStatus, !status.isEmpty { autoSyncStatusText = status }
+        if let sName = snap.shortcutSyncName, !sName.isEmpty { shortcutSyncName = sName }
+        if let autoRun = snap.autoRunShortcutOnOpen { autoRunShortcutOnOpen = autoRun }
 
         // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
         var sanitizedCorruptStrain = false

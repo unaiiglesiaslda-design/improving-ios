@@ -14,7 +14,7 @@ struct ImprovingApp: App {
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     if newPhase == .active {
-                        store.scanAutoSyncInboxIfNeeded()
+                        store.handleAppBecameActive()
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .improvingShortcutsSyncDidArrive)) { _ in

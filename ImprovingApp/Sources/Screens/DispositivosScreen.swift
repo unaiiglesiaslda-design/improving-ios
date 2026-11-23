@@ -11,6 +11,8 @@ struct DispositivosScreen: View {
     @State private var copiedUrlToast = false
     @State private var apiKeyDraft: String = ""
     @State private var selectedModelDraft: String = "gemini-2.5-flash"
+    @State private var shortcutNameDraft: String = "Sync Improving (Automático)"
+    @State private var autoRunShortcutToggle: Bool = true
     @State private var savedBanner: Bool = false
     @State private var darkToggle: Bool = BevelColors.isDarkMode
 
@@ -56,11 +58,12 @@ struct DispositivosScreen: View {
 
                         HStack(spacing: 10) {
                             Button {
-                                showShortcutsGuide = true
+                                store.updateShortcutSyncConfig(name: shortcutNameDraft, autoRunOnOpen: autoRunShortcutToggle)
+                                store.triggerShortcutRefreshSync(userInitiated: true)
                             } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "sparkles")
-                                    Text("Configurar Atajo")
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                    Text(store.isAutoSyncing ? "Sincronizando…" : "Ejecutar Atajo")
                                 }
                                 .font(ImprovingFont.caption(12.5))
                                 .fontWeight(.bold)
@@ -71,11 +74,11 @@ struct DispositivosScreen: View {
                             }
 
                             Button {
-                                store.scanAutoSyncInboxIfNeeded(force: true)
+                                store.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
                             } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "arrow.clockwise")
-                                    Text(store.isAutoSyncing ? "Leyendo…" : "Sincronizar ya")
+                                    Image(systemName: "folder.badge.gearshape")
+                                    Text("Leer carpeta")
                                 }
                                 .font(ImprovingFont.caption(12.5))
                                 .fontWeight(.semibold)
@@ -86,9 +89,43 @@ struct DispositivosScreen: View {
                             }
                         }
 
-                        Text("Usa la acción nativa «Sincronizar Salud en Improving» dentro de la app Atajos de Apple, o guarda un JSON en En mi iPhone → Improving (compatible también con Health Auto Export).")
-                            .font(ImprovingFont.caption(11.5))
-                            .foregroundColor(BevelColors.textSecondary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Nombre exacto de tu Atajo en iOS")
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textSecondary)
+                            TextField("Sync Improving (Automático)", text: $shortcutNameDraft)
+                                .font(ImprovingFont.body(13))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(BevelColors.cardBorder, lineWidth: 0.7))
+                                .onSubmit {
+                                    store.updateShortcutSyncConfig(name: shortcutNameDraft, autoRunOnOpen: autoRunShortcutToggle)
+                                }
+                                .onChange(of: shortcutNameDraft) { _, newVal in
+                                    store.updateShortcutSyncConfig(name: newVal, autoRunOnOpen: autoRunShortcutToggle)
+                                }
+                        }
+
+                        Toggle("Ejecutar atajo automáticamente al abrir / recargar", isOn: $autoRunShortcutToggle)
+                            .font(ImprovingFont.caption(12.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .onChange(of: autoRunShortcutToggle) { _, newVal in
+                                store.updateShortcutSyncConfig(name: shortcutNameDraft, autoRunOnOpen: newVal)
+                            }
+
+                        Button {
+                            showShortcutsGuide = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "sparkles")
+                                Text("Ver guía de configuración de Atajos")
+                            }
+                            .font(ImprovingFont.caption(12))
+                            .fontWeight(.semibold)
+                            .foregroundColor(BevelColors.skyBlue)
+                        }
                     }
                     .padding(16)
                 }
@@ -338,6 +375,8 @@ struct DispositivosScreen: View {
         .onAppear {
             apiKeyDraft = store.geminiApiKey
             selectedModelDraft = store.selectedGeminiModel
+            shortcutNameDraft = store.shortcutSyncName
+            autoRunShortcutToggle = store.autoRunShortcutOnOpen
             darkToggle = BevelColors.isDarkMode
             savedBanner = false
         }

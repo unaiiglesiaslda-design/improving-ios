@@ -458,4 +458,29 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(day.hrvMethodLabel, "RMSSD · Todo el sueño")
         XCTAssertEqual(day.hrvMs ?? 0, 73.5, accuracy: 0.5)
     }
+
+    @MainActor
+    func testShortcutCallbackUrlAndSyncBannerLifecycle() throws {
+        let url = try XCTUnwrap(ImprovingStore.buildShortcutCallbackURL(shortcutName: "Sync Improving (Automático)"))
+        XCTAssertEqual(url.scheme, "shortcuts")
+        XCTAssertEqual(url.host, "x-callback-url")
+        XCTAssertEqual(url.path, "/run-shortcut")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.first(where: { $0.name == "name" })?.value, "Sync Improving (Automático)")
+        XCTAssertEqual(items.first(where: { $0.name == "x-success" })?.value, "improving://sync?from=shortcut_ok")
+
+        let store = ImprovingStore()
+        store.presentSyncBanner(.syncing("Sincronizando…"))
+        XCTAssertEqual(store.syncBannerState, .syncing("Sincronizando…"))
+
+        // Returning via x-cancel cleanly hides the floating bubble without looping
+        let cancelUrl = try XCTUnwrap(URL(string: "improving://sync?from=shortcut_cancel"))
+        store.handleIncomingURL(cancelUrl)
+        XCTAssertEqual(store.syncBannerState, .hidden)
+
+        // Returning via x-error displays brief non-blocking notice
+        let errUrl = try XCTUnwrap(URL(string: "improving://sync?from=shortcut_error"))
+        store.handleIncomingURL(errUrl)
+        XCTAssertEqual(store.syncBannerState, .notice("Revisa nombre del atajo"))
+    }
 }

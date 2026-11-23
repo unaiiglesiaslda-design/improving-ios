@@ -481,7 +481,14 @@ struct HoyScreen: View {
             .padding(.top, 8)
             .padding(.bottom, 150)
         }
+        .refreshable {
+            await store.handlePullToRefresh()
+        }
         .background(BevelColors.canvas)
+        .overlay(alignment: .top) {
+            SyncStatusBubbleOverlay(state: store.syncBannerState)
+                .padding(.top, 10)
+        }
         .sheet(isPresented: $showCalendarSheet) {
             DatePickerSheetView(
                 selectedDate: Binding(
@@ -510,6 +517,97 @@ struct HoyScreen: View {
                 .font(ImprovingFont.caption(11.5))
                 .foregroundColor(BevelColors.textSecondary)
         }
+    }
+}
+
+// MARK: - Top Floating Sync Status Bubble (Slides from Top Edge Over the Date & Vanishes Cleanly)
+
+private struct SyncStatusBubbleOverlay: View {
+    let state: SyncBannerState
+    @State private var spinRotation: Double = 0
+
+    var body: some View {
+        ZStack {
+            if state != .hidden {
+                pillContent
+                    .transition(
+                        .asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.86, anchor: .top)),
+                            removal: .move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.86, anchor: .top))
+                        )
+                    )
+            }
+        }
+        .animation(.spring(response: 0.44, dampingFraction: 0.80), value: state)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var pillContent: some View {
+        let isSynced: Bool = {
+            if case .synced = state { return true }
+            return false
+        }()
+        let isNotice: Bool = {
+            if case .notice = state { return true }
+            return false
+        }()
+        let labelText: String = {
+            switch state {
+            case .hidden: return ""
+            case .syncing(let t), .synced(let t), .notice(let t): return t
+            }
+        }()
+
+        HStack(spacing: 7) {
+            if isSynced {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundColor(BevelColors.emeraldEnd)
+                    .transition(.scale.combined(with: .opacity))
+            } else if isNotice {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundColor(BevelColors.amberStart)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundColor(BevelColors.skyBlue)
+                    .rotationEffect(.degrees(spinRotation))
+                    .onAppear {
+                        spinRotation = 0
+                        withAnimation(.linear(duration: 1.05).repeatForever(autoreverses: false)) {
+                            spinRotation = 360
+                        }
+                    }
+                    .onDisappear {
+                        spinRotation = 0
+                    }
+            }
+
+            Text(labelText)
+                .font(ImprovingFont.caption(12.5))
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            Capsule()
+                .fill(BevelColors.isDarkMode ? Color(hex: 0x1E2332).opacity(0.96) : Color(hex: 0x171A22).opacity(0.94))
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(
+                    isSynced
+                        ? BevelColors.emeraldEnd.opacity(0.55)
+                        : (isNotice ? BevelColors.amberStart.opacity(0.50) : BevelColors.skyBlue.opacity(0.45)),
+                    lineWidth: 0.9
+                )
+        )
+        .shadow(color: Color.black.opacity(0.24), radius: 12, x: 0, y: 5)
     }
 }
 
