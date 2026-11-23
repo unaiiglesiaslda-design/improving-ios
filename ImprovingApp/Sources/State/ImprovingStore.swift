@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UIKit
 import AppleWatchReader
 import WhoopBLE
 import WhoopProtocol
@@ -33,6 +34,8 @@ final class ImprovingStore: ObservableObject {
         var sleepGoalPct: Int
         var visibleTabs: [MainTab]
         var sectionCoachingCache: [String: SectionCoachingCard]?
+        var processedAutoSyncSignatures: [String]?
+        var lastAutoSyncStatus: String?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -70,6 +73,11 @@ final class ImprovingStore: ObservableObject {
     @Published var healthKitAuthorized: Bool = false
     @Published var healthKitSyncing: Bool = false
     @Published var healthKitLastSyncText: String = "Listo"
+
+    // Automatic Apple Shortcuts / Files Folder Bridge (Zero Paid Entitlements!)
+    @Published var isAutoSyncing: Bool = false
+    @Published var autoSyncStatusText: String = "Listo · Esperando Atajos o carpeta Improving"
+    private var processedAutoSyncSignatures: Set<String> = []
 
     @Published var importStatus: ExportImportStatus = ExportImportStatus()
     @Published var geminiApiKey: String = ""
@@ -116,6 +124,9 @@ final class ImprovingStore: ObservableObject {
         seedPreviewOnlyItemsIfNeeded()
         bindWhoopBle()
         bindHealthKit()
+        // Ensure `En mi iPhone / Improving` folder is visible in Files app & scan immediately on startup
+        _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
+        scanAutoSyncInboxIfNeeded()
     }
 
     deinit {
@@ -1448,45 +1459,171 @@ final class ImprovingStore: ObservableObject {
             summaryMessage: "Leyendo exportación de Apple Health / WHOOP..."
         )
         let profileSnapshot = userProfile
+        let priorSnapshot = realHistory
         Task.detached(priority: .userInitiated) {
-            let result = WhoopExportImporter.importURLs(urls, profile: profileSnapshot)
+            let result = WhoopExportImporter.importURLs(urls, profile: profileSnapshot, priorHistory: priorSnapshot)
             await MainActor.run {
                 if let err = result.errorMessage, result.days.isEmpty {
                     self.importStatus = ExportImportStatus(isImporting: false, errorMessage: err)
                     return
                 }
-                self.hasImportedOrPairedRealData = true
-                self.clearPreviewSeededArtifactsOnRealData()
-                self.realHistory = WhoopExportImporter.mergeDays(existing: self.realHistory, imported: result.days)
-                for (iso, map) in result.journalByDate {
-                    var dayJournal = self.journalCheckinsByDate[iso] ?? [:]
-                    for (k, v) in map { dayJournal[k] = v }
-                    self.journalCheckinsByDate[iso] = dayJournal
-                }
-                if let latestIso = result.latestDateIso, let latestDate = self.isoFormatter.date(from: latestIso) {
-                    self.selectDate(latestDate)
-                } else {
-                    self.dayOffset = 0
-                }
-                let rangeText = (result.earliestDateIso != nil && result.latestDateIso != nil)
-                    ? "\(result.earliestDateIso!) – \(result.latestDateIso!)"
-                    : ""
-                let hrvDaysCount = result.days.values.filter { $0.hrvMs != nil }.count
-                var summary = "✓ \(result.days.count) días reales importados"
-                if hrvDaysCount > 0 { summary += " · \(hrvDaysCount) días VFC" }
-                if result.workoutsCount > 0 { summary += " · \(result.workoutsCount) entrenamientos" }
-                self.importStatus = ExportImportStatus(
-                    isImporting: false,
-                    importedDaysCount: result.days.count,
-                    importedWorkoutsCount: result.workoutsCount,
-                    dateRangeLabel: rangeText,
-                    summaryMessage: summary,
-                    errorMessage: nil
-                )
-                self.dataRevision += 1
-                self.persistState()
+                self.applyImportedResult(result, navigateToLatest: true)
             }
         }
+    }
+
+    private func applyImportedResult(_ result: ExportParseResult, navigateToLatest: Bool) {
+        self.hasImportedOrPairedRealData = true
+        self.clearPreviewSeededArtifactsOnRealData()
+        self.realHistory = WhoopExportImporter.mergeDays(existing: self.realHistory, imported: result.days)
+        for (iso, map) in result.journalByDate {
+            var dayJournal = self.journalCheckinsByDate[iso] ?? [:]
+            for (k, v) in map { dayJournal[k] = v }
+            self.journalCheckinsByDate[iso] = dayJournal
+        }
+        if navigateToLatest {
+            if let latestIso = result.latestDateIso, let latestDate = self.isoFormatter.date(from: latestIso) {
+                self.selectDate(latestDate)
+            } else {
+                self.dayOffset = 0
+            }
+        }
+        let rangeText = (result.earliestDateIso != nil && result.latestDateIso != nil)
+            ? "\(result.earliestDateIso!) – \(result.latestDateIso!)"
+            : ""
+        let hrvDaysCount = result.days.values.filter { $0.hrvMs != nil }.count
+        var summary = "✓ \(result.days.count) días reales importados"
+        if hrvDaysCount > 0 { summary += " · \(hrvDaysCount) días VFC" }
+        if result.workoutsCount > 0 { summary += " · \(result.workoutsCount) entrenamientos" }
+        self.importStatus = ExportImportStatus(
+            isImporting: false,
+            importedDaysCount: result.days.count,
+            importedWorkoutsCount: result.workoutsCount,
+            dateRangeLabel: rangeText,
+            summaryMessage: summary,
+            errorMessage: nil
+        )
+        self.dataRevision += 1
+        self.persistState()
+    }
+
+    // MARK: - Zero-Entitlement Automatic Sync Bridge (Apple Shortcuts AppIntent + Files Folder + improving://sync)
+
+    func scanAutoSyncInboxIfNeeded(force: Bool = false) {
+        guard !isAutoSyncing else { return }
+        let files = ShortcutsHealthSyncImporter.discoverInboxFiles()
+        let pending: [(URL, String)] = files.compactMap { url in
+            let sig = ShortcutsHealthSyncImporter.fileSignature(for: url)
+            if !force && processedAutoSyncSignatures.contains(sig) { return nil }
+            return (url, sig)
+        }
+        guard !pending.isEmpty else {
+            if force {
+                let hhmm = Self.currentHHMM()
+                autoSyncStatusText = "Revisado a las \(hhmm) · Sin archivos nuevos en Atajos/Carpeta"
+            }
+            return
+        }
+
+        isAutoSyncing = true
+        autoSyncStatusText = "Sincronizando desde Atajos / Carpeta..."
+        let profileSnapshot = userProfile
+        let priorSnapshot = realHistory
+        let pendingURLs = pending.map(\.0)
+        let pendingSigs = pending.map(\.1)
+
+        Task.detached(priority: .userInitiated) {
+            let result = WhoopExportImporter.importURLs(pendingURLs, profile: profileSnapshot, priorHistory: priorSnapshot)
+            await MainActor.run {
+                self.isAutoSyncing = false
+                for s in pendingSigs { self.processedAutoSyncSignatures.insert(s) }
+                if !result.days.isEmpty {
+                    let shouldJump = !self.hasImportedOrPairedRealData
+                    self.applyImportedResult(result, navigateToLatest: shouldJump)
+                    let hhmm = Self.currentHHMM()
+                    let hrvCount = result.days.values.filter { $0.hrvMs != nil }.count
+                    self.autoSyncStatusText = "✓ Sync automática \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)"
+                    self.persistState()
+                } else if force {
+                    self.autoSyncStatusText = result.errorMessage ?? "Archivo detectado sin muestras válidas"
+                }
+            }
+        }
+    }
+
+    func handleIncomingURL(_ url: URL) {
+        // 1. File opened via Share Sheet / Files app ("Abrir en Improving")
+        if url.isFileURL {
+            importExportFiles(urls: [url])
+            return
+        }
+
+        // 2. Custom URL Scheme: improving://sync[?source=clipboard | ?data=... | ?payload=...]
+        guard url.scheme?.lowercased() == "improving" else { return }
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let items = comps?.queryItems ?? []
+        let sourceParam = items.first(where: { $0.name.lowercased() == "source" })?.value?.lowercased()
+        let rawParam = items.first(where: { $0.name.lowercased() == "data" || $0.name.lowercased() == "payload" || $0.name.lowercased() == "text" })?.value
+
+        if sourceParam == "clipboard" {
+            let paste = UIPasteboard.general.string ?? ""
+            ingestRawShortcutsPayload(paste, sourceLabel: "Atajos (Portapapeles)")
+            return
+        }
+
+        if let raw = rawParam, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let decoded: String = {
+                if let b64 = Data(base64Encoded: raw), let str = String(data: b64, encoding: .utf8), !str.isEmpty {
+                    return str
+                }
+                return raw
+            }()
+            ingestRawShortcutsPayload(decoded, sourceLabel: "Atajos (URL)")
+            return
+        }
+
+        // Default: scan `En mi iPhone / Improving` & `AutoSync` inbox immediately!
+        scanAutoSyncInboxIfNeeded(force: true)
+    }
+
+    func ingestRawShortcutsPayload(_ text: String, sourceLabel: String = "Atajos de Apple") {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            autoSyncStatusText = "No había datos de Salud en \(sourceLabel)"
+            return
+        }
+        isAutoSyncing = true
+        autoSyncStatusText = "Procesando \(sourceLabel)..."
+        let profileSnapshot = userProfile
+        let priorSnapshot = realHistory
+
+        Task.detached(priority: .userInitiated) {
+            let result = ShortcutsHealthSyncImporter.parseRawText(
+                trimmed,
+                sourceName: sourceLabel,
+                profile: profileSnapshot,
+                priorHistory: priorSnapshot
+            )
+            await MainActor.run {
+                self.isAutoSyncing = false
+                if !result.days.isEmpty {
+                    let shouldJump = !self.hasImportedOrPairedRealData
+                    self.applyImportedResult(result, navigateToLatest: shouldJump)
+                    let hhmm = Self.currentHHMM()
+                    let hrvCount = result.days.values.filter { $0.hrvMs != nil }.count
+                    self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)"
+                    self.persistState()
+                } else {
+                    self.autoSyncStatusText = result.errorMessage ?? "Sin lecturas válidas en \(sourceLabel)"
+                }
+            }
+        }
+    }
+
+    private static func currentHHMM() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: Date())
     }
 
     // MARK: - HealthKit & WHOOP Live Connectors (Full 60-Day Bevel Pipeline + Continuous Energy!)
@@ -2123,7 +2260,9 @@ final class ImprovingStore: ObservableObject {
             wakeOffsetMinutes: wakeOffsetMinutes,
             sleepGoalPct: sleepGoalPct,
             visibleTabs: Array(visibleTabs),
-            sectionCoachingCache: sectionCoachingCache
+            sectionCoachingCache: sectionCoachingCache,
+            processedAutoSyncSignatures: Array(processedAutoSyncSignatures.prefix(80)),
+            lastAutoSyncStatus: autoSyncStatusText
         )
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: persistenceURL, options: .atomic)
@@ -2150,5 +2289,7 @@ final class ImprovingStore: ObservableObject {
         sleepGoalPct = snap.sleepGoalPct
         if !snap.visibleTabs.isEmpty { visibleTabs = Set(snap.visibleTabs) }
         if let cached = snap.sectionCoachingCache { sectionCoachingCache = cached }
+        if let sigs = snap.processedAutoSyncSignatures { processedAutoSyncSignatures = Set(sigs) }
+        if let status = snap.lastAutoSyncStatus, !status.isEmpty { autoSyncStatusText = status }
     }
 }

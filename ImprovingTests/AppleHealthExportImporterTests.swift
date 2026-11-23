@@ -217,4 +217,83 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(caf?.reliability, .high)
         XCTAssertEqual(caf?.impactPct, -14)
     }
+
+    func testShortcutsEnvelopeSpanishDatesSleepAndContinuousEnergy() throws {
+        // Prior day ending at 19.0% energy
+        var prior: [String: RealBiometricDaySummary] = [:]
+        prior["2026-11-22"] = RealBiometricDaySummary(
+            dateIso: "2026-11-22",
+            restingHrBpm: 50.0,
+            hrvMs: 70.0,
+            energyBankPercent: 19,
+            energySamples5m: [TimedBiometricPoint(minuteOfDay: 1435, value: 19.0, epochSec: nil)]
+        )
+
+        let env = ShortcutsSyncEnvelope(
+            source: "Atajos de Apple",
+            hrValues: ["52 lat/min", "54 lat/min", "74 lat/min", "82 lat/min"],
+            hrDates: ["23/11/2026, 0:05", "23/11/2026, 4:00", "23/11/2026, 10:15", "23/11/2026, 13:30"],
+            hrvValues: ["71,4 ms", "76,6 ms"],
+            hrvDates: ["23/11/2026, 3:15", "23/11/2026, 5:45"],
+            rhrValues: ["49,5"],
+            rhrDates: ["23/11/2026, 6:30"],
+            respValues: ["15,1 rpm"],
+            respDates: ["23/11/2026, 4:00"],
+            spo2Values: ["98 %"],
+            spo2Dates: ["23/11/2026, 4:30"],
+            stepsValues: ["5.420 pasos"],
+            stepsDates: ["23/11/2026, 12:00"],
+            kcalValues: ["410 kcal"],
+            kcalDates: ["23/11/2026, 12:00"],
+            sleepValues: ["Dormido (Profundo)", "Dormido (REM)", "Dormido (Esencial)"],
+            sleepStarts: ["23/11/2026, 1:00", "23/11/2026, 2:30", "23/11/2026, 4:00"],
+            sleepEnds: ["23/11/2026, 2:30", "23/11/2026, 4:00", "23/11/2026, 7:30"]
+        )
+
+        let res = ShortcutsHealthSyncImporter.parseEnvelope(env, priorHistory: prior)
+        XCTAssertNil(res.errorMessage)
+        let day = try XCTUnwrap(res.days["2026-11-23"])
+        XCTAssertEqual(day.hrvMs ?? 0, 74.0, accuracy: 0.2)
+        XCTAssertEqual(day.restingHrBpm ?? 0, 49.5, accuracy: 0.2)
+        XCTAssertEqual(day.stepsCount, 5420)
+        XCTAssertEqual(day.activeKcal, 410)
+        XCTAssertEqual(day.deepMinutes, 90)
+        XCTAssertEqual(day.remMinutes, 90)
+        XCTAssertEqual(day.asleepMinutes, 390)
+        XCTAssertNotNil(day.recoveryPct)
+        XCTAssertNotNil(day.sleepPct)
+        // Energy at 00:05 MUST carry over continuously from yesterday's 19.0% (zero jump!)
+        let firstEnergy = try XCTUnwrap(day.energySamples5m.first?.value)
+        XCTAssertEqual(firstEnergy, 19.0, accuracy: 0.2)
+    }
+
+    func testShortcutsPipeLinesAndHealthAutoExportJson() throws {
+        let pipeText = """
+        hr|2026-11-23 09:00:00 +0100|68
+        hrv|2026-11-23 05:00:00 +0100|66,5
+        rhr|2026-11-23 06:00:00 +0100|51
+        steps|2026-11-23 11:00:00 +0100|6100
+        """
+        let res1 = ShortcutsHealthSyncImporter.parseRawText(pipeText)
+        let d1 = try XCTUnwrap(res1.days["2026-11-23"])
+        XCTAssertEqual(d1.hrvMs ?? 0, 66.5, accuracy: 0.2)
+        XCTAssertEqual(d1.stepsCount, 6100)
+
+        let haeJson = """
+        {
+          "data": {
+            "metrics": [
+              {"name": "heart_rate_variability", "units": "ms", "data": [{"date": "2026-11-23 04:00:00 +0100", "qty": 72.5}]},
+              {"name": "resting_heart_rate", "units": "count/min", "data": [{"date": "2026-11-23 06:00:00 +0100", "qty": 48.0}]},
+              {"name": "step_count", "units": "count", "data": [{"date": "2026-11-23 12:00:00 +0100", "qty": 8200}]}
+            ]
+          }
+        }
+        """
+        let res2 = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(haeJson.data(using: .utf8)))
+        let d2 = try XCTUnwrap(res2.days["2026-11-23"])
+        XCTAssertEqual(d2.hrvMs ?? 0, 72.5, accuracy: 0.2)
+        XCTAssertEqual(d2.restingHrBpm ?? 0, 48.0, accuracy: 0.2)
+        XCTAssertEqual(d2.stepsCount, 8200)
+    }
 }

@@ -2,15 +2,22 @@ import Foundation
 
 enum WhoopExportImporter {
 
-    static func importURLs(_ urls: [URL], profile: UserPhysiologyProfile = UserPhysiologyProfile()) -> ExportParseResult {
+    static func importURLs(
+        _ urls: [URL],
+        profile: UserPhysiologyProfile = UserPhysiologyProfile(),
+        priorHistory: [String: RealBiometricDaySummary] = [:]
+    ) -> ExportParseResult {
         guard !urls.isEmpty else { return .error("No se seleccionó ningún archivo.") }
 
         var appleUrls: [URL] = []
+        var shortcutsUrls: [URL] = []
         var whoopUrls: [URL] = []
         for u in urls {
             let scoped = u.startAccessingSecurityScopedResource()
             defer { if scoped { u.stopAccessingSecurityScopedResource() } }
-            if AppleHealthExportImporter.isAppleHealthFile(url: u) {
+            if ShortcutsHealthSyncImporter.isShortcutsOrJsonHealthFile(url: u) {
+                shortcutsUrls.append(u)
+            } else if AppleHealthExportImporter.isAppleHealthFile(url: u) {
                 appleUrls.append(u)
             } else {
                 whoopUrls.append(u)
@@ -39,19 +46,46 @@ enum WhoopExportImporter {
 
         let whoopRes = namedCsvs.isEmpty ? nil : parseNamedCsvs(namedCsvs)
         var merged: [String: RealBiometricDaySummary] = [:]
-        if let a = appleRes, !a.days.isEmpty { merged = mergeDays(existing: merged, imported: a.days) }
-        if let w = whoopRes, !w.days.isEmpty { merged = mergeDays(existing: merged, imported: w.days) }
+        var parsedFiles: [String] = []
+        var totalWorkouts = 0
+        var lastError: String? = nil
+
+        if let a = appleRes {
+            if !a.days.isEmpty {
+                merged = mergeDays(existing: merged, imported: a.days)
+                parsedFiles.append(contentsOf: a.filesParsed)
+                totalWorkouts += a.workoutsCount
+            } else if let e = a.errorMessage { lastError = e }
+        }
+        if let w = whoopRes {
+            if !w.days.isEmpty {
+                merged = mergeDays(existing: merged, imported: w.days)
+                parsedFiles.append(contentsOf: w.filesParsed)
+                totalWorkouts += w.workoutsCount
+            } else if let e = w.errorMessage { lastError = e }
+        }
+        let seedPrior = mergeDays(existing: priorHistory, imported: merged)
+        for sUrl in shortcutsUrls {
+            let sRes = ShortcutsHealthSyncImporter.parseFileURL(sUrl, profile: profile, priorHistory: seedPrior)
+            if !sRes.days.isEmpty {
+                merged = mergeDays(existing: merged, imported: sRes.days)
+                parsedFiles.append(contentsOf: sRes.filesParsed)
+                totalWorkouts += sRes.workoutsCount
+            } else if let e = sRes.errorMessage {
+                lastError = e
+            }
+        }
 
         guard !merged.isEmpty else {
-            return .error(whoopRes?.errorMessage ?? appleRes?.errorMessage ?? "No se encontraron datos válidos de WHOOP o Apple Health.")
+            return .error(lastError ?? "No se encontraron datos válidos de Apple Health, Atajos o WHOOP.")
         }
 
         let sortedKeys = merged.keys.sorted()
         return ExportParseResult(
             days: merged,
             journalByDate: whoopRes?.journalByDate ?? [:],
-            filesParsed: Array(Set((whoopRes?.filesParsed ?? []) + (appleRes?.filesParsed ?? []))),
-            workoutsCount: (whoopRes?.workoutsCount ?? 0) + (appleRes?.workoutsCount ?? 0),
+            filesParsed: Array(Set(parsedFiles)),
+            workoutsCount: totalWorkouts,
             journalEntriesCount: whoopRes?.journalEntriesCount ?? 0,
             earliestDateIso: sortedKeys.first,
             latestDateIso: sortedKeys.last,

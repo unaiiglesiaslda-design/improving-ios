@@ -32,7 +32,7 @@ struct ExportParseResult {
 ///   cross-day 5-minute Energy curve that carries over seamlessly across midnight (zero jumps, zero fabricated data!).
 enum AppleHealthExportImporter {
 
-    private final class MutableAppleDay {
+    final class MutableAppleDay {
         let dateIso: String
         var hrvSamples: [(Int64, Double)] = []
         var rhrValues: [Double] = []
@@ -181,16 +181,23 @@ enum AppleHealthExportImporter {
 
     // MARK: - Build Scientifically Accurate, Continuous, Zero-Fabrication Day Summaries
 
-    private static func buildSummaries(
+    static func buildSummaries(
         from days: [String: MutableAppleDay],
         sourceName: String,
-        profile: UserPhysiologyProfile
+        profile: UserPhysiologyProfile,
+        priorHistory: [String: RealBiometricDaySummary] = [:]
     ) -> ExportParseResult {
         guard !days.isEmpty else {
-            return .error("El archivo XML no contiene métricas de Apple Health.")
+            return .error("El archivo no contiene métricas de Apple Health.")
         }
 
-        let allTemps = days.values.flatMap(\.tempCelsiusValues).filter { (28.0...41.5).contains($0) }.sorted()
+        let sortedIsos = days.keys.sorted()
+        let firstNewIso = sortedIsos.first ?? ""
+
+        let priorTemps = priorHistory
+            .filter { $0.key < firstNewIso }
+            .compactMap { $0.value.wristTempAbsoluteC }
+        let allTemps = (priorTemps + days.values.flatMap(\.tempCelsiusValues)).filter { (28.0...41.5).contains($0) }.sorted()
         let medianTemp = allTemps.isEmpty ? nil : allTemps[allTemps.count / 2]
 
         // Observe real peak HR across the export to sharpen MaxHR
@@ -209,17 +216,29 @@ enum AppleHealthExportImporter {
 
         var summaries: [String: RealBiometricDaySummary] = [:]
         var totalWorkouts = 0
-        let sortedIsos = days.keys.sorted()
 
-        // Strictly causal rolling history arrays (only past days up to day i-1!)
+        // Strictly causal rolling history arrays seeded from prior stored history before firstNewIso!
         var priorLnHrv: [Double] = []
         var priorRhr: [Double] = []
         var priorResp: [Double] = []
 
-        // Continuous cross-day Energy Bank state (NEVER jumps at midnight!)
+        // Continuous cross-day Energy Bank state seeded from previous day's ending value (NEVER jumps at midnight!)
         var prevDayDate: Date? = nil
         var prevDayEndEnergy: Double? = nil
         var prevDayEndEpoch: Int64? = nil
+
+        for iso in priorHistory.keys.sorted() where iso < firstNewIso {
+            if let old = priorHistory[iso] {
+                if let h = old.hrvMs, h > 2.0 { priorLnHrv.append(log(h)) }
+                if let r = old.restingHrBpm { priorRhr.append(r) }
+                if let rr = old.respRateRpm { priorResp.append(rr) }
+                if let lastE = old.energySamples5m.last?.value ?? old.energyBankPercent.map({ Double($0) }) {
+                    prevDayEndEnergy = lastE
+                    prevDayEndEpoch = old.energySamples5m.last?.epochSec
+                    prevDayDate = isoFmt.date(from: iso)
+                }
+            }
+        }
 
         for (dayIdx, dateIso) in sortedIsos.enumerated() {
             guard let raw = days[dateIso] else { continue }
@@ -1145,7 +1164,7 @@ enum AppleHealthExportImporter {
         return f == "export.xml" || f == "exportar.xml" || (f.hasSuffix(".xml") && !f.contains("cda"))
     }
 
-    private static func mapWorkoutName(_ rawType: String) -> (String, String, Bool) {
+    static func mapWorkoutName(_ rawType: String) -> (String, String, Bool) {
         let low = rawType.lowercased()
         if low.contains("strength") || low.contains("coretraining") { return ("Entrenamiento de fuerza", "Fuerza", true) }
         if low.contains("running") { return ("Carrera", "Cardio", false) }
