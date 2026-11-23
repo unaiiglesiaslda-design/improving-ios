@@ -282,6 +282,8 @@ enum BiologicalSexOption: String, CaseIterable, Codable {
 
 struct UserPhysiologyProfile: Codable, Equatable {
     var userName: String = ""
+    var lastName: String = ""
+    var birthDateIso: String? = nil // yyyy-MM-dd
     var ageYears: Double = 24.0
     var sex: BiologicalSexOption = .male
     var weightKg: Double = 70.0
@@ -289,7 +291,133 @@ struct UserPhysiologyProfile: Codable, Equatable {
     var bodyFatPct: Double? = nil
     var restingHrCalibrationBpm: Double? = nil
     var hrvCalibrationMs: Double? = nil
+    var profilePhotoPath: String? = nil
+    var profileSetupVersion: Int = 0
     var onboardingCompleted: Bool = false
+
+    private static let isoBirthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    private static let displayBirthFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "es_ES")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+
+    init(
+        userName: String = "",
+        lastName: String = "",
+        birthDateIso: String? = nil,
+        ageYears: Double = 24.0,
+        sex: BiologicalSexOption = .male,
+        weightKg: Double = 70.0,
+        heightCm: Double = 176.0,
+        bodyFatPct: Double? = nil,
+        restingHrCalibrationBpm: Double? = nil,
+        hrvCalibrationMs: Double? = nil,
+        profilePhotoPath: String? = nil,
+        profileSetupVersion: Int = 0,
+        onboardingCompleted: Bool = false
+    ) {
+        self.userName = userName
+        self.lastName = lastName
+        self.birthDateIso = birthDateIso
+        self.ageYears = ageYears
+        self.sex = sex
+        self.weightKg = weightKg
+        self.heightCm = heightCm
+        self.bodyFatPct = bodyFatPct
+        self.restingHrCalibrationBpm = restingHrCalibrationBpm
+        self.hrvCalibrationMs = hrvCalibrationMs
+        self.profilePhotoPath = profilePhotoPath
+        self.profileSetupVersion = profileSetupVersion
+        self.onboardingCompleted = onboardingCompleted
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case userName, lastName, birthDateIso, ageYears, sex, weightKg, heightCm, bodyFatPct
+        case restingHrCalibrationBpm, hrvCalibrationMs, profilePhotoPath, profileSetupVersion, onboardingCompleted
+    }
+
+    /// Backward-compatible decoder so existing saved snapshots migrate cleanly without losing history.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userName = try c.decodeIfPresent(String.self, forKey: .userName) ?? ""
+        lastName = try c.decodeIfPresent(String.self, forKey: .lastName) ?? ""
+        birthDateIso = try c.decodeIfPresent(String.self, forKey: .birthDateIso)
+        ageYears = try c.decodeIfPresent(Double.self, forKey: .ageYears) ?? 24.0
+        sex = try c.decodeIfPresent(BiologicalSexOption.self, forKey: .sex) ?? .male
+        weightKg = try c.decodeIfPresent(Double.self, forKey: .weightKg) ?? 70.0
+        heightCm = try c.decodeIfPresent(Double.self, forKey: .heightCm) ?? 176.0
+        bodyFatPct = try c.decodeIfPresent(Double.self, forKey: .bodyFatPct)
+        restingHrCalibrationBpm = try c.decodeIfPresent(Double.self, forKey: .restingHrCalibrationBpm)
+        hrvCalibrationMs = try c.decodeIfPresent(Double.self, forKey: .hrvCalibrationMs)
+        profilePhotoPath = try c.decodeIfPresent(String.self, forKey: .profilePhotoPath)
+        profileSetupVersion = try c.decodeIfPresent(Int.self, forKey: .profileSetupVersion) ?? 0
+        onboardingCompleted = try c.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false
+    }
+
+    /// Dynamically computed chronological age in fractional years from `birthDateIso` (or fallback `ageYears`).
+    var effectiveAgeYears: Double {
+        guard let iso = birthDateIso, let dt = Self.isoBirthFormatter.date(from: iso) else {
+            return min(max(ageYears, 13.0), 99.0)
+        }
+        let secs = Date().timeIntervalSince(dt)
+        let yrs = secs / (365.2425 * 86_400.0)
+        return min(max((yrs * 10.0).rounded() / 10.0, 13.0), 99.0)
+    }
+
+    var birthDate: Date {
+        if let iso = birthDateIso, let dt = Self.isoBirthFormatter.date(from: iso) {
+            return dt
+        }
+        let wholeYears = Int(ageYears.rounded())
+        return Calendar.current.date(byAdding: .year, value: -max(min(wholeYears, 95), 13), to: Date()) ?? Date()
+    }
+
+    mutating func setBirthDate(_ date: Date) {
+        let cal = Calendar.current
+        let clamped = min(date, cal.date(byAdding: .year, value: -13, to: Date()) ?? date)
+        birthDateIso = Self.isoBirthFormatter.string(from: clamped)
+        ageYears = effectiveAgeYears
+    }
+
+    var formattedBirthDate: String {
+        Self.displayBirthFormatter.string(from: birthDate).replacingOccurrences(of: ".", with: "")
+    }
+
+    var fullName: String {
+        [userName, lastName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    var displayFirstName: String {
+        let first = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return first.isEmpty ? fullName : first
+    }
+
+    var initials: String {
+        let first = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let last = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let f = first.first, let l = last.first {
+            return "\(String(f).uppercased())\(String(l).uppercased())"
+        }
+        let parts = fullName.split(whereSeparator: \.isWhitespace)
+        if parts.count >= 2, let a = parts[0].first, let b = parts[1].first {
+            return "\(String(a).uppercased())\(String(b).uppercased())"
+        }
+        if !first.isEmpty {
+            return String(first.prefix(2)).uppercased()
+        }
+        return "IM"
+    }
 }
 
 struct RealBiometricDaySummary: Codable, Equatable, Identifiable {

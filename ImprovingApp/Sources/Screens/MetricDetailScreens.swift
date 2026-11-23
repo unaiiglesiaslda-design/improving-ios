@@ -79,15 +79,16 @@ struct HealthMetricDetailScreen: View {
 
     var body: some View {
         let kind = store.selectedHealthMetric
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let window = store.metricWindowSeries(for: kind, spanDays: spanDays, windowPageOffset: windowPageOffset)
         let realPoints = window.realPoints
         let (bandLow, bandHigh): (Double, Double) = switch kind {
-        case .respiratoryRate: (13.8, 16.8)
-        case .restingHeartRate: (45.8, 56.0)
-        case .hrv: (58.0, 96.0)
-        case .oxygenSaturation: (95.0, 100.0)
-        case .wristTemperature: (35.4, 36.4)
-        case .sleepDuration: (7.0, 9.0)
+        case .respiratoryRate: (norms.respLowRpm, norms.respHighRpm)
+        case .restingHeartRate: (norms.rhrLowBpm, norms.rhrHighBpm)
+        case .hrv: (norms.hrvLowMs, norms.hrvHighMs)
+        case .oxygenSaturation: (norms.spo2LowPct, norms.spo2HighPct)
+        case .wristTemperature: (norms.wristTempLowC, norms.wristTempHighC)
+        case .sleepDuration: (norms.sleepLowHours, norms.sleepHighHours)
         }
         let currentNumeric: Double? = switch kind {
         case .respiratoryRate: store.dataAvailability.hasRespData ? store.respRateRpm : nil
@@ -457,7 +458,7 @@ struct HealthMetricDetailScreen: View {
                     : String(format: "%.1f %@", locale: Locale(identifier: "es_ES"), $0, kind.unit)
             } ?? "--"
             let rangeStr = kind == .sleepDuration
-                ? "7 h 00 min – 9 h 00 min"
+                ? String(format: "%.1f h – %.1f h", locale: Locale(identifier: "es_ES"), bandLow, bandHigh)
                 : String(format: "%.1f–%.1f %@", locale: Locale(identifier: "es_ES"), bandLow, bandHigh, kind.unit)
             let res = await GeminiCoachService.shared.buildMetricFloatingInsight(
                 metricId: kind.rawValue,
@@ -778,6 +779,7 @@ struct CardioMetricDetailScreen: View {
     }
 
     private var vo2MaxDetailView: some View {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let window = store.customWindowSeries(spanDays: spanDays, windowPageOffset: windowPageOffset) { $0.vo2MaxMlKgMin }
         let cur = window.realPoints.last ?? store.latestVo2Max
 
@@ -789,7 +791,7 @@ struct CardioMetricDetailScreen: View {
                         Text(cur.map { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) } ?? "Sin datos")
                             .font(ImprovingFont.displayLarge(cur != nil ? 34 : 26))
                             .foregroundColor(cur != nil ? BevelColors.textPrimary : BevelColors.textMuted)
-                        Text(window.windowRangeLabel).font(ImprovingFont.caption(13)).foregroundColor(BevelColors.textSecondary)
+                        Text("\(window.windowRangeLabel) · \(norms.vo2CohortSubtitle)").font(ImprovingFont.caption(12.5)).foregroundColor(BevelColors.textSecondary)
                     }
                     Spacer()
                 }
@@ -798,8 +800,8 @@ struct CardioMetricDetailScreen: View {
                 HealthMetricBaselineChart(
                     optionalPoints: window.values,
                     dates: window.dates,
-                    bandLow: 40.1,
-                    bandHigh: 52.0,
+                    bandLow: norms.vo2GoodThreshold,
+                    bandHigh: norms.vo2ExcellentThreshold,
                     averageText: "",
                     accentColor: BevelColors.amberStart,
                     valueFormatter: { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }
@@ -813,6 +815,7 @@ struct CardioMetricDetailScreen: View {
     }
 
     private var hrRecoveryDetailView: some View {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let window = store.customWindowSeries(spanDays: spanDays, windowPageOffset: windowPageOffset) { $0.hrRecoveryBpm }
         let cur = window.realPoints.last ?? store.latestHrRecoveryBpm
 
@@ -833,8 +836,8 @@ struct CardioMetricDetailScreen: View {
                 HealthMetricBaselineChart(
                     optionalPoints: window.values,
                     dates: window.dates,
-                    bandLow: 15,
-                    bandHigh: 45,
+                    bandLow: Double(norms.hrrGoodThresholdBpm),
+                    bandHigh: Double(norms.hrrGoodThresholdBpm + 20),
                     averageText: "",
                     accentColor: BevelColors.coralHigh,
                     valueFormatter: { "\(Int($0.rounded())) ppm" }

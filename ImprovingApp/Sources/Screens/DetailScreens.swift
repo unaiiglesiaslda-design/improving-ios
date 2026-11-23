@@ -933,11 +933,13 @@ struct SleepSessionDetailScreen: View {
             else if !spo2Samples.isEmpty { selectedVital = .spo2 }
         }
         .task(id: store.selectedDateIso) {
+            let slNorms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
+            let rangeTxt = String(format: "%.1f h – %.1f h", locale: Locale(identifier: "es_ES"), slNorms.sleepLowHours, slNorms.sleepHighHours)
             let res = await GeminiCoachService.shared.buildMetricFloatingInsight(
                 metricId: "sleep_session",
                 metricTitle: "Sueño principal",
                 currentValueText: store.sleepDurationText,
-                normalRangeText: "7 h 00 min – 9 h 00 min",
+                normalRangeText: rangeTxt,
                 recoveryPct: store.dataAvailability.hasRecoveryData ? store.recoveryPercent : nil,
                 strainPct: store.dataAvailability.hasStrainData ? store.strainPercent : nil,
                 hrvMs: store.dataAvailability.hasHrvData ? store.hrvMs : nil,

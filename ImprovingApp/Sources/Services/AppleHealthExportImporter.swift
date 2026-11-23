@@ -201,6 +201,11 @@ enum AppleHealthExportImporter {
         let allTemps = (priorTemps + days.values.flatMap(\.tempCelsiusValues)).filter { (28.0...41.5).contains($0) }.sorted()
         let medianTemp = allTemps.isEmpty ? nil : allTemps[allTemps.count / 2]
 
+        // Compute personalized clinical norms from the user's birth date/age, sex, height & weight
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: profile)
+        let targetSleepMin = norms.sleepTargetHours * 60.0
+        let respCenter = (norms.respLowRpm + norms.respHighRpm) / 2.0
+
         // Observe real peak HR across the export to sharpen MaxHR
         let observedPeakHr = Int((days.values.flatMap { $0.hrSamples.map(\.2) }.max() ?? 0).rounded())
         let maxHr = Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: profile, observedPeakBpm: min(observedPeakHr, 215)))
@@ -563,7 +568,7 @@ enum AppleHealthExportImporter {
                 return round1(min(max(d - m, -2.5), 2.5))
             }()
 
-            // 4. Bevel-Calibrated Sleep Score (only from measured components!)
+            // 4. Bevel-Calibrated Sleep Score (only from measured components, personalized to user's age & sex!)
             let sleepPct: Int? = asleepOrNil.map { asleep in
                 WhoopPhysiologyEngine.computeBevelSleepScore(
                     asleepMinutes: asleep,
@@ -572,20 +577,23 @@ enum AppleHealthExportImporter {
                     remMinutes: remOrNil,
                     awakeMinutes: awakeOrNil,
                     awakeCount: raw.awakeIntervals.count,
-                    hrDipPct: hrDipPct
+                    hrDipPct: hrDipPct,
+                    targetMinutes: targetSleepMin,
+                    deepTargetPct: norms.deepTargetPct,
+                    remTargetPct: norms.remTargetPct
                 )
             }
-            let sleepDebt = asleepOrNil.map { max(480 - $0, 0) }
+            let sleepDebt = asleepOrNil.map { max(Int(targetSleepMin.rounded()) - $0, 0) }
 
-            // 5. Causal 60-Day Personal Baselines -> Bevel Recovery % (Zero Fabricated Sensors!)
+            // 5. Causal 60-Day Personal Baselines -> Bevel Recovery % (Seeded with user's age/sex/body clinical priors!)
             let lnHrvBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorLnHrv, populationMean: log(65.0), populationSigma: 0.25, floorSigma: 0.14
+                priorValues: priorLnHrv, populationMean: log(max(norms.hrvExpectedMs, 15.0)), populationSigma: 0.25, floorSigma: 0.14
             )
             let rhrBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorRhr, populationMean: 54.0, populationSigma: 4.0, floorSigma: 1.8
+                priorValues: priorRhr, populationMean: norms.restingHrExpected, populationSigma: 4.0, floorSigma: 1.8
             )
             let respBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorResp, populationMean: 15.2, populationSigma: 0.9, floorSigma: 0.45
+                priorValues: priorResp, populationMean: respCenter, populationSigma: 0.9, floorSigma: 0.45
             )
 
             let recPct = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
@@ -596,7 +604,8 @@ enum AppleHealthExportImporter {
                 wristTempDeltaC: tempDelta,
                 lnHrvBaseline: lnHrvBase,
                 rhrBaseline: rhrBase,
-                respBaseline: respBase
+                respBaseline: respBase,
+                profile: profile
             )
 
             // Update causal history AFTER scoring day i

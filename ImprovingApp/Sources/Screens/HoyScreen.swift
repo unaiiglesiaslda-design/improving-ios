@@ -13,9 +13,9 @@ struct HoyScreen: View {
         let respEval = WhoopPhysiologyEngine.evaluateVital(value: store.respRateRpm, bandLow: norms.respLowRpm, bandHigh: norms.respHighRpm, lowerIsBetter: true, hasData: avail.hasRespData)
         let rhrEval = WhoopPhysiologyEngine.evaluateVital(value: store.restingHrBpm, bandLow: norms.rhrLowBpm, bandHigh: norms.rhrHighBpm, lowerIsBetter: true, hasData: avail.hasRestingHrData)
         let hrvEval = WhoopPhysiologyEngine.evaluateVital(value: store.hrvMs, bandLow: norms.hrvLowMs, bandHigh: norms.hrvHighMs, higherIsBetter: true, hasData: avail.hasHrvData)
-        let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: store.spo2DisplayDouble, bandLow: 95.0, bandHigh: 100.0, higherIsBetter: true, hasData: avail.hasSpo2Data)
+        let spo2Eval = WhoopPhysiologyEngine.evaluateVital(value: store.spo2DisplayDouble, bandLow: norms.spo2LowPct, bandHigh: norms.spo2HighPct, higherIsBetter: true, hasData: avail.hasSpo2Data)
         let tempAbs = store.wristTempAbsoluteC ?? 0
-        let tempEval = WhoopPhysiologyEngine.evaluateVital(value: tempAbs, bandLow: 35.5, bandHigh: 36.6, hasData: avail.hasTempData)
+        let tempEval = WhoopPhysiologyEngine.evaluateVital(value: tempAbs, bandLow: norms.wristTempLowC, bandHigh: norms.wristTempHighC, hasData: avail.hasTempData)
         let sleepHours = Double(store.currentDaySummary?.asleepMinutes ?? 0) / 60.0
         let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: norms.sleepLowHours, bandHigh: norms.sleepHighHours, higherIsBetter: true, hasData: avail.hasSleepData)
 
@@ -31,9 +31,7 @@ struct HoyScreen: View {
         let realCardioVals = cardioSeries.compactMap { $0 }
         let latestCardioVal = realCardioVals.last
 
-        let initials = store.userProfile.userName.isEmpty
-            ? "UI"
-            : String(store.userProfile.userName.prefix(2)).uppercased()
+        let initials = store.userProfile.initials
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -100,12 +98,13 @@ struct HoyScreen: View {
                                 .foregroundColor(BevelColors.textPrimary)
                         }
                         Button { onNavigate(.dispositivos) } label: {
-                            Text(initials)
-                                .font(ImprovingFont.caption(12))
-                                .fontWeight(.bold)
-                                .foregroundColor(BevelColors.skyBlue)
-                                .frame(width: 28, height: 28)
-                                .background(Circle().fill(BevelColors.skySoftBg))
+                            UserProfileAvatarView(
+                                photoPath: store.userProfile.profilePhotoPath,
+                                initials: initials,
+                                size: 28,
+                                showGradientRing: store.userProfile.profilePhotoPath != nil,
+                                ringWidth: 1.5
+                            )
                         }
                     }
                     .padding(.horizontal, 10)

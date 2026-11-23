@@ -545,4 +545,144 @@ final class AppleHealthExportImporterTests: XCTestCase {
         // While still accepting fresh daytime activity metrics from Shortcuts!
         XCTAssertEqual(day.activeKcal, 240)
     }
+
+    func testPersonalProfileAgeSexHeightWeightImpactsRecoveryStrainSleepBioAgeAndNutrition() throws {
+        // Same sensor readings evaluated for a 19-year-old tall male vs a 64-year-old shorter female:
+        var youngMale = UserPhysiologyProfile(
+            userName: "Aitor",
+            lastName: "Iglesias",
+            ageYears: 19.0,
+            sex: .male,
+            weightKg: 76.0,
+            heightCm: 184.0
+        )
+        youngMale.birthDateIso = "2007-05-10"
+
+        var olderFemale = UserPhysiologyProfile(
+            userName: "Elena",
+            lastName: "Ruiz",
+            ageYears: 64.0,
+            sex: .female,
+            weightKg: 58.0,
+            heightCm: 160.0
+        )
+        olderFemale.birthDateIso = "1962-05-10"
+
+        XCTAssertEqual(youngMale.initials, "AI")
+        XCTAssertEqual(olderFemale.initials, "ER")
+        XCTAssertLessThan(youngMale.effectiveAgeYears, 22.0)
+        XCTAssertGreaterThan(olderFemale.effectiveAgeYears, 60.0)
+
+        let youngNorms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: youngMale)
+        let olderNorms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: olderFemale)
+
+        // 1. Tanaka MaxHR, HRV expected, BMR, Hydration & Sleep targets MUST meaningfully differ!
+        XCTAssertGreaterThan(youngNorms.maxHrBpm, olderNorms.maxHrBpm + 20)
+        XCTAssertGreaterThan(youngNorms.hrvExpectedMs, olderNorms.hrvExpectedMs + 25.0)
+        XCTAssertGreaterThan(youngNorms.bmrKcal, olderNorms.bmrKcal + 300)
+        XCTAssertGreaterThan(youngNorms.hydrationGoalLiters, olderNorms.hydrationGoalLiters)
+        XCTAssertGreaterThan(youngNorms.deepTargetPct, olderNorms.deepTargetPct)
+
+        // 2. Identical 45 min workout at 142 bpm produces HIGHER cardiovascular strain for 64yo (higher % of Tanaka HRR!)
+        let workout = EffortEventItem(
+            id: "w1", title: "Carrera", timeRange: "10:00 - 10:45",
+            durationMin: 45, avgHrBpm: 142, strainScore: 0, strainPct: 0,
+            categoryLabel: "Cardio", kcal: 380
+        )
+        let youngStrain = try XCTUnwrap(WhoopPhysiologyEngine.computeBevelStrain(
+            profile: youngMale, rhrBpm: 56.0, hrZoneMinutes: [10, 20, 15, 0, 0], workouts: [workout], activeKcal: 450
+        ))
+        let olderStrain = try XCTUnwrap(WhoopPhysiologyEngine.computeBevelStrain(
+            profile: olderFemale, rhrBpm: 56.0, hrZoneMinutes: [10, 20, 15, 0, 0], workouts: [workout], activeKcal: 450
+        ))
+        XCTAssertGreaterThan(olderStrain.strainPct, youngStrain.strainPct)
+
+        // 3. Identical 42 ms sleeping HRV reflects MUCH stronger autonomic recovery for 64yo than for 19yo!
+        let recYoung = try XCTUnwrap(WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+            hrvMs: 42.0, rhrBpm: 56.0, respRpm: 15.0, spo2Pct: 97.5, wristTempDeltaC: 0.0,
+            lnHrvBaseline: PersonalBaselineStats(mean: log(youngNorms.hrvExpectedMs), sigma: 0.22, count: 5),
+            rhrBaseline: PersonalBaselineStats(mean: youngNorms.restingHrExpected, sigma: 3.0, count: 5),
+            respBaseline: PersonalBaselineStats(mean: 15.0, sigma: 0.6, count: 5),
+            profile: youngMale
+        ))
+        let recOlder = try XCTUnwrap(WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+            hrvMs: 42.0, rhrBpm: 56.0, respRpm: 15.0, spo2Pct: 97.5, wristTempDeltaC: 0.0,
+            lnHrvBaseline: PersonalBaselineStats(mean: log(olderNorms.hrvExpectedMs), sigma: 0.22, count: 5),
+            rhrBaseline: PersonalBaselineStats(mean: olderNorms.restingHrExpected, sigma: 3.0, count: 5),
+            respBaseline: PersonalBaselineStats(mean: 15.0, sigma: 0.6, count: 5),
+            profile: olderFemale
+        ))
+        XCTAssertGreaterThan(recOlder, recYoung + 15)
+
+        // 4. Identical 7h 20m sleep with 12% Deep scores higher for 64yo (meets age deep/duration norm) than 19yo!
+        let sleepYoung = WhoopPhysiologyEngine.computeBevelSleepScore(
+            asleepMinutes: 440, inBedMinutes: 465, deepMinutes: 53, remMinutes: 88, awakeMinutes: 25, awakeCount: 1,
+            hrDipPct: 12.0, targetMinutes: youngNorms.sleepTargetHours * 60.0,
+            deepTargetPct: youngNorms.deepTargetPct, remTargetPct: youngNorms.remTargetPct
+        )
+        let sleepOlder = WhoopPhysiologyEngine.computeBevelSleepScore(
+            asleepMinutes: 440, inBedMinutes: 465, deepMinutes: 53, remMinutes: 88, awakeMinutes: 25, awakeCount: 1,
+            hrDipPct: 12.0, targetMinutes: olderNorms.sleepTargetHours * 60.0,
+            deepTargetPct: olderNorms.deepTargetPct, remTargetPct: olderNorms.remTargetPct
+        )
+        XCTAssertGreaterThan(sleepOlder, sleepYoung)
+
+        // 5. Optimal effort target ceiling is higher for young recovery than 64yo
+        let youngRange = WhoopPhysiologyEngine.optimalTargetRange(for: 80, profile: youngMale)
+        let olderRange = WhoopPhysiologyEngine.optimalTargetRange(for: 80, profile: olderFemale)
+        XCTAssertGreaterThan(youngRange.upperBound, olderRange.upperBound)
+
+        // 6. Biological age evaluates against each person's OWN cohort norms
+        let olderBio = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: olderFemale, meanRhr: 55.0, meanHrv: 42.0, meanSleepHours: 7.6, meanSteps: 8500, vo2Max: 34.0
+        )
+        XCTAssertLessThan(olderBio.deltaYears, 0.0)
+
+        // 7. Backward-compatible Codable decoding of legacy v1 UserPhysiologyProfile JSON (without lastName/birthDateIso/profilePhotoPath)
+        let legacyJson = #"{"userName":"Unai","ageYears":22,"sex":"Hombre","weightKg":70,"heightCm":178,"onboardingCompleted":true}"#
+        let decoded = try JSONDecoder().decode(UserPhysiologyProfile.self, from: Data(legacyJson.utf8))
+        XCTAssertEqual(decoded.userName, "Unai")
+        XCTAssertEqual(decoded.lastName, "")
+        XCTAssertNil(decoded.birthDateIso)
+        XCTAssertEqual(decoded.profileSetupVersion, 0)
+    }
+
+    @MainActor
+    func testStoreRecomputesStoredHistoryImmediatelyWhenProfileAgeOrSexChanges() throws {
+        let store = ImprovingStore()
+        // First-ever launch MUST show onboarding carousel!
+        XCTAssertFalse(store.userProfile.onboardingCompleted)
+
+        var day = RealBiometricDaySummary(dateIso: "2026-11-23")
+        day.asleepMinutes = 440
+        day.inBedMinutes = 465
+        day.deepMinutes = 52
+        day.remMinutes = 86
+        day.hrvMs = 45.0
+        day.restingHrBpm = 56.0
+        day.activeKcal = 420
+        day.hrZoneMinutes = [12, 18, 12, 0, 0]
+        store.realHistory = ["2026-11-23": day]
+        store.hasImportedOrPairedRealData = true
+
+        var pYoung = UserPhysiologyProfile(userName: "Aitor", lastName: "Test", ageYears: 19, sex: .male, weightKg: 78, heightCm: 185)
+        pYoung.birthDateIso = "2007-04-01"
+        store.completeOnboarding(pYoung)
+        XCTAssertTrue(store.userProfile.onboardingCompleted)
+        let rec1 = try XCTUnwrap(store.realHistory["2026-11-23"]?.recoveryPct)
+        let strain1 = try XCTUnwrap(store.realHistory["2026-11-23"]?.strainPct)
+        let sleep1 = try XCTUnwrap(store.realHistory["2026-11-23"]?.sleepPct)
+
+        var pOlder = UserPhysiologyProfile(userName: "Aitor", lastName: "Test", ageYears: 65, sex: .female, weightKg: 56, heightCm: 158)
+        pOlder.birthDateIso = "1961-04-01"
+        pOlder.onboardingCompleted = true
+        store.updateProfile(pOlder)
+        let rec2 = try XCTUnwrap(store.realHistory["2026-11-23"]?.recoveryPct)
+        let strain2 = try XCTUnwrap(store.realHistory["2026-11-23"]?.strainPct)
+        let sleep2 = try XCTUnwrap(store.realHistory["2026-11-23"]?.sleepPct)
+
+        XCTAssertNotEqual(rec1, rec2)
+        XCTAssertGreaterThan(strain2, strain1)
+        XCTAssertGreaterThan(sleep2, sleep1)
+    }
 }

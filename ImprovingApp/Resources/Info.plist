@@ -71,5 +71,7 @@
 	<string>Improving lee tu sueño, variabilidad cardíaca (VFC), pulso en reposo, frecuencia respiratoria, SpO2 y entrenamientos de Apple Salud.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Improving necesita permiso de lectura de Apple Salud para calcular tu recuperación, sueño y esfuerzo.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Improving usa la fototeca únicamente cuando eliges una foto para tu avatar de perfil.</string>
 </dict>
 </plist>

@@ -10,6 +10,7 @@ struct FitnessScreen: View {
     @State private var showCalendarSheet: Bool = false
 
     var body: some View {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let cal = Calendar.current
         let todayStart = cal.startOfDay(for: Date())
         let stripOffsets = [-3, -2, -1, 0, 1, 2, 3]
@@ -268,8 +269,8 @@ struct FitnessScreen: View {
                                         value: strengthMin7,
                                         minVal: 0,
                                         maxVal: 240,
-                                        optimalStartFrac: 0.25,
-                                        optimalEndFrac: 0.70,
+                                        optimalStartFrac: min(max(Double(norms.weeklyStrengthGoalMin) / 240.0, 0.20), 0.55),
+                                        optimalEndFrac: min(max(Double(norms.weeklyStrengthGoalMin + 90) / 240.0, 0.55), 0.85),
                                         currentFrac: min(Double(strengthMin7) / 240.0, 1.0),
                                         hasData: hasStrength7
                                     )

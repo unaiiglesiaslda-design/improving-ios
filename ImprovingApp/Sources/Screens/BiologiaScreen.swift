@@ -8,7 +8,7 @@ struct BiologiaScreen: View {
     @State private var expandedCategoryId: String? = "sleep"
 
     var body: some View {
-        let chronologicalAge = store.userProfile.ageYears
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let recent30 = store.trailingCalendarSummaries(days: 30)
         let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
         let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
@@ -22,16 +22,18 @@ struct BiologiaScreen: View {
         let meanSleep = sleepVals.isEmpty ? nil : (sleepVals.reduce(0, +) / Double(sleepVals.count))
         let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
 
-        let bioDelta: Double = {
-            guard hasBioBase else { return 0 }
-            var delta = 0.0
-            if let r = meanRhr { delta += (r - 58.0) * 0.12 }
-            if let h = meanHrv { delta += (65.0 - h) * 0.04 }
-            if let s = meanSleep { delta += (7.5 - s) * 0.45 }
-            if let v = vo2Val { delta += (42.0 - v) * 0.14 }
-            return AppleHealthExportImporter.round1(min(max(delta, -6.0), 6.0))
-        }()
-        let bioAge = max(16.0, chronologicalAge + bioDelta)
+        let bioEval = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: store.userProfile,
+            meanRhr: meanRhr,
+            meanHrv: meanHrv,
+            meanSleepHours: meanSleep,
+            meanSteps: meanSteps,
+            vo2Max: vo2Val,
+            latestWeightKg: store.latestBodyWeightKg
+        )
+        let chronologicalAge = bioEval.chronoAgeYears
+        let bioDelta = hasBioBase ? bioEval.deltaYears : 0.0
+        let bioAge = hasBioBase ? bioEval.bioAgeYears : chronologicalAge
 
         let hrvSeries = recent30.map { $0.summary?.hrvMs }
         let rhrSeries = recent30.map { $0.summary?.restingHrBpm }
@@ -110,8 +112,8 @@ struct BiologiaScreen: View {
                                 deltaText: "",
                                 deltaUnit: "",
                                 positionFrac: min(max((avgS - 5.0) / 5.0, 0.05), 0.95),
-                                fillStartFrac: 0.40,
-                                fillEndFrac: 0.80,
+                                fillStartFrac: min(max((norms.sleepLowHours - 5.0) / 5.0, 0.10), 0.70),
+                                fillEndFrac: min(max((norms.sleepHighHours - 5.0) / 5.0, 0.45), 0.96),
                                 accentColor: BevelColors.bioTeal
                             )
                         }
@@ -136,8 +138,8 @@ struct BiologiaScreen: View {
                                 deltaText: "",
                                 deltaUnit: "",
                                 positionFrac: min(max(Double(avgSt) / 16000.0, 0.04), 0.96),
-                                fillStartFrac: 0.48,
-                                fillEndFrac: 0.85,
+                                fillStartFrac: min(max(Double(norms.dailyStepsGoal) / 16000.0, 0.25), 0.75),
+                                fillEndFrac: 0.90,
                                 accentColor: BevelColors.bioTeal
                             )
                         }
@@ -163,8 +165,8 @@ struct BiologiaScreen: View {
                                     deltaText: "",
                                     deltaUnit: "",
                                     positionFrac: min(max((v - 20.0) / 45.0, 0.05), 0.95),
-                                    fillStartFrac: 0.45,
-                                    fillEndFrac: 0.90,
+                                    fillStartFrac: min(max((norms.vo2GoodThreshold - 20.0) / 45.0, 0.10), 0.75),
+                                    fillEndFrac: min(max((norms.vo2ExcellentThreshold - 20.0) / 45.0, 0.35), 0.95),
                                     accentColor: BevelColors.amberStart
                                 )
                             }
@@ -178,8 +180,8 @@ struct BiologiaScreen: View {
                                     deltaText: "",
                                     deltaUnit: "",
                                     positionFrac: min(max((r - 40.0) / 50.0, 0.05), 0.95),
-                                    fillStartFrac: 0.05,
-                                    fillEndFrac: 0.35,
+                                    fillStartFrac: min(max((norms.rhrLowBpm - 40.0) / 50.0, 0.04), 0.50),
+                                    fillEndFrac: min(max((norms.rhrHighBpm - 40.0) / 50.0, 0.20), 0.80),
                                     accentColor: BevelColors.bioTeal
                                 )
                             }

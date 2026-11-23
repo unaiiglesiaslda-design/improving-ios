@@ -2,20 +2,68 @@ import Foundation
 import SwiftUI
 
 struct PersonalizedPhysiologyNorms: Equatable {
+    // 1. Anthropometry & Body Composition (Height + Weight + Age + Sex)
+    let bmi: Double
+    let bmiOptimalLow: Double
+    let bmiOptimalHigh: Double
+    let bmiStatusLabel: String
+    let healthyWeightLowKg: Double
+    let healthyWeightHighKg: Double
+    let optimalBodyFatLowPct: Double
+    let optimalBodyFatHighPct: Double
+    let optimalLeanMassLowPct: Double
+    let optimalLeanMassHighPct: Double
+
+    // 2. Cardiopulmonary & Autonomic Vitals (Age + Sex + Height + BMI)
     let maxHrBpm: Int
     let bmrKcal: Int
-    let sleepTargetHours: Double
-    let bmi: Double
     let hrvLowMs: Double
     let hrvHighMs: Double
+    let hrvExpectedMs: Double
     let rhrLowBpm: Double
     let rhrHighBpm: Double
+    let restingHrExpected: Double
     let respLowRpm: Double
     let respHighRpm: Double
+    let spo2LowPct: Double
+    let spo2HighPct: Double
+    let wristTempLowC: Double
+    let wristTempHighC: Double
+    let vo2GoodThreshold: Double
+    let vo2ExcellentThreshold: Double
+    let hrrGoodThresholdBpm: Int
+    let vo2CohortSubtitle: String
+
+    // 3. Sleep & Longevity Movement (NSF / AASM Age & Sex Bands)
     let sleepLowHours: Double
     let sleepHighHours: Double
-    let hydrationGoalLiters: Double
+    let sleepTargetHours: Double
+    let deepTargetPct: Double
+    let remTargetPct: Double
+    let dailyStepsGoal: Int
+    let weeklyZone23GoalMin: Int
+    let weeklyZone45GoalMin: Int
+    let weeklyStrengthGoalMin: Int
+
+    // 4. Metabolism, Macros, Hydration & Caffeine (IOM / EFSA / NIH)
+    let maintenanceCaloriesKcal: Int
     let proteinGoalG: Int
+    let fatGoalG: Int
+    let carbsGoalG: Int
+    let fiberGoalG: Int
+    let hydrationGoalLiters: Double
+    let caffeineLimitMg: Double
+}
+
+struct BiologicalAgeEvaluation: Equatable {
+    let chronoAgeYears: Double
+    let bioAgeYears: Double
+    let deltaYears: Double // negative = biologically younger than chronological age
+    let sleepDelta: Double
+    let activityDelta: Double
+    let fitnessDelta: Double
+    let autonomicDelta: Double
+    let bodyDelta: Double
 }
 
 struct PersonalBaselineStats: Equatable {
@@ -43,12 +91,15 @@ struct VitalEvaluation {
 enum WhoopPhysiologyEngine {
 
     static func computeMaxHeartRate(profile: UserPhysiologyProfile, observedPeakBpm: Int = 0) -> Int {
-        let tanaka = Int((208.0 - 0.7 * profile.ageYears).rounded())
-        return min(max(max(tanaka, observedPeakBpm), 130), 225)
+        let age = profile.effectiveAgeYears
+        let tanaka = Int((208.0 - 0.7 * age).rounded())
+        return min(max(max(tanaka, observedPeakBpm), 125), 225)
     }
 
     static func computeBmrKcalPerDay(profile: UserPhysiologyProfile) -> Int {
-        let w = profile.weightKg, h = profile.heightCm, a = profile.ageYears
+        let w = min(max(profile.weightKg, 32.0), 220.0)
+        let h = min(max(profile.heightCm, 130.0), 225.0)
+        let a = profile.effectiveAgeYears
         let bmr: Double
         switch profile.sex {
         case .male: bmr = 88.362 + 13.397 * w + 4.799 * h - 5.677 * a
@@ -58,35 +109,275 @@ enum WhoopPhysiologyEngine {
         return max(Int(bmr.rounded()), 1000)
     }
 
+    /// Master clinical & sports-physiology personalization engine (exact parity with Android `WhoopPhysiologyEngine.kt`).
+    /// Computes every optimal range, vital band, sleep duration/architecture target, VO2/HRR cohort,
+    /// macro/hydration/caffeine target, and movement goal from `(birthDate/age, sex, heightCm, weightKg)`.
     static func computePersonalizedNorms(profile: UserPhysiologyProfile) -> PersonalizedPhysiologyNorms {
+        let r1 = AppleHealthExportImporter.round1
+        let age = min(max(profile.effectiveAgeYears, 13.0), 95.0)
+        let weight = min(max(profile.weightKg, 32.0), 220.0)
+        let heightCm = min(max(profile.heightCm, 130.0), 225.0)
+        let heightM = heightCm / 100.0
+        let isFemale = profile.sex == .female
+        let isMale = profile.sex == .male
+        let isTeen = age < 18.0
+        let isSenior = age >= 65.0
+
+        // 1. BMI & Healthy Weight Range by Height & Age (WHO + geriatric lean-mass buffer)
+        let bmi = r1(weight / (heightM * heightM))
+        let (bmiOptLow, bmiOptHigh): (Double, Double) = {
+            if isTeen { return (17.5, 23.5) }
+            if isSenior { return (21.0, 27.0) }
+            return (18.5, 24.9)
+        }()
+        let healthyWeightLow = r1(bmiOptLow * heightM * heightM)
+        let healthyWeightHigh = r1(bmiOptHigh * heightM * heightM)
+        let bmiStatus: String = {
+            if bmi < bmiOptLow { return "Por debajo del rango" }
+            if bmi <= bmiOptHigh { return "Peso óptimo" }
+            if bmi <= bmiOptHigh + 4.5 { return "Por encima del rango" }
+            return "Peso elevado"
+        }()
+
+        // Optimal Body Fat % & Lean Mass % (ACE / Gallagher norms by Sex & Age decade)
+        let (bfLow, bfHigh): (Double, Double) = {
+            switch profile.sex {
+            case .male:
+                if age < 20.0 { return (8.0, 17.0) }
+                if age < 40.0 { return (10.0, 19.0) }
+                if age < 60.0 { return (11.0, 21.0) }
+                return (13.0, 24.0)
+            case .female:
+                if age < 20.0 { return (16.0, 25.0) }
+                if age < 40.0 { return (18.0, 27.0) }
+                if age < 60.0 { return (20.0, 30.0) }
+                return (22.0, 33.0)
+            case .nonBinary:
+                if age < 20.0 { return (12.0, 21.0) }
+                if age < 40.0 { return (14.0, 23.0) }
+                if age < 60.0 { return (15.5, 25.5) }
+                return (17.5, 28.5)
+            }
+        }()
+        let leanLow = r1(100.0 - bfHigh)
+        let leanHigh = r1(100.0 - bfLow)
+
+        // 2. Autonomic & Cardiopulmonary Vitals (HRV RMSSD, RHR, RR, SpO2, Skin Temp)
         let maxHr = computeMaxHeartRate(profile: profile)
+
+        // HRV RMSSD decays exponentially with age (Nunan / Shaffer & Ginsberg / WHOOP norms),
+        // slightly higher in young adult women (Koenig & Thayer 2016), dampened at high BMI
+        let hrvAgeBase = 88.0 * exp(-0.022 * max(0.0, age - 18.0))
+        let hrvSexAdj = (isFemale && age < 52.0) ? 2.5 : 0.0
+        let hrvBmiAdj = bmi > 26.5 ? -min((bmi - 26.5) * 0.85, 9.0) : 0.0
+        let hrvExpected = r1(min(max(hrvAgeBase + hrvSexAdj + hrvBmiAdj, 22.0), 105.0))
+        let hrvHalfBand = max(6.5, hrvExpected * 0.22)
+        let hrvLow = r1(max(hrvExpected - hrvHalfBand, 15.0))
+        let hrvHigh = r1(min(hrvExpected + hrvHalfBand, 135.0))
+
+        // Resting HR: sex stroke-volume offset (+3.5 bpm female), gentle age drift, height & BMI effects
+        let rhrSexBase: Double = switch profile.sex {
+        case .male: 54.0
+        case .female: 57.5
+        case .nonBinary: 55.8
+        }
+        let rhrAgeAdj = max(0.0, age - 24.0) * 0.11
+        let rhrHeightAdj = -min(max((heightCm - 172.0) * 0.08, -2.2), 2.2)
+        let rhrBmiAdj = bmi > 25.0 ? min((bmi - 25.0) * 0.45, 6.5) : 0.0
+        let rhrExpected = r1(min(max(rhrSexBase + rhrAgeAdj + rhrHeightAdj + rhrBmiAdj, 46.0), 74.0))
+        let rhrLow = r1(max(rhrExpected - 5.5, 40.0))
+        let rhrHigh = r1(min(rhrExpected + 6.5, 84.0))
+
+        // Nocturnal Respiratory Rate: slightly lower in taller frames (larger vital capacity)
+        let rrBase = 14.5
+            + (isFemale ? 0.4 : 0.0)
+            + (isTeen ? 0.5 : 0.0)
+            + (isSenior ? 0.5 : 0.0)
+            - min(max((heightCm - 172.0) * 0.025, -0.6), 0.6)
+        let rrLow = r1(min(max(rrBase - 1.4, 11.5), 16.0))
+        let rrHigh = r1(min(max(rrBase + 1.4, 14.5), 19.5))
+
+        // SpO2 & Wrist Skin Temp
+        let spo2Low = age >= 60.0 ? 94.5 : 95.5
+        let spo2High = age >= 60.0 ? 99.0 : 99.5
+        let tempSeniorShift = isSenior ? -0.15 : 0.0
+        let wristTempLow = r1((isFemale ? 35.4 : 35.3) + tempSeniorShift)
+        let wristTempHigh = r1((isFemale ? 36.3 : 36.1) + tempSeniorShift)
+
+        // VO2max & HRR targets by Age & Sex (FRIEND / ACSM standards)
+        let decadeDrop = (max(0.0, age - 24.0) / 10.0) * 3.2
+        let vo2Good = r1(max((isFemale ? 39.5 : 48.0) - decadeDrop, 22.0))
+        let vo2Excellent = r1(max((isFemale ? 45.2 : 55.2) - decadeDrop, 26.0))
+        let hrrGood = min(max(Int((32.0 - max(0.0, age - 30.0) * 0.25 - (isFemale ? 1.5 : 0.0)).rounded()), 16), 36)
+        let ageBandStr: String = {
+            if age < 20 { return "< 20" }
+            if age < 30 { return "20–29" }
+            if age < 40 { return "30–39" }
+            if age < 50 { return "40–49" }
+            if age < 60 { return "50–59" }
+            return "60+"
+        }()
+        let sexCohortStr = isFemale ? "mujeres" : (isMale ? "hombres" : "adultos")
+        let vo2Cohort = "Estandarizado para \(ageBandStr) años · \(sexCohortStr)"
+
+        // 3. Sleep Duration & Restorative Architecture (NSF / AASM / Ohayon age bands)
+        let femaleSleepAdj = isFemale ? 0.15 : 0.0
+        let (sleepLow, sleepHigh, sleepTargetRaw, deepTarget, remTarget): (Double, Double, Double, Double, Double) = {
+            if age < 18.0 { return (8.0, 10.0, 9.0, 20.0, 22.0) }
+            if age <= 25.0 { return (7.3, 9.0, 8.0, 18.0, 22.0) }
+            if age < 45.0 { return (7.0, 8.8, 7.8, 16.0, 21.0) }
+            if age < 65.0 { return (7.0, 8.5, 7.6, 13.5, 20.0) }
+            return (6.8, 8.3, 7.4, 11.5, 19.0)
+        }()
+        let sleepTarget = r1(sleepTargetRaw + femaleSleepAdj)
+
+        let stepsGoal: Int = {
+            if age < 18.0 { return 10_000 }
+            if age <= 45.0 { return 8_500 }
+            if age < 65.0 { return 8_000 }
+            return 7_000
+        }()
+        let weeklyZ23 = isTeen ? 180 : 150
+        let weeklyZ45 = age >= 60.0 ? 20 : 30
+        let weeklyStrength = age >= 50.0 ? 90 : 60
+
+        // 4. Metabolism, Macros, Hydration & Caffeine (IOM / EFSA / NIH)
         let bmr = computeBmrKcalPerDay(profile: profile)
-        let hm = max(profile.heightCm / 100.0, 1.2)
-        let bmi = AppleHealthExportImporter.round1(profile.weightKg / (hm * hm))
-        let hrvAge = max(25.0, min(105.0, 88.0 * exp(-0.020 * max(0.0, profile.ageYears - 18.0))))
-        let hrvLow = AppleHealthExportImporter.round1(hrvAge * 0.78)
-        let hrvHigh = AppleHealthExportImporter.round1(hrvAge * 1.24)
-        let rhrBase = profile.sex == .female ? 57.0 : 53.0
-        let rhrLow = AppleHealthExportImporter.round1(rhrBase - 6.0)
-        let rhrHigh = AppleHealthExportImporter.round1(rhrBase + 7.0)
-        let sleepTarget = profile.ageYears < 18 ? 8.8 : 8.0
-        let hydro = AppleHealthExportImporter.round1(max(profile.weightKg * 0.037, 2.2))
+        let activityMult = age >= 65.0 ? 1.32 : (age < 25.0 ? 1.42 : 1.38)
+        let maintenanceKcal = min(max(Int((Double(bmr) * activityMult).rounded()), 1300), 4500)
+        let effectiveWeightForProtein = weight > healthyWeightHigh
+            ? healthyWeightHigh + (weight - healthyWeightHigh) * 0.40
+            : weight
+        let proteinPerKg: Double = {
+            if age >= 55.0 { return 1.95 } // Anabolic resistance buffer in older adults
+            return isFemale ? 1.75 : 1.85
+        }()
+        let proteinGoal = min(max(Int((effectiveWeightForProtein * proteinPerKg).rounded()), 65), 250)
+        let fatPerKg = isFemale ? 0.98 : 0.90
+        let fatGoal = min(max(Int((effectiveWeightForProtein * fatPerKg).rounded()), 45), 130)
+        let carbsGoal = min(max(Int((Double(maintenanceKcal - (proteinGoal * 4 + fatGoal * 9)) / 4.0).rounded()), 90), 480)
+        let fiberGoal = min(max(Int((Double(maintenanceKcal) / 1000.0 * 14.0).rounded()), 22), 42)
+
+        let rawHydrationL = (weight * 0.035) + (isMale ? 0.15 : 0.0) + (heightCm >= 182.0 ? 0.15 : 0.0)
+        let hydrationL = r1(min(max(rawHydrationL, 1.8), 4.2))
+        let caffeineLimit: Double = isTeen
+            ? Double(Int((min(weight * 2.5, 100.0) / 10.0).rounded()) * 10)
+            : Double(Int((min(weight * 5.5, 400.0) / 10.0).rounded()) * 10)
 
         return PersonalizedPhysiologyNorms(
+            bmi: bmi,
+            bmiOptimalLow: bmiOptLow,
+            bmiOptimalHigh: bmiOptHigh,
+            bmiStatusLabel: bmiStatus,
+            healthyWeightLowKg: healthyWeightLow,
+            healthyWeightHighKg: healthyWeightHigh,
+            optimalBodyFatLowPct: bfLow,
+            optimalBodyFatHighPct: bfHigh,
+            optimalLeanMassLowPct: leanLow,
+            optimalLeanMassHighPct: leanHigh,
             maxHrBpm: maxHr,
             bmrKcal: bmr,
-            sleepTargetHours: sleepTarget,
-            bmi: bmi,
             hrvLowMs: hrvLow,
             hrvHighMs: hrvHigh,
+            hrvExpectedMs: hrvExpected,
             rhrLowBpm: rhrLow,
             rhrHighBpm: rhrHigh,
-            respLowRpm: 13.5,
-            respHighRpm: 16.8,
-            sleepLowHours: 7.0,
-            sleepHighHours: 9.0,
-            hydrationGoalLiters: hydro,
-            proteinGoalG: max(Int((profile.weightKg * 1.8).rounded()), 95)
+            restingHrExpected: rhrExpected,
+            respLowRpm: rrLow,
+            respHighRpm: rrHigh,
+            spo2LowPct: spo2Low,
+            spo2HighPct: spo2High,
+            wristTempLowC: wristTempLow,
+            wristTempHighC: wristTempHigh,
+            vo2GoodThreshold: vo2Good,
+            vo2ExcellentThreshold: vo2Excellent,
+            hrrGoodThresholdBpm: hrrGood,
+            vo2CohortSubtitle: vo2Cohort,
+            sleepLowHours: sleepLow,
+            sleepHighHours: sleepHigh,
+            sleepTargetHours: sleepTarget,
+            deepTargetPct: deepTarget,
+            remTargetPct: remTarget,
+            dailyStepsGoal: stepsGoal,
+            weeklyZone23GoalMin: weeklyZ23,
+            weeklyZone45GoalMin: weeklyZ45,
+            weeklyStrengthGoalMin: weeklyStrength,
+            maintenanceCaloriesKcal: maintenanceKcal,
+            proteinGoalG: proteinGoal,
+            fatGoalG: fatGoal,
+            carbsGoalG: carbsGoal,
+            fiberGoalG: fiberGoal,
+            hydrationGoalLiters: hydrationL,
+            caffeineLimitMg: caffeineLimit
+        )
+    }
+
+    /// Computes Biological Age calibrated strictly against the user's OWN age, sex, height, and weight norms
+    /// (so a 62-year-old is evaluated against 62-year-old clinical norms, NOT 24-year-old norms!).
+    static func computeBiologicalAge(
+        profile: UserPhysiologyProfile,
+        meanRhr: Double?,
+        meanHrv: Double?,
+        meanSleepHours: Double?,
+        meanSteps: Int?,
+        vo2Max: Double?,
+        latestWeightKg: Double? = nil
+    ) -> BiologicalAgeEvaluation {
+        let norms = computePersonalizedNorms(profile: profile)
+        let chrono = profile.effectiveAgeYears
+
+        var sleepDelta = 0.0
+        if let s = meanSleepHours {
+            // Optimal around user's age-specific target; penalties for chronic short sleep or excessive oversleep
+            let deficit = norms.sleepTargetHours - s
+            sleepDelta = deficit >= 0
+                ? min(deficit * 0.85, 2.2)
+                : max(deficit * 0.45, -1.2)
+        }
+
+        var activityDelta = 0.0
+        if let st = meanSteps {
+            let ratio = Double(st) / Double(max(norms.dailyStepsGoal, 4000))
+            activityDelta = min(max((1.0 - ratio) * 1.8, -1.6), 2.0)
+        }
+
+        var fitnessDelta = 0.0
+        if let v = vo2Max {
+            fitnessDelta += min(max((norms.vo2GoodThreshold - v) * 0.18, -2.5), 2.8)
+        }
+        if let r = meanRhr {
+            fitnessDelta += min(max((r - norms.restingHrExpected) * 0.14, -1.8), 2.2)
+        }
+
+        var autonomicDelta = 0.0
+        if let h = meanHrv, h > 2.0 {
+            let lnDiff = log(norms.hrvExpectedMs) - log(h)
+            autonomicDelta = min(max(lnDiff * 2.2, -1.8), 2.2)
+        }
+
+        var bodyDelta = 0.0
+        let w = latestWeightKg ?? profile.weightKg
+        let hm = max(profile.heightCm / 100.0, 1.2)
+        let curBmi = w / (hm * hm)
+        if curBmi > norms.bmiOptimalHigh {
+            bodyDelta = min((curBmi - norms.bmiOptimalHigh) * 0.25, 2.2)
+        } else if curBmi < norms.bmiOptimalLow {
+            bodyDelta = min((norms.bmiOptimalLow - curBmi) * 0.22, 1.4)
+        }
+
+        let rawTotal = sleepDelta + activityDelta + fitnessDelta + autonomicDelta + bodyDelta
+        let clampedDelta = AppleHealthExportImporter.round1(min(max(rawTotal, -7.5), 7.5))
+        let bioAge = AppleHealthExportImporter.round1(max(14.0, chrono + clampedDelta))
+
+        return BiologicalAgeEvaluation(
+            chronoAgeYears: AppleHealthExportImporter.round1(chrono),
+            bioAgeYears: bioAge,
+            deltaYears: clampedDelta,
+            sleepDelta: AppleHealthExportImporter.round1(sleepDelta),
+            activityDelta: AppleHealthExportImporter.round1(activityDelta),
+            fitnessDelta: AppleHealthExportImporter.round1(fitnessDelta),
+            autonomicDelta: AppleHealthExportImporter.round1(autonomicDelta),
+            bodyDelta: AppleHealthExportImporter.round1(bodyDelta)
         )
     }
 
@@ -313,7 +604,8 @@ enum WhoopPhysiologyEngine {
 
     // MARK: - Bevel-Aligned Adaptive Recovery % (Zero Fabricated Sensors, Log-HRV + Sleeping RHR Z-Score!)
 
-    /// Computes Bevel-aligned Recovery (1...99%) strictly from sensors that were ACTUALLY measured on this day.
+    /// Computes Bevel-aligned Recovery (1...99%) strictly from sensors that were ACTUALLY measured on this day,
+    /// incorporating personal 60-day rolling baselines AND optional age/sex/body cohort calibration when `profile` is provided.
     /// Returns `nil` if NEITHER HRV nor RHR was recorded.
     static func computeBevelRecoveryPercent(
         hrvMs: Double?,
@@ -323,24 +615,48 @@ enum WhoopPhysiologyEngine {
         wristTempDeltaC: Double?,
         lnHrvBaseline: PersonalBaselineStats,
         rhrBaseline: PersonalBaselineStats,
-        respBaseline: PersonalBaselineStats
+        respBaseline: PersonalBaselineStats,
+        profile: UserPhysiologyProfile? = nil
     ) -> Int? {
         guard hrvMs != nil || rhrBpm != nil else { return nil }
 
-        // Bevel weights: ~60% Sleeping HRV (log-normal z-score) + ~35% Sleeping RHR + ~5% secondary vitals if abnormal
+        let profileNorms = profile.map { computePersonalizedNorms(profile: $0) }
+        // Blend 85% personal rolling baseline + 15% age/sex/body expected physiology so autonomic reserve
+        // reflects that e.g. 45 ms HRV has a different physiological meaning at 20 vs 62 years old!
+        let cohortWeight: Double = {
+            guard profileNorms != nil else { return 0.0 }
+            if lnHrvBaseline.count < 7 { return 0.30 }
+            return 0.15
+        }()
+
+        // Bevel weights: ~62% Sleeping HRV (log-normal z-score) + ~33% Sleeping RHR + ~5% secondary vitals
         var weightedZ = 0.0
         var totalWeight = 0.0
 
         if let hrv = hrvMs, hrv > 2.0 {
-            let zHrv = (log(hrv) - lnHrvBaseline.mean) / max(lnHrvBaseline.sigma, 0.12)
-            let clampedZ = min(max(zHrv, -2.8), 2.8)
+            let personalZ = (log(hrv) - lnHrvBaseline.mean) / max(lnHrvBaseline.sigma, 0.12)
+            let effZ: Double
+            if let norms = profileNorms, cohortWeight > 0 {
+                let cohortZ = (log(hrv) - log(max(norms.hrvExpectedMs, 15.0))) / 0.28
+                effZ = (1.0 - cohortWeight) * personalZ + cohortWeight * cohortZ
+            } else {
+                effZ = personalZ
+            }
+            let clampedZ = min(max(effZ, -2.8), 2.8)
             weightedZ += 0.62 * clampedZ
             totalWeight += 0.62
         }
 
         if let rhr = rhrBpm, rhr > 25.0 {
-            let zRhr = (rhrBaseline.mean - rhr) / max(rhrBaseline.sigma, 1.8)
-            let clampedZ = min(max(zRhr, -2.8), 2.8)
+            let personalZ = (rhrBaseline.mean - rhr) / max(rhrBaseline.sigma, 1.8)
+            let effZ: Double
+            if let norms = profileNorms, cohortWeight > 0 {
+                let cohortZ = (norms.restingHrExpected - rhr) / 5.0
+                effZ = (1.0 - cohortWeight) * personalZ + cohortWeight * cohortZ
+            } else {
+                effZ = personalZ
+            }
+            let clampedZ = min(max(effZ, -2.8), 2.8)
             weightedZ += 0.33 * clampedZ
             totalWeight += 0.33
         }
@@ -361,8 +677,9 @@ enum WhoopPhysiologyEngine {
         var score = 100.0 / (1.0 + exp(-1.18 * (normalizedZ + 0.42)))
 
         // Secondary clinical stress penalties ONLY when genuinely measured and abnormal
-        if let spo2 = spo2Pct, spo2 < 95.0 {
-            score -= (95.0 - spo2) * 3.2
+        let spo2Floor = profileNorms?.spo2LowPct ?? 95.0
+        if let spo2 = spo2Pct, spo2 < spo2Floor {
+            score -= (spo2Floor - spo2) * 3.2
         }
         if let tempD = wristTempDeltaC, abs(tempD) > 0.55 {
             score -= (abs(tempD) - 0.55) * 14.0
@@ -424,14 +741,16 @@ enum WhoopPhysiologyEngine {
         let hrr = max(maxHr - rhrBpm, 40.0)
         let bmr = Double(computeBmrKcalPerDay(profile: profile))
 
-        // 1. HR-zone Banister TRIMP (exact Z1..Z5 intensity weights)
+        // 1. HR-zone Banister TRIMP (exact Z1..Z5 intensity weights, adjusted for age cardiovascular load)
+        let age = profile.effectiveAgeYears
+        let ageZoneFactor = 1.0 + min(max((age - 25.0) * 0.0045, -0.04), 0.22)
         let zoneWeights = [0.65, 1.35, 2.35, 3.80, 5.60]
         var zoneTrimp = 0.0
         for (idx, mins) in hrZoneMinutes.prefix(5).enumerated() where mins > 0 {
-            zoneTrimp += Double(mins) * zoneWeights[idx]
+            zoneTrimp += Double(mins) * zoneWeights[idx] * ageZoneFactor
         }
 
-        // 2. Workout physiological load (uses real workout HR if present, otherwise real workout kcal/duration)
+        // 2. Workout physiological load (uses real workout HR relative to Tanaka HRR, otherwise BMR-normalized kcal)
         var workoutLoad = 0.0
         for w in workouts {
             if w.avgHrBpm > 0 {
@@ -439,9 +758,9 @@ enum WhoopPhysiologyEngine {
                 let rate = frac * 0.64 * exp(b * frac)
                 workoutLoad += Double(w.durationMin) * rate * 1.15
             } else if w.kcal > 0 {
-                workoutLoad += Double(w.kcal) * 0.095
+                workoutLoad += (Double(w.kcal) / max(bmr, 1100.0)) * 165.0
             } else {
-                workoutLoad += Double(w.durationMin) * 0.55
+                workoutLoad += Double(w.durationMin) * 0.55 * ageZoneFactor
             }
         }
 
@@ -482,7 +801,7 @@ enum WhoopPhysiologyEngine {
         return (s21, pct)
     }
 
-    // MARK: - Bevel-Calibrated Sleep Score % (Strictly Measured Components Only!)
+    // MARK: - Bevel-Calibrated Sleep Score % (Strictly Measured Components + Age/Sex Restorative Targets!)
 
     static func computeBevelSleepScore(
         asleepMinutes: Int,
@@ -492,12 +811,14 @@ enum WhoopPhysiologyEngine {
         awakeMinutes: Int?,
         awakeCount: Int,
         hrDipPct: Double?,
-        targetMinutes: Double = 480.0
+        targetMinutes: Double = 480.0,
+        deepTargetPct: Double = 16.0,
+        remTargetPct: Double = 20.0
     ) -> Int {
         var scoreSum = 0.0
         var weightSum = 0.0
 
-        // 1. Duration (45% weight) — 100% at targetMinutes
+        // 1. Duration (45% weight) — 100% at age-personalized targetMinutes
         let durScore = min(max(Double(asleepMinutes) / max(targetMinutes, 300.0), 0.10), 1.0) * 100.0
         scoreSum += 0.45 * durScore
         weightSum += 0.45
@@ -505,18 +826,18 @@ enum WhoopPhysiologyEngine {
         // 2. Efficiency (15% weight) — only if inBedMinutes exists
         if let bed = inBedMinutes, bed > 0 {
             let effPct = min(max(Double(asleepMinutes) / Double(bed) * 100.0, 40.0), 100.0)
-            // Bevel treats ≥ 94% efficiency as 100 score, 75% as ~50
+            // Bevel treats >= 94% efficiency as 100 score, 75% as ~50
             let effScore = min(max((effPct - 60.0) / 35.0, 0.0), 1.0) * 100.0
             scoreSum += 0.15 * effScore
             weightSum += 0.15
         }
 
-        // 3. Restorative stages (REM + Deep, 20% weight) — only if stage data exists!
+        // 3. Restorative stages (REM + Deep, 20% weight) — targets adapt cleanly with age!
         if let d = deepMinutes, let r = remMinutes, (d + r) > 0, asleepMinutes > 0 {
-            let deepPct = Double(d) / Double(asleepMinutes) * 100.0 // target ~15-20%
-            let remPct = Double(r) / Double(asleepMinutes) * 100.0  // target ~20-25%
-            let deepScore = min(max(deepPct / 16.0, 0.0), 1.0) * 100.0
-            let remScore = min(max(remPct / 20.0, 0.0), 1.0) * 100.0
+            let deepPct = Double(d) / Double(asleepMinutes) * 100.0
+            let remPct = Double(r) / Double(asleepMinutes) * 100.0
+            let deepScore = min(max(deepPct / max(deepTargetPct, 10.0), 0.0), 1.0) * 100.0
+            let remScore = min(max(remPct / max(remTargetPct, 14.0), 0.0), 1.0) * 100.0
             scoreSum += 0.20 * (0.5 * deepScore + 0.5 * remScore)
             weightSum += 0.20
         }
@@ -539,18 +860,32 @@ enum WhoopPhysiologyEngine {
         return min(max(Int(finalScore.rounded()), 10), 100)
     }
 
-    static func optimalTargetRange(for recoveryPct: Int) -> ClosedRange<Double> {
-        switch recoveryPct {
-        case 70...100: return 0.62...0.84
-        case 45..<70: return 0.42...0.65
-        default: return 0.22...0.45
+    static func optimalTargetRange(for recoveryPct: Int, profile: UserPhysiologyProfile? = nil) -> ClosedRange<Double> {
+        let base: ClosedRange<Double> = switch recoveryPct {
+        case 70...100: 0.62...0.84
+        case 45..<70: 0.42...0.65
+        default: 0.22...0.45
         }
+        guard let p = profile else { return base }
+        let age = p.effectiveAgeYears
+        // Gentle age-calibrated training capacity shift (younger adults tolerate slightly higher ceiling; 55+ protects autonomic reserve)
+        let shift: Double = {
+            if age < 25.0 { return 0.03 }
+            if age <= 45.0 { return 0.0 }
+            if age < 60.0 { return -0.04 }
+            return -0.08
+        }()
+        let lo = min(max(base.lowerBound + shift, 0.14), 0.78)
+        let hi = min(max(base.upperBound + shift, lo + 0.16), 0.92)
+        return lo...hi
     }
 
     // MARK: - Preview Simulator (ONLY used before user imports Apple Health or connects a device; continuous energy!)
 
     static func generateTwoYearSimulatedHistory(profile: UserPhysiologyProfile, endDate: Date = Date()) -> [String: RealBiometricDaySummary] {
         let totalDays = 90 // Lightweight 90-day preview before real data is imported
+        let norms = computePersonalizedNorms(profile: profile)
+        let targetSleepMin = norms.sleepTargetHours * 60.0
         let cal = Calendar.current
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
@@ -575,25 +910,29 @@ enum WhoopPhysiologyEngine {
             let hash = ((i &* 1_103_515_245 &+ 12_345) >> 16) & 0x7FFF
             let noise = Double((hash % 200) - 100) / 100.0
 
-            let hrv = AppleHealthExportImporter.round1(min(max(66.0 + progress * 8.5 + w2 * 4.5 + noise * 6.0, 42.0), 104.0))
-            let rhr = AppleHealthExportImporter.round1(min(max(52.0 - progress * 2.5 - w2 * 1.1 + noise * 1.8, 43.0), 63.0))
-            let resp = AppleHealthExportImporter.round1(min(max(15.1 + noise * 0.4, 13.5), 17.2))
-            let spo2 = AppleHealthExportImporter.round1(min(max(96.6 + noise * 1.0, 94.8), 99.0))
+            let hrv = AppleHealthExportImporter.round1(min(max(norms.hrvExpectedMs * 0.96 + progress * 6.5 + w2 * 4.0 + noise * 5.5, 18.0), 125.0))
+            let rhr = AppleHealthExportImporter.round1(min(max(norms.restingHrExpected - progress * 2.0 - w2 * 1.1 + noise * 1.8, 40.0), 78.0))
+            let respCenter = (norms.respLowRpm + norms.respHighRpm) / 2.0
+            let resp = AppleHealthExportImporter.round1(min(max(respCenter + noise * 0.4, 11.5), 19.0))
+            let spo2 = AppleHealthExportImporter.round1(min(max(norms.spo2LowPct + 1.4 + noise * 0.9, 93.5), 99.5))
             let tempDelta = AppleHealthExportImporter.round1(min(max(w2 * 0.14 + noise * 0.18, -0.4), 0.5))
-            let tempAbs = AppleHealthExportImporter.round1(35.7 + tempDelta)
+            let tempAbs = AppleHealthExportImporter.round1(((norms.wristTempLowC + norms.wristTempHighC) / 2.0) + tempDelta)
 
             let weekday = cal.component(.weekday, from: date)
             let isWeekend = (weekday == 1 || weekday == 7)
-            let asleepMin = min(max(Int((440.0 + (isWeekend ? 28.0 : 0.0) + w1 * 18.0 + noise * 22.0).rounded()), 350), 530)
+            let asleepMin = min(max(Int((targetSleepMin * 0.94 + (isWeekend ? 26.0 : 0.0) + w1 * 16.0 + noise * 20.0).rounded()), 330), 600)
             let inBedMin = asleepMin + 16 + (hash % 12)
-            let deepMin = Int((Double(asleepMin) * 0.17).rounded())
-            let remMin = Int((Double(asleepMin) * 0.22).rounded())
+            let deepMin = Int((Double(asleepMin) * (norms.deepTargetPct / 100.0)).rounded())
+            let remMin = Int((Double(asleepMin) * (norms.remTargetPct / 100.0)).rounded())
             let awakeMin = max(inBedMin - asleepMin, 6)
-            let coreMin = max(asleepMin - deepMin - remMin, 120)
+            let coreMin = max(asleepMin - deepMin - remMin, 110)
             let sleepPct = computeBevelSleepScore(
                 asleepMinutes: asleepMin, inBedMinutes: inBedMin,
                 deepMinutes: deepMin, remMinutes: remMin,
-                awakeMinutes: awakeMin, awakeCount: 2, hrDipPct: 13.5
+                awakeMinutes: awakeMin, awakeCount: 2, hrDipPct: 13.5,
+                targetMinutes: targetSleepMin,
+                deepTargetPct: norms.deepTargetPct,
+                remTargetPct: norms.remTargetPct
             )
 
             let trainFactor: Double = switch weekday {
@@ -637,11 +976,14 @@ enum WhoopPhysiologyEngine {
             let activeKcal = wKcal + 280 + (hash % 180)
             let strainTuple = computeBevelStrain(profile: profile, rhrBpm: rhr, hrZoneMinutes: zones, workouts: workouts, activeKcal: Double(activeKcal)) ?? (4.0, 20)
 
-            let recPct = computeRecoveryPercent(
+            let recPct = computeBevelRecoveryPercent(
                 hrvMs: hrv, rhrBpm: rhr, respRpm: resp, spo2Pct: spo2,
-                wristTempDeltaC: tempDelta, sleepScorePct: sleepPct,
-                hrvMean: 70.0, hrvSigma: 11.0, rhrMean: 51.0, rhrSigma: 3.0
-            )
+                wristTempDeltaC: tempDelta,
+                lnHrvBaseline: PersonalBaselineStats(mean: log(max(norms.hrvExpectedMs, 15.0)), sigma: 0.20, count: 30),
+                rhrBaseline: PersonalBaselineStats(mean: norms.restingHrExpected, sigma: 3.0, count: 30),
+                respBaseline: PersonalBaselineStats(mean: respCenter, sigma: 0.7, count: 30),
+                profile: profile
+            ) ?? 65
             let stressBase = min(max(Int((22.0 + (100.0 - Double(recPct)) * 0.22 + Double(strainTuple.strainPct) * 0.18).rounded()), 12), 68)
 
             // Continuous 5-minute stress & energy (carries carriedEnergy seamlessly across midnight!)
@@ -767,16 +1109,16 @@ enum WhoopPhysiologyEngine {
                 coreMinutes: coreMin,
                 awakeMinutes: awakeMin,
                 sleepPct: sleepPct,
-                sleepDebtMinutes: max(480 - asleepMin, 0),
+                sleepDebtMinutes: max(Int(targetSleepMin.rounded()) - asleepMin, 0),
                 sleepSession: sleepDetail,
                 strain21: strainTuple.strain21,
                 strainPct: strainTuple.strainPct,
                 recoveryPct: recPct,
                 stressScore: stressBase,
                 energyBankPercent: Int(curE.rounded()),
-                stepsCount: 7400 + (hash % 5200),
-                vo2MaxMlKgMin: AppleHealthExportImporter.round1(42.0 + progress * 2.4),
-                hrRecoveryBpm: AppleHealthExportImporter.round1(27.0 + progress * 3.0),
+                stepsCount: max(norms.dailyStepsGoal - 1200 + (hash % 3800), 3000),
+                vo2MaxMlKgMin: AppleHealthExportImporter.round1(norms.vo2GoodThreshold + progress * 2.2),
+                hrRecoveryBpm: AppleHealthExportImporter.round1(Double(norms.hrrGoodThresholdBpm) + progress * 2.5),
                 activeKcal: activeKcal,
                 daylightMinutes: 25 + (hash % 30),
                 sleepNoiseOver50Db: (hash % 5 == 0),

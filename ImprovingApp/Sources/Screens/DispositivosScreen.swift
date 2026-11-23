@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PhotosUI
 import UniformTypeIdentifiers
 
 struct DispositivosScreen: View {
@@ -14,13 +15,177 @@ struct DispositivosScreen: View {
     @State private var shortcutNameDraft: String = "Sync Improving (Automático)"
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
+    @State private var profileSavedBanner: Bool = false
     @State private var darkToggle: Bool = BevelColors.isDarkMode
 
+    // Editable Personal Physiology Profile + Avatar Photo Picker
+    @State private var profileDraft: UserPhysiologyProfile = UserPhysiologyProfile()
+    @State private var birthDateDraft: Date = Date()
+    @State private var selectedAvatarPhoto: PhotosPickerItem? = nil
+    @State private var savingAvatarPhoto: Bool = false
+
+    private var minBirthDate: Date {
+        Calendar.current.date(byAdding: .year, value: -95, to: Date()) ?? Date()
+    }
+    private var maxBirthDate: Date {
+        Calendar.current.date(byAdding: .year, value: -13, to: Date()) ?? Date()
+    }
+
     var body: some View {
-        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: profileDraft)
+        let exactAge = Int(profileDraft.effectiveAgeYears.rounded(.down))
+        let sleepH = Int(norms.sleepTargetHours)
+        let sleepM = Int(((norms.sleepTargetHours - Double(sleepH)) * 60.0).rounded())
+
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 DetailSheetHeader(title: "Dispositivos y Ajustes", onBack: onBack)
+
+                // Personal Physiological Profile & Photo Editor Card
+                BevelCard {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(spacing: 14) {
+                            PhotosPicker(selection: $selectedAvatarPhoto, matching: .images, photoLibrary: .shared()) {
+                                ZStack(alignment: .bottomTrailing) {
+                                    UserProfileAvatarView(
+                                        photoPath: profileDraft.profilePhotoPath,
+                                        initials: profileDraft.initials,
+                                        size: 64,
+                                        showGradientRing: true,
+                                        ringWidth: 2.4
+                                    )
+                                    Image(systemName: "camera.fill")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 22, height: 22)
+                                        .background(Circle().fill(BevelColors.emeraldEnd))
+                                        .overlay(Circle().strokeBorder(BevelColors.card, lineWidth: 1.8))
+                                        .offset(x: 2, y: 2)
+                                }
+                            }
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(profileDraft.fullName.isEmpty ? "Tu Perfil Fisiológico" : profileDraft.fullName)
+                                    .font(ImprovingFont.cardTitle(16))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("\(exactAge) años · \(profileDraft.sex.rawValue) · \(Int(profileDraft.heightCm.rounded())) cm · \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), profileDraft.weightKg)) kg")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+
+                                HStack(spacing: 8) {
+                                    PhotosPicker(selection: $selectedAvatarPhoto, matching: .images, photoLibrary: .shared()) {
+                                        Text(savingAvatarPhoto ? "Guardando…" : (profileDraft.profilePhotoPath != nil ? "Cambiar foto" : "Añadir foto"))
+                                            .font(ImprovingFont.caption(11))
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(BevelColors.skyBlue)
+                                    }
+                                    if profileDraft.profilePhotoPath != nil {
+                                        Button("Quitar") {
+                                            ProfilePhotoStorage.deleteSavedPhotos()
+                                            profileDraft.profilePhotoPath = nil
+                                            store.updateProfile(profileDraft)
+                                        }
+                                        .font(ImprovingFont.caption(11))
+                                        .foregroundColor(BevelColors.textMuted)
+                                    }
+                                }
+                            }
+                            Spacer()
+                        }
+
+                        HStack(spacing: 10) {
+                            TextField("Nombre", text: $profileDraft.userName)
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .textInputAutocapitalization(.words)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                            TextField("Apellido", text: $profileDraft.lastName)
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .textInputAutocapitalization(.words)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                        }
+
+                        HStack {
+                            Text("Fecha de nacimiento")
+                                .font(ImprovingFont.caption(12.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                            Spacer()
+                            DatePicker(
+                                "",
+                                selection: $birthDateDraft,
+                                in: minBirthDate...maxBirthDate,
+                                displayedComponents: .date
+                            )
+                            .labelsHidden()
+                            .environment(\.locale, Locale(identifier: "es_ES"))
+                        }
+
+                        HStack(spacing: 8) {
+                            ForEach(BiologicalSexOption.allCases, id: \.self) { opt in
+                                let active = profileDraft.sex == opt
+                                Button {
+                                    profileDraft.sex = opt
+                                } label: {
+                                    Text(opt.rawValue)
+                                        .font(ImprovingFont.caption(12))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                        .background(RoundedRectangle(cornerRadius: 10).fill(active ? BevelColors.emeraldEnd : BevelColors.cardSubtle))
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 10) {
+                            compactStepper("Altura", "\(Int(profileDraft.heightCm.rounded())) cm",
+                                           onMinus: { profileDraft.heightCm = max(135, profileDraft.heightCm - 1) },
+                                           onPlus: { profileDraft.heightCm = min(220, profileDraft.heightCm + 1) })
+                            compactStepper("Peso", String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), profileDraft.weightKg),
+                                           onMinus: { profileDraft.weightKg = max(35, ((profileDraft.weightKg - 0.5) * 10).rounded() / 10) },
+                                           onPlus: { profileDraft.weightKg = min(180, ((profileDraft.weightKg + 0.5) * 10).rounded() / 10) })
+                        }
+
+                        HStack(spacing: 10) {
+                            Button {
+                                profileDraft.userName = profileDraft.userName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                profileDraft.lastName = profileDraft.lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                profileDraft.setBirthDate(birthDateDraft)
+                                profileDraft.profileSetupVersion = 2
+                                profileDraft.onboardingCompleted = true
+                                store.updateProfile(profileDraft)
+                                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                profileSavedBanner = true
+                            } label: {
+                                Text("Guardar y recalcular métricas")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 10)
+                                    .background(Capsule().fill(BevelColors.emeraldEnd))
+                            }
+
+                            if profileSavedBanner {
+                                Label("Actualizado", systemImage: "checkmark.circle.fill")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.greenPrimary)
+                            }
+                            Spacer()
+                        }
+
+                        Text("Calibración activa: VFC esperada \(Int(norms.hrvExpectedMs.rounded())) ms · Sueño objetivo \(sleepH)h \(String(format: "%02d", sleepM))m · IMC \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), norms.bmi)) (\(norms.bmiStatusLabel))")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
 
                 // Zero-Entitlement Automatic Sync via Apple Shortcuts (Atajos) & Files Folder
                 BevelCard {
@@ -375,6 +540,21 @@ struct DispositivosScreen: View {
                             Spacer()
                             Text("\(norms.bmrKcal) kcal").font(ImprovingFont.cardTitle(14)).monospacedDigit().foregroundColor(BevelColors.textPrimary)
                         }
+
+                        Divider().background(BevelColors.divider)
+
+                        Button {
+                            onBack()
+                            store.replayOnboarding()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "sparkles.tv")
+                                Text("Ver presentación inicial de nuevo")
+                            }
+                            .font(ImprovingFont.caption(12.5))
+                            .fontWeight(.semibold)
+                            .foregroundColor(BevelColors.skyBlue)
+                        }
                     }
                     .padding(16)
                 }
@@ -384,12 +564,37 @@ struct DispositivosScreen: View {
         }
         .background(BevelColors.canvas)
         .onAppear {
+            profileDraft = store.userProfile
+            birthDateDraft = store.userProfile.birthDate
             apiKeyDraft = store.geminiApiKey
             selectedModelDraft = store.selectedGeminiModel
             shortcutNameDraft = store.shortcutSyncName
             autoRunShortcutToggle = store.autoRunShortcutOnOpen
             darkToggle = BevelColors.isDarkMode
             savedBanner = false
+            profileSavedBanner = false
+        }
+        .onChange(of: birthDateDraft) { _, newDate in
+            profileDraft.setBirthDate(newDate)
+            profileSavedBanner = false
+        }
+        .onChange(of: selectedAvatarPhoto) { _, newItem in
+            guard let item = newItem else { return }
+            savingAvatarPhoto = true
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let savedName = ProfilePhotoStorage.savePickedImageData(data) {
+                    await MainActor.run {
+                        profileDraft.profilePhotoPath = savedName
+                        store.updateProfile(profileDraft)
+                        savingAvatarPhoto = false
+                        profileSavedBanner = true
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
+                } else {
+                    await MainActor.run { savingAvatarPhoto = false }
+                }
+            }
         }
         .fileImporter(
             isPresented: $showingImporter,
@@ -400,13 +605,56 @@ struct DispositivosScreen: View {
                 store.importExportFiles(urls: urls)
             }
         }
-        .sheet(isPresented: $showShortcutsGuide) {
-            ShortcutsAutomationGuideSheet(
-                copiedUrlToast: $copiedUrlToast,
-                onSyncNow: { store.scanAutoSyncInboxIfNeeded(force: true) },
-                onClose: { showShortcutsGuide = false }
-            )
+            .sheet(isPresented: $showShortcutsGuide) {
+                ShortcutsAutomationGuideSheet(
+                    copiedUrlToast: $copiedUrlToast,
+                    onSyncNow: { store.scanAutoSyncInboxIfNeeded(force: true) },
+                    onClose: { showShortcutsGuide = false }
+                )
+            }
+    }
+
+    private func compactStepper(_ label: String, _ value: String, onMinus: @escaping () -> Void, onPlus: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(ImprovingFont.caption(11))
+                .foregroundColor(BevelColors.textSecondary)
+            HStack {
+                Button {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onMinus()
+                    profileSavedBanner = false
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(BevelColors.trackGroove))
+                }
+                Spacer()
+                Text(value)
+                    .font(ImprovingFont.caption(12.5))
+                    .fontWeight(.bold)
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textPrimary)
+                Spacer()
+                Button {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    onPlus()
+                    profileSavedBanner = false
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(BevelColors.trackGroove))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
         }
+        .frame(maxWidth: .infinity)
     }
 }
 

@@ -26,7 +26,7 @@ struct NutricionScreen: View {
                                         .font(ImprovingFont.displayLarge(32))
                                         .monospacedDigit()
                                         .foregroundColor(BevelColors.textPrimary)
-                                    Text("/ \(norms.bmrKcal + 550) kcal")
+                                    Text("/ \(norms.maintenanceCaloriesKcal) kcal")
                                         .font(ImprovingFont.caption(13))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
@@ -54,10 +54,10 @@ struct NutricionScreen: View {
                                 macroPill("Proteína", "\(store.totalProteinToday)g", target: "\(norms.proteinGoalG)g", color: BevelColors.strengthPink)
                             }
                             Button { onOpenNutrient("Cafeína") } label: {
-                                macroPill("Carbos", "\(store.totalCarbsToday)g", target: "210g", color: BevelColors.amberStart)
+                                macroPill("Carbos", "\(store.totalCarbsToday)g", target: "\(norms.carbsGoalG)g", color: BevelColors.amberStart)
                             }
                             Button { onOpenNutrient("Hidratación") } label: {
-                                macroPill("Grasas", "\(store.totalFatToday)g", target: "70g", color: BevelColors.skyBlue)
+                                macroPill("Grasas", "\(store.totalFatToday)g", target: "\(norms.fatGoalG)g", color: BevelColors.skyBlue)
                             }
                         }
 
@@ -149,6 +149,10 @@ struct NutrientDetailScreen: View {
     @State private var extraAmount: Double = 0
 
     var body: some View {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
+        let caffeineCap = max(norms.caffeineLimitMg, 100.0)
+        let hydrationGoalMl = max(norms.hydrationGoalLiters * 1000.0, 1800.0)
+
         let key = store.selectedNutrientKey.isEmpty ? "Cafeína" : store.selectedNutrientKey
         let isCaffeine = key.localizedCaseInsensitiveContains("cafe")
         let isHydration = key.localizedCaseInsensitiveContains("hidra")
@@ -168,16 +172,16 @@ struct NutrientDetailScreen: View {
                 VStack(alignment: .leading, spacing: 16) {
                     DetailSheetHeader(title: key, onBack: onBack, rightSystemIcon: "gearshape.fill")
 
-                    // Cafeína Semi-Circle Arc Gauge Card (Screenshot 43)
+                    // Cafeína Semi-Circle Arc Gauge Card (Personalized by age & weight!)
                     if isCaffeine {
                         BevelCard(cornerRadius: 22) {
                             VStack(spacing: 6) {
                                 HStack {
-                                    Text(String(format: "%.1f/400mg", locale: Locale(identifier: "es_ES"), totalVal))
+                                    Text(String(format: "%.1f/%.0fmg", locale: Locale(identifier: "es_ES"), totalVal, caffeineCap))
                                         .font(ImprovingFont.caption(13))
                                         .foregroundColor(BevelColors.textSecondary)
                                     Spacer()
-                                    Text("\(min(Int((totalVal / 400.0 * 100).rounded()), 100))%")
+                                    Text("\(min(Int((totalVal / caffeineCap * 100).rounded()), 100))%")
                                         .font(ImprovingFont.caption(13))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
@@ -190,7 +194,7 @@ struct NutrientDetailScreen: View {
                                         track.addArc(center: center, radius: r, startAngle: .degrees(165), endAngle: .degrees(375), clockwise: false)
                                         ctx.stroke(track, with: .color(Color.white.opacity(0.08)), style: StrokeStyle(lineWidth: 14, lineCap: .round))
 
-                                        let frac = min(max(totalVal / 400.0, 0.02), 1.0)
+                                        let frac = min(max(totalVal / caffeineCap, 0.02), 1.0)
                                         let endDeg = 165.0 + 210.0 * frac
                                         var prog = Path()
                                         prog.addArc(center: center, radius: r, startAngle: .degrees(165), endAngle: .degrees(endDeg), clockwise: false)
@@ -204,7 +208,7 @@ struct NutrientDetailScreen: View {
                                     .frame(height: 150)
 
                                     VStack(spacing: 2) {
-                                        Text(String(format: "%.1fmg", locale: Locale(identifier: "es_ES"), max(400.0 - totalVal, 0)))
+                                        Text(String(format: "%.1fmg", locale: Locale(identifier: "es_ES"), max(caffeineCap - totalVal, 0)))
                                             .font(ImprovingFont.displayLarge(28))
                                             .monospacedDigit()
                                             .foregroundColor(BevelColors.textPrimary)
@@ -218,7 +222,7 @@ struct NutrientDetailScreen: View {
                                 HStack {
                                     Text("0").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
                                     Spacer()
-                                    Text("400").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
+                                    Text("\(Int(caffeineCap))").font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textMuted)
                                 }
                                 .padding(.horizontal, 44)
                             }
@@ -236,14 +240,14 @@ struct NutrientDetailScreen: View {
                             Spacer()
                             if isHydration {
                                 HStack(spacing: 8) {
-                                    Text(String(format: "%.1f/2500 ml", locale: Locale(identifier: "es_ES"), totalVal))
+                                    Text(String(format: "%.0f/%.0f ml", locale: Locale(identifier: "es_ES"), totalVal, hydrationGoalMl))
                                         .font(ImprovingFont.caption(13.5))
                                         .monospacedDigit()
                                         .foregroundColor(BevelColors.textSecondary)
                                     ZStack {
                                         Circle().stroke(Color.white.opacity(0.1), lineWidth: 3).frame(width: 20, height: 20)
                                         Circle()
-                                            .trim(from: 0, to: min(totalVal / 2500.0, 1.0))
+                                            .trim(from: 0, to: min(totalVal / hydrationGoalMl, 1.0))
                                             .stroke(BevelColors.skyBlue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                                             .rotationEffect(.degrees(-90))
                                             .frame(width: 20, height: 20)

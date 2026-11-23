@@ -14,7 +14,7 @@ struct AskBevelScreen: View {
     }
 
     var body: some View {
-        let userName = store.userProfile.userName.isEmpty ? "tú" : store.userProfile.userName
+        let userName = store.userProfile.displayFirstName.isEmpty ? "tú" : store.userProfile.displayFirstName
         let hasKey = !store.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         ZStack {

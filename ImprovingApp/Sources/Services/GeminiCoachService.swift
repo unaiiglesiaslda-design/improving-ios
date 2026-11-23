@@ -917,7 +917,7 @@ actor GeminiCoachService {
 
         if !validData {
             let shortNoData = "\(nameLead)no hay lecturas de \(metricTitle.lowercased()) en este día. Prefiero no inventar datos; tu referencia orientativa es \(cleanRange)."
-            let fullNoData = "\(nameLead)no constan muestras reales de \(metricTitle.lowercased()) registradas en esta fecha. Nunca invento cifras ni tendencias vacías: para tu perfil de \(Int(profile.ageYears)) años y \(Int(profile.weightKg)) kg, la banda orientativa es \(cleanRange). Cuando tu reloj registre o importes mediciones en este día verás el análisis exacto."
+            let fullNoData = "\(nameLead)no constan muestras reales de \(metricTitle.lowercased()) registradas en esta fecha. Nunca invento cifras ni tendencias vacías: para tu perfil de \(Int(profile.effectiveAgeYears.rounded(.down))) años y \(Int(profile.weightKg)) kg, la banda orientativa es \(cleanRange). Cuando tu reloj registre o importes mediciones en este día verás el análisis exacto."
             return MetricFloatingAiInsight(
                 shortPillText: "Sin lecturas este día",
                 expandedHeadline: headline,

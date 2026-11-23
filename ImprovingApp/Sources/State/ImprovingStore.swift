@@ -49,7 +49,7 @@ final class ImprovingStore: ObservableObject {
 
     @Published var userProfile: UserPhysiologyProfile = {
         var p = UserPhysiologyProfile()
-        p.onboardingCompleted = true
+        p.onboardingCompleted = false
         return p
     }()
     @Published var dayOffset: Int = 0
@@ -485,7 +485,10 @@ final class ImprovingStore: ObservableObject {
     }
 
     var optimalEffortRange: ClosedRange<Double> {
-        WhoopPhysiologyEngine.optimalTargetRange(for: dataAvailability.hasRecoveryData ? recoveryPercent : 65)
+        WhoopPhysiologyEngine.optimalTargetRange(
+            for: dataAvailability.hasRecoveryData ? recoveryPercent : 65,
+            profile: userProfile
+        )
     }
 
     var effortTargetRangeText: String {
@@ -1338,7 +1341,9 @@ final class ImprovingStore: ObservableObject {
     func completeOnboarding(_ profile: UserPhysiologyProfile) {
         var p = profile
         p.onboardingCompleted = true
+        p.profileSetupVersion = max(p.profileSetupVersion, 2)
         userProfile = p
+        recomputeMetricsForCurrentProfile()
         persistState()
     }
 
@@ -1348,9 +1353,140 @@ final class ImprovingStore: ObservableObject {
     }
 
     func updateProfile(_ profile: UserPhysiologyProfile) {
-        userProfile = profile
-        dataRevision += 1
+        var p = profile
+        p.ageYears = p.effectiveAgeYears
+        userProfile = p
+        recomputeMetricsForCurrentProfile()
         persistState()
+    }
+
+    /// Recalculates Sleep Score, Sleep Debt, Recovery %, Strain % / Strain 21, Workout Strain,
+    /// and Energy Bank across stored days immediately whenever age/birthDate, sex, height, or weight changes!
+    func recomputeMetricsForCurrentProfile() {
+        let profile = userProfile
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: profile)
+        let targetSleepMin = norms.sleepTargetHours * 60.0
+        let maxHr = Double(norms.maxHrBpm)
+        let respCenter = (norms.respLowRpm + norms.respHighRpm) / 2.0
+
+        if !hasImportedOrPairedRealData {
+            simulatedHistory = WhoopPhysiologyEngine.generateTwoYearSimulatedHistory(profile: profile)
+        }
+
+        if !realHistory.isEmpty {
+            let sortedIsos = realHistory.keys.sorted()
+            var priorLnHrv: [Double] = []
+            var priorRhr: [Double] = []
+            var priorResp: [Double] = []
+            var updated: [String: RealBiometricDaySummary] = [:]
+            updated.reserveCapacity(realHistory.count)
+
+            for iso in sortedIsos {
+                guard var day = realHistory[iso] else { continue }
+
+                // 1. Age/Sex-calibrated Sleep Score & Sleep Debt
+                if let asleep = day.asleepMinutes, asleep > 0 {
+                    let awakeCnt = day.sleepSession?.stages.filter { $0.stage == .awake }.count ?? 0
+                    day.sleepPct = WhoopPhysiologyEngine.computeBevelSleepScore(
+                        asleepMinutes: asleep,
+                        inBedMinutes: day.inBedMinutes,
+                        deepMinutes: day.deepMinutes,
+                        remMinutes: day.remMinutes,
+                        awakeMinutes: day.awakeMinutes,
+                        awakeCount: awakeCnt,
+                        hrDipPct: day.sleepSession?.hrDipPct,
+                        targetMinutes: targetSleepMin,
+                        deepTargetPct: norms.deepTargetPct,
+                        remTargetPct: norms.remTargetPct
+                    )
+                    day.sleepDebtMinutes = max(Int(targetSleepMin.rounded()) - asleep, 0)
+                }
+
+                // 2. Causal 60-day Recovery % with user's age/sex/body cohort calibration
+                let lnHrvBase = WhoopPhysiologyEngine.computeRollingBaseline(
+                    priorValues: priorLnHrv,
+                    populationMean: log(max(norms.hrvExpectedMs, 15.0)),
+                    populationSigma: 0.25,
+                    floorSigma: 0.14
+                )
+                let rhrBase = WhoopPhysiologyEngine.computeRollingBaseline(
+                    priorValues: priorRhr,
+                    populationMean: norms.restingHrExpected,
+                    populationSigma: 4.0,
+                    floorSigma: 1.8
+                )
+                let respBase = WhoopPhysiologyEngine.computeRollingBaseline(
+                    priorValues: priorResp,
+                    populationMean: respCenter,
+                    populationSigma: 0.9,
+                    floorSigma: 0.45
+                )
+
+                if let newRec = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+                    hrvMs: day.hrvMs,
+                    rhrBpm: day.restingHrBpm,
+                    respRpm: day.respRateRpm,
+                    spo2Pct: day.spo2Percent,
+                    wristTempDeltaC: day.wristTempDeltaC,
+                    lnHrvBaseline: lnHrvBase,
+                    rhrBaseline: rhrBase,
+                    respBaseline: respBase,
+                    profile: profile
+                ) {
+                    day.recoveryPct = newRec
+                }
+
+                if let h = day.hrvMs, h > 2.0 { priorLnHrv.append(log(h)) }
+                if let r = day.restingHrBpm { priorRhr.append(r) }
+                if let rr = day.respRateRpm { priorResp.append(rr) }
+
+                // 3. Age/Sex/Weight/Height-calibrated Workout & Daily Strain (Tanaka MaxHR + Banister B + Mifflin BMR)
+                let rhrRef = day.restingHrBpm ?? rhrBase.mean
+                if !day.workouts.isEmpty {
+                    day.workouts = day.workouts.map { w in
+                        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+                            durationMin: w.durationMin,
+                            kcal: w.kcal,
+                            avgHrBpm: w.avgHrBpm,
+                            rhrBpm: rhrRef,
+                            maxHrBpm: maxHr,
+                            banisterB: profile.sex.banisterB
+                        )
+                        return EffortEventItem(
+                            id: w.id,
+                            title: w.title,
+                            timeRange: w.timeRange,
+                            durationMin: w.durationMin,
+                            avgHrBpm: w.avgHrBpm,
+                            strainScore: ws.strain21,
+                            strainPct: ws.strainPct,
+                            categoryLabel: w.categoryLabel,
+                            kcal: w.kcal,
+                            distanceKm: w.distanceKm,
+                            elevationM: w.elevationM,
+                            dateIso: w.dateIso
+                        )
+                    }
+                }
+
+                if let st = WhoopPhysiologyEngine.computeBevelStrain(
+                    profile: profile,
+                    rhrBpm: rhrRef,
+                    hrZoneMinutes: day.hrZoneMinutes,
+                    workouts: day.workouts,
+                    activeKcal: day.activeKcal.map { Double($0) }
+                ) {
+                    day.strain21 = st.strain21
+                    day.strainPct = st.strainPct
+                }
+
+                updated[iso] = day
+            }
+            realHistory = updated
+        }
+
+        sectionCoachingCache.removeAll()
+        dataRevision += 1
     }
 
     func shiftDay(_ delta: Int) {
@@ -1932,8 +2068,9 @@ final class ImprovingStore: ObservableObject {
         let cal = Calendar.current
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
         let maxHr = Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: userProfile))
-        let popLnHrv = log(max((norms.hrvLowMs + norms.hrvHighMs) / 2.0, 25.0))
-        let popRhr = (norms.rhrLowBpm + norms.rhrHighBpm) / 2.0
+        let popLnHrv = log(max(norms.hrvExpectedMs, 15.0))
+        let popRhr = norms.restingHrExpected
+        let popResp = (norms.respLowRpm + norms.respHighRpm) / 2.0
 
         let timeFmt = DateFormatter()
         timeFmt.locale = Locale(identifier: "en_US_POSIX")
@@ -2078,7 +2215,9 @@ final class ImprovingStore: ObservableObject {
                     awakeMinutes: awakeMin,
                     awakeCount: awakeBlocks,
                     hrDipPct: hrDipPct,
-                    targetMinutes: norms.sleepTargetHours * 60.0
+                    targetMinutes: norms.sleepTargetHours * 60.0,
+                    deepTargetPct: norms.deepTargetPct,
+                    remTargetPct: norms.remTargetPct
                 )
                 d.sleepSession = SleepSessionDetail(
                     startEpochSec: sleepStartEp,
@@ -2124,7 +2263,7 @@ final class ImprovingStore: ObservableObject {
                 priorValues: priorLnHrv, populationMean: popLnHrv, populationSigma: 0.24, floorSigma: 0.14
             )
             let respBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorResp, populationMean: 15.2, populationSigma: 0.9, floorSigma: 0.5
+                priorValues: priorResp, populationMean: popResp, populationSigma: 0.9, floorSigma: 0.5
             )
             let rhrRef = d.restingHrBpm ?? rhrBaseline.mean
 
@@ -2185,7 +2324,8 @@ final class ImprovingStore: ObservableObject {
                 wristTempDeltaC: d.wristTempDeltaC,
                 lnHrvBaseline: lnHrvBaseline,
                 rhrBaseline: rhrBaseline,
-                respBaseline: respBaseline
+                respBaseline: respBaseline,
+                profile: userProfile
             )
 
             // 8. Bevel Calibrated Strain
@@ -2381,12 +2521,20 @@ final class ImprovingStore: ObservableObject {
         let yesHabits = Self.journalCatalog.filter { !$0.isAuto && dayJournal[$0.id] == .yes }.map(\.title)
         let noHabits = Self.journalCatalog.filter { !$0.isAuto && dayJournal[$0.id] == .no }.map(\.title)
 
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
         let perfil: [String: Any] = [
-            "nombre": userProfile.userName.isEmpty ? "Usuario" : userProfile.userName,
-            "edad": Int(userProfile.ageYears),
+            "nombre": userProfile.displayFirstName.isEmpty ? "Usuario" : userProfile.displayFirstName,
+            "nombre_completo": userProfile.fullName.isEmpty ? "Usuario" : userProfile.fullName,
+            "fecha_nacimiento": userProfile.birthDateIso ?? "NO_INDICADA",
+            "edad": Int(userProfile.effectiveAgeYears.rounded(.down)),
             "sexo": userProfile.sex.rawValue,
             "peso_kg": latestBodyWeightKg ?? userProfile.weightKg,
-            "altura_cm": userProfile.heightCm
+            "altura_cm": userProfile.heightCm,
+            "imc": norms.bmi,
+            "fc_max_tanaka": norms.maxHrBpm,
+            "vfc_esperada_ms": norms.hrvExpectedMs,
+            "meta_sueno_h": norms.sleepTargetHours,
+            "meta_hidratacion_l": norms.hydrationGoalLiters
         ]
 
         var metricas: [String: Any] = [:]
@@ -2541,6 +2689,11 @@ final class ImprovingStore: ObservableObject {
             return
         }
         userProfile = snap.userProfile
+        // One-time migration: older builds bypassed onboarding (`profileSetupVersion == 0`), so present the
+        // high-craft motion graphics onboarding & profile setup once while preserving 100% of stored realHistory!
+        if userProfile.profileSetupVersion < 2 {
+            userProfile.onboardingCompleted = false
+        }
         BevelColors.isDarkMode = snap.isDarkMode
         hasImportedOrPairedRealData = snap.hasImportedOrPairedRealData
         realHistory = snap.realHistory
