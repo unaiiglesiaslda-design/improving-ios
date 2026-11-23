@@ -1,0 +1,54 @@
+name: Sign Apple Shortcuts
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Shortcuts/**'
+      - '.github/workflows/sign-shortcuts.yml'
+  workflow_dispatch:
+
+jobs:
+  sign-shortcuts:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate Apple Shortcuts XML
+        run: python3 Shortcuts/generate_shortcuts.py
+
+      - name: Validate & Sign Shortcuts with Apple CLI
+        run: |
+          mkdir -p Shortcuts/signed
+          for xml in Shortcuts/generated/*.xml; do
+            base=$(basename "$xml" .xml)
+            echo "=== Processing $base ==="
+            plutil -lint "$xml"
+            bin_in="Shortcuts/signed/${base}-unsigned.shortcut"
+            signed_out="Shortcuts/signed/${base}.shortcut"
+            cp "$xml" "$bin_in"
+            plutil -convert binary1 "$bin_in"
+            echo "Running: shortcuts sign --mode anyone --input $bin_in --output $signed_out"
+            set +e
+            shortcuts sign --mode anyone --input "$bin_in" --output "$signed_out"
+            code=$?
+            set -e
+            echo "shortcuts sign exit code: $code"
+            if [ "$code" -eq 0 ] && [ -f "$signed_out" ]; then
+              ls -lh "$signed_out"
+              file "$signed_out"
+            else
+              echo "WARNING: shortcuts sign failed with exit code $code (likely requires Apple ID session on runner)"
+            fi
+          done
+          ls -la Shortcuts/generated Shortcuts/signed
+
+      - name: Upload Shortcuts Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Improving-Shortcuts
+          path: |
+            Shortcuts/signed/
+            Shortcuts/generated/

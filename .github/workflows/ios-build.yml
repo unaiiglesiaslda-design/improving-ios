@@ -3,6 +3,9 @@ name: iOS Build & Test
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'Shortcuts/**'
+      - '.github/workflows/sign-shortcuts.yml'
   workflow_dispatch:
 
 jobs:
