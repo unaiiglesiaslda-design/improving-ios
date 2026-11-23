@@ -482,5 +482,67 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let errUrl = try XCTUnwrap(URL(string: "improving://sync?from=shortcut_error"))
         store.handleIncomingURL(errUrl)
         XCTAssertEqual(store.syncBannerState, .notice("Revisa nombre del atajo"))
+
+        // Default silent mode (`autoRunShortcutOnOpen == false`): pull-to-refresh stays 100% inside Improving
+        XCTAssertFalse(store.autoRunShortcutOnOpen)
+    }
+
+    func testStagedSleepIgnoresBroadDurmiendoUnspecifiedBlockExtendingToAfternoon() throws {
+        // Reproduces exact real user health_sync.json pattern:
+        // - Real Apple Watch staged sleep (`En la cama`, `Esencial`, `Profundo`, `REM`, `Vigilia`) from 00:05 to 08:15
+        // - Secondary/third-party `"Durmiendo"` (`asleepUnspecified`) blocks extending into the afternoon (`14:16`)
+        //   plus an anomalous previous-day `"Durmiendo"` crossing 18:00
+        // - Real sleeping HR ~50.7 bpm, daytime awake HR 85-115 bpm up to 14:16
+        // - Real sleeping HRV ~63.0 ms, yesterday evening + daytime low HRV 21-32 ms
+        let json = """
+        {
+          "sleep_values": "Durmiendo\\nEn la cama\\nEsencial\\nProfundo\\nEsencial\\nVigilia\\nEsencial\\nREM\\nEsencial\\nDurmiendo\\nDurmiendo\\nDurmiendo",
+          "sleep_starts": "22 nov 2026, 15:00\\n22 nov 2026, 23:55\\n23 nov 2026, 0:05\\n23 nov 2026, 1:30\\n23 nov 2026, 3:00\\n23 nov 2026, 4:00\\n23 nov 2026, 4:15\\n23 nov 2026, 5:45\\n23 nov 2026, 7:15\\n23 nov 2026, 8:15\\n23 nov 2026, 10:30\\n23 nov 2026, 12:30",
+          "sleep_ends": "22 nov 2026, 18:30\\n23 nov 2026, 14:16\\n23 nov 2026, 1:30\\n23 nov 2026, 3:00\\n23 nov 2026, 4:00\\n23 nov 2026, 4:15\\n23 nov 2026, 5:45\\n23 nov 2026, 7:15\\n23 nov 2026, 8:15\\n23 nov 2026, 10:30\\n23 nov 2026, 12:30\\n23 nov 2026, 14:16",
+          "hr_values": "78\\n50.0\\n51.0\\n50.4\\n51.4\\n88\\n94\\n105\\n98\\n86",
+          "hr_dates": "22 nov 2026, 17:00\\n23 nov 2026, 0:45\\n23 nov 2026, 2:15\\n23 nov 2026, 5:00\\n23 nov 2026, 7:45\\n23 nov 2026, 9:00\\n23 nov 2026, 10:15\\n23 nov 2026, 11:30\\n23 nov 2026, 13:00\\n23 nov 2026, 14:00",
+          "hrv_values": "28.0\\n31.0\\n60.0\\n66.0\\n24.0\\n29.0",
+          "hrv_dates": "22 nov 2026, 17:30\\n22 nov 2026, 18:15\\n23 nov 2026, 2:00\\n23 nov 2026, 6:30\\n23 nov 2026, 11:00\\n23 nov 2026, 13:45",
+          "rhr_values": "61.0",
+          "rhr_dates": "23 nov 2026, 14:00"
+        }
+        """
+        let res = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(json.data(using: .utf8)))
+        XCTAssertNil(res.errorMessage)
+        let day = try XCTUnwrap(res.days["2026-11-23"])
+
+        // Sleeping HR MUST strictly match real staged sleep (50.0+51.0+50.4+51.4)/4 = 50.7 bpm, NEVER daytime 86-105!
+        XCTAssertEqual(day.restingHrBpm ?? 0, 50.7, accuracy: 0.15)
+        // Sleeping HRV MUST strictly match real staged sleep (60.0+66.0)/2 = 63.0 ms, NEVER daytime 24-31!
+        XCTAssertEqual(day.hrvMs ?? 0, 63.0, accuracy: 0.15)
+        // Clamped sleep session MUST NOT extend to 14:16!
+        XCTAssertNotEqual(day.sleepSession?.endTimeLabel, "14:16")
+        // Diagnostic line MUST be cleanly formatted without `Optional(...)`!
+        let diag = try XCTUnwrap(day.syncDiagnosticLine)
+        XCTAssertFalse(diag.contains("Optional("))
+    }
+
+    func testMergeDaysPreservesTrueRMSSDOverShortcutsSDNN() throws {
+        var existingDay = RealBiometricDaySummary(dateIso: "2026-11-23")
+        existingDay.hrvMs = 63.0
+        existingDay.hrvMethodLabel = "RMSSD · Todo el sueño"
+        existingDay.restingHrBpm = 50.7
+
+        var incomingShortcutsDay = RealBiometricDaySummary(dateIso: "2026-11-23")
+        incomingShortcutsDay.hrvMs = 52.1
+        incomingShortcutsDay.hrvMethodLabel = "SDNN · Todo el sueño"
+        incomingShortcutsDay.restingHrBpm = 50.5
+        incomingShortcutsDay.activeKcal = 240
+
+        let merged = WhoopExportImporter.mergeDays(
+            existing: ["2026-11-23": existingDay],
+            imported: ["2026-11-23": incomingShortcutsDay]
+        )
+        let day = try XCTUnwrap(merged["2026-11-23"])
+        // Must preserve true beat-to-beat RMSSD (63.0) rather than downgrading to Shortcuts SDNN (52.1)
+        XCTAssertEqual(day.hrvMs ?? 0, 63.0, accuracy: 0.05)
+        XCTAssertEqual(day.hrvMethodLabel, "RMSSD · Todo el sueño")
+        // While still accepting fresh daytime activity metrics from Shortcuts!
+        XCTAssertEqual(day.activeKcal, 240)
     }
 }

@@ -125,8 +125,8 @@ enum ShortcutsHealthSyncImporter {
         let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
         let sz = vals?.fileSize ?? 0
-        // v4 prefix forces automatic re-parse with Bevel ASLEEP-only (zero InBed/Awake) HR & HRV engine
-        return "v4#\(url.lastPathComponent)#\(sz)#\(mtime)"
+        // v5 prefix forces automatic re-parse with strict staged-sleep priority (excludes secondary Durmiendo daytime blocks)
+        return "v5#\(url.lastPathComponent)#\(sz)#\(mtime)"
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)
@@ -401,7 +401,8 @@ enum ShortcutsHealthSyncImporter {
                   let e = parseFlexibleDate(ends[i]) else { continue }
             let sEp = Int64(s.date.timeIntervalSince1970)
             let eEp = Int64(e.date.timeIntervalSince1970)
-            guard eEp > sEp else { continue }
+            let dur = eEp - sEp
+            guard dur > 0 && dur <= 14 * 3600 else { continue }
             let stageRaw = (i < vals.count && !vals[i].isEmpty) ? vals[i] : "Asleep"
             addSleepInterval(startEpoch: sEp, endEpoch: eEp, endDayIso: e.wall.iso, stageRaw: stageRaw, sourceName: sourceName, into: &days)
         }
@@ -802,6 +803,8 @@ enum ShortcutsHealthSyncImporter {
         sourceName: String,
         into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
     ) {
+        let dur = e - s
+        guard dur > 0 && dur <= 14 * 3600 else { return }
         let day = mutableDay(iso: endDayIso, in: &days)
         if day.sleepSourceName == nil { day.sleepSourceName = sourceName }
         let span = s...e

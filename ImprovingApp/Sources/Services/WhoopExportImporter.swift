@@ -152,12 +152,19 @@ enum WhoopExportImporter {
                 for w in cur.workouts where !combinedWorkouts.contains(where: { $0.title == w.title && $0.timeRange == w.timeRange }) {
                     combinedWorkouts.append(w)
                 }
+                // Never downgrade true beat-to-beat RMSSD (from exportar.zip / HealthKit live) to Apple Shortcuts SDNN!
+                let preserveExistingRmssd: Bool = {
+                    guard let curHrv = cur.hrvMs, curHrv > 2.0,
+                          let curLbl = cur.hrvMethodLabel, curLbl.hasPrefix("RMSSD") else { return false }
+                    guard let impLbl = imp.hrvMethodLabel else { return true }
+                    return !impLbl.hasPrefix("RMSSD")
+                }()
                 merged[iso] = RealBiometricDaySummary(
                     dateIso: iso,
                     liveHrBpm: imp.liveHrBpm ?? cur.liveHrBpm,
                     restingHrBpm: imp.restingHrBpm ?? cur.restingHrBpm,
-                    hrvMs: imp.hrvMs ?? cur.hrvMs,
-                    hrvMethodLabel: imp.hrvMethodLabel ?? cur.hrvMethodLabel,
+                    hrvMs: preserveExistingRmssd ? cur.hrvMs : (imp.hrvMs ?? cur.hrvMs),
+                    hrvMethodLabel: preserveExistingRmssd ? cur.hrvMethodLabel : (imp.hrvMethodLabel ?? cur.hrvMethodLabel),
                     syncDiagnosticLine: imp.syncDiagnosticLine ?? cur.syncDiagnosticLine,
                     respRateRpm: imp.respRateRpm ?? cur.respRateRpm,
                     wristTempDeltaC: imp.wristTempDeltaC ?? cur.wristTempDeltaC,

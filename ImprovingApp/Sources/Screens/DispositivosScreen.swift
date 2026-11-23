@@ -12,7 +12,7 @@ struct DispositivosScreen: View {
     @State private var apiKeyDraft: String = ""
     @State private var selectedModelDraft: String = "gemini-2.5-flash"
     @State private var shortcutNameDraft: String = "Sync Improving (Automático)"
-    @State private var autoRunShortcutToggle: Bool = true
+    @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
     @State private var darkToggle: Bool = BevelColors.isDarkMode
 
@@ -108,12 +108,18 @@ struct DispositivosScreen: View {
                                 }
                         }
 
-                        Toggle("Ejecutar atajo automáticamente al abrir / recargar", isOn: $autoRunShortcutToggle)
+                        Toggle("Abrir app Atajos al abrir / recargar", isOn: $autoRunShortcutToggle)
                             .font(ImprovingFont.caption(12.5))
                             .foregroundColor(BevelColors.textPrimary)
                             .onChange(of: autoRunShortcutToggle) { _, newVal in
                                 store.updateShortcutSyncConfig(name: shortcutNameDraft, autoRunOnOpen: newVal)
                             }
+
+                        if !autoRunShortcutToggle {
+                            Text("Modo 100 % sin salir de Improving activo: configura en Atajos → Automatización → App «Improving» → Al abrirse → Ejecutar inmediatamente.")
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textSecondary)
+                        }
 
                         Button {
                             showShortcutsGuide = true
@@ -353,6 +359,11 @@ struct DispositivosScreen: View {
                                 .padding(.vertical, 6)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(RoundedRectangle(cornerRadius: 8).fill(BevelColors.cardSubtle))
+                        }
+                        if let lbl = store.currentDaySummary?.hrvMethodLabel, lbl.hasPrefix("SDNN") {
+                            Text("Atajos de iOS solo exporta SDNN (sin serie latido a latido). Para RMSSD exacto como Bevel: importa exportar.zip o conecta Salud en vivo.")
+                                .font(ImprovingFont.caption(10.5))
+                                .foregroundColor(BevelColors.textMuted)
                         }
                         HStack {
                             Text("FC máx. Tanaka").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)

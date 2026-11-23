@@ -88,13 +88,15 @@ final class ImprovingStore: ObservableObject {
     @Published var autoSyncStatusText: String = "Listo · Esperando Atajos o carpeta Improving"
     @Published var syncBannerState: SyncBannerState = .hidden
     @Published var shortcutSyncName: String = "Sync Improving (Automático)"
-    @Published var autoRunShortcutOnOpen: Bool = true
+    @Published var autoRunShortcutOnOpen: Bool = false
     private var processedAutoSyncSignatures: Set<String> = []
     private var lastShortcutTriggerAt: Date? = nil
     private var awaitingShortcutCallback: Bool = false
     private var syncBannerDismissTask: Task<Void, Never>? = nil
     private var shortcutTimeoutTask: Task<Void, Never>? = nil
+    private var backgroundRecheckTask: Task<Void, Never>? = nil
     private var inboxDirectorySource: DispatchSourceFileSystemObject? = nil
+    private var autoSyncSubdirSource: DispatchSourceFileSystemObject? = nil
 
     @Published var importStatus: ExportImportStatus = ExportImportStatus()
     @Published var geminiApiKey: String = ""
@@ -152,7 +154,9 @@ final class ImprovingStore: ObservableObject {
         timerTask?.cancel()
         syncBannerDismissTask?.cancel()
         shortcutTimeoutTask?.cancel()
+        backgroundRecheckTask?.cancel()
         inboxDirectorySource?.cancel()
+        autoSyncSubdirSource?.cancel()
         for task in coachingTasks.values { task.cancel() }
     }
 
@@ -1571,10 +1575,26 @@ final class ImprovingStore: ObservableObject {
         }
     }
 
-    /// Pull-to-refresh on `HoyScreen` ALWAYS triggers the Apple Shortcut (zero cooldown) and drives the top floating bubble.
+    /// Pull-to-refresh on `HoyScreen`:
+    /// - When `autoRunShortcutOnOpen == false` (default 100% silent in-app mode): stays inside Improving,
+    ///   animates the top floating `Sincronizando…` -> `Sincronizado` bubble, and reloads the latest data from
+    ///   `En mi iPhone / Improving` (plus live HealthKit if authorized) WITHOUT ever jumping out to the Shortcuts app!
+    /// - When `autoRunShortcutOnOpen == true`: launches `shortcuts://x-callback-url/run-shortcut` directly.
     func handlePullToRefresh() async {
-        triggerShortcutRefreshSync(userInitiated: true)
-        try? await Task.sleep(nanoseconds: 350_000_000)
+        if autoRunShortcutOnOpen {
+            triggerShortcutRefreshSync(userInitiated: true)
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            return
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        presentSyncBanner(.syncing("Sincronizando…"))
+        scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+        #if os(iOS)
+        if healthKitAuthorized && !healthKitSyncing {
+            connectAndSyncAppleHealth()
+        }
+        #endif
+        try? await Task.sleep(nanoseconds: 550_000_000)
     }
 
     /// Called whenever the app becomes `.active` (reopen / reload / returning from Shortcuts).
@@ -1598,16 +1618,31 @@ final class ImprovingStore: ObservableObject {
             return
         }
 
-        // 3. Reopening / reloading app after > 90s -> auto-run shortcut if enabled!
+        // 3. Reopening / reloading app:
+        //    - If `autoRunShortcutOnOpen == true`: jump to Shortcuts via x-callback-url
+        //    - If `autoRunShortcutOnOpen == false` (silent 100% background Personal Automation mode):
+        //      NEVER leave Improving! Scan immediately AND re-check at +1.8s & +4.2s to catch background
+        //      iOS Personal Automation writes ("Al abrir Improving -> Ejecutar inmediatamente") with the top bubble!
         if autoRunShortcutOnOpen && !shortcutSyncName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Task { @MainActor [weak self] in
-                // Brief frame settle so the floating "Sincronizando…" bubble appears smoothly before hopping to Shortcuts
                 try? await Task.sleep(nanoseconds: 320_000_000)
                 guard let self else { return }
                 self.triggerShortcutRefreshSync(userInitiated: false)
             }
         } else {
             scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+            scheduleSilentAutomationRechecks()
+        }
+    }
+
+    private func scheduleSilentAutomationRechecks() {
+        backgroundRecheckTask?.cancel()
+        backgroundRecheckTask = Task { @MainActor [weak self] in
+            for delayNs: UInt64 in [1_800_000_000, 2_400_000_000] {
+                try? await Task.sleep(nanoseconds: delayNs)
+                guard !Task.isCancelled, let self else { return }
+                self.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+            }
         }
     }
 
@@ -1659,25 +1694,28 @@ final class ImprovingStore: ObservableObject {
         #endif
     }
 
-    /// Live filesystem watcher on `En mi iPhone / Improving`: detects `health_sync.json` writes even from background
-    /// iOS Personal Automations while Improving is already open!
+    /// Live filesystem watchers on BOTH `En mi iPhone / Improving` and `AutoSync`: detects `health_sync.json` writes
+    /// even from background iOS Personal Automations while Improving stays in the foreground!
     private func startInboxDirectoryWatcher() {
-        let dirPath = ShortcutsHealthSyncImporter.publicDocumentsURL.path
-        let fd = open(dirPath, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend], queue: .main)
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+        func makeWatcher(for dirURL: URL) -> DispatchSourceFileSystemObject? {
+            let fd = open(dirURL.path, O_EVTONLY)
+            guard fd >= 0 else { return nil }
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend, .attrib], queue: .main)
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+                }
             }
+            source.setCancelHandler {
+                close(fd)
+            }
+            source.resume()
+            return source
         }
-        source.setCancelHandler {
-            close(fd)
-        }
-        inboxDirectorySource = source
-        source.resume()
+        inboxDirectorySource = makeWatcher(for: ShortcutsHealthSyncImporter.publicDocumentsURL)
+        autoSyncSubdirSource = makeWatcher(for: ShortcutsHealthSyncImporter.autoSyncInboxURL)
     }
 
     func scanAutoSyncInboxIfNeeded(force: Bool = false, showBanner: Bool = false) {

@@ -251,21 +251,34 @@ enum AppleHealthExportImporter {
             }()
 
             // 1. Build Primary Overnight Sleep Cluster ("Todo el sueño" / Entire Sleep):
-            //    - Includes pre-midnight sleep blocks (>= 18:00) from prevRaw
+            //    - Includes pre-midnight sleep blocks starting >= prev day 18:00 from prevRaw (rejects yesterday's daytime/oversized spans!)
             //    - Excludes next-night bedtime blocks (>= 19:30) from raw so daytime HRV NEVER leaks into sleep!
+            //    - STRICT STAGED-SLEEP PRIORITY: When Apple Watch staged sleep (Deep/REM/Core >= 30 min) exists,
+            //      completely IGNORE secondary/iPhone "Durmiendo" (`asleepUnspecified`) blocks so overlapping or afternoon
+            //      "Durmiendo" blocks NEVER stretch the sleep window into daytime hours (e.g. 0:05-14:16)!
             let dayStartEp: Int64? = curDate.map { Int64($0.timeIntervalSince1970) }
             let prevEveningCutoff = dayStartEp.map { $0 - 6 * 3600 } // prev day 18:00
             let nextNightCutoff = dayStartEp.map { $0 + 19 * 3600 + 1800 } // current day 19:30
+            let maxSingleBlockSec: Int64 = 14 * 3600
 
             func selectNightSpans(_ prevList: [ClosedRange<Int64>], _ curList: [ClosedRange<Int64>]) -> [ClosedRange<Int64>] {
                 var out: [ClosedRange<Int64>] = []
                 if let pCut = prevEveningCutoff {
-                    out.append(contentsOf: prevList.filter { $0.upperBound >= pCut })
+                    out.append(contentsOf: prevList.filter {
+                        let dur = $0.upperBound - $0.lowerBound
+                        return dur > 0 && dur <= maxSingleBlockSec && $0.lowerBound >= pCut
+                    })
                 }
                 if let nCut = nextNightCutoff {
-                    out.append(contentsOf: curList.filter { $0.lowerBound < nCut })
+                    out.append(contentsOf: curList.filter {
+                        let dur = $0.upperBound - $0.lowerBound
+                        return dur > 0 && dur <= maxSingleBlockSec && $0.lowerBound < nCut
+                    })
                 } else {
-                    out.append(contentsOf: curList)
+                    out.append(contentsOf: curList.filter {
+                        let dur = $0.upperBound - $0.lowerBound
+                        return dur > 0 && dur <= maxSingleBlockSec
+                    })
                 }
                 return out
             }
@@ -277,30 +290,40 @@ enum AppleHealthExportImporter {
             let candAwake = selectNightSpans(prevRaw?.awakeIntervals ?? [], raw.awakeIntervals)
             let candInBed = selectNightSpans(prevRaw?.inBedIntervals ?? [], raw.inBedIntervals)
 
-            let candAllSpans = candDeep + candRem + candCore + candUnspec + candAwake + candInBed
-            let candAsleepSpans = candDeep + candRem + candCore + candUnspec
+            let candStagedAsleep = candDeep + candRem + candCore
+            let hasRealStagedSleep = mergeIntervalSeconds(candStagedAsleep) >= 30 * 60
+            let candAsleepSpans = hasRealStagedSleep ? candStagedAsleep : (candStagedAsleep + candUnspec)
+            let candAllSpans = candAsleepSpans + candAwake + candInBed
 
-            // Cluster contiguous ACTUAL ASLEEP intervals first (gap <= 90 min) so iPhone `InBed` bedtime schedules
-            // NEVER stretch the sleep window into awake evening/morning hours!
+            // Cluster contiguous ACTUAL ASLEEP intervals first (gap <= 60 min) so iPhone `InBed` schedules,
+            // afternoon naps, and secondary "Durmiendo" blocks NEVER stretch the sleep window into daytime hours!
             let primaryAsleepRange: ClosedRange<Int64>? = primarySleepSessionRange(
                 allSpans: !candAsleepSpans.isEmpty ? candAsleepSpans : candAllSpans,
                 asleepSpans: candAsleepSpans
             )
 
-            func inPrimaryAsleep(_ spans: [ClosedRange<Int64>], marginBefore: Int64 = 0, marginAfter: Int64 = 0) -> [ClosedRange<Int64>] {
+            func strictlyInPrimaryAsleep(_ spans: [ClosedRange<Int64>]) -> [ClosedRange<Int64>] {
                 guard let pr = primaryAsleepRange else { return spans }
-                let lo = pr.lowerBound - marginBefore
-                let hi = pr.upperBound + marginAfter
-                return spans.filter { $0.upperBound >= lo && $0.lowerBound <= hi }
+                return spans.filter { $0.lowerBound >= pr.lowerBound && $0.upperBound <= pr.upperBound }
             }
 
-            let primaryDeep = inPrimaryAsleep(candDeep)
-            let primaryRem = inPrimaryAsleep(candRem)
-            let primaryCore = inPrimaryAsleep(candCore)
-            let primaryUnspec = inPrimaryAsleep(candUnspec)
-            let primaryAwake = inPrimaryAsleep(candAwake)
-            // Only attach InBed blocks within 60m before falling asleep / 30m after waking (rejects multi-hour awake iPhone schedules!)
-            let primaryInBed = inPrimaryAsleep(candInBed, marginBefore: 60 * 60, marginAfter: 30 * 60)
+            let primaryDeep = strictlyInPrimaryAsleep(candDeep)
+            let primaryRem = strictlyInPrimaryAsleep(candRem)
+            let primaryCore = strictlyInPrimaryAsleep(candCore)
+            let primaryUnspec = hasRealStagedSleep ? [] : strictlyInPrimaryAsleep(candUnspec)
+            let primaryAwake = strictlyInPrimaryAsleep(candAwake)
+            // Clamp InBed blocks strictly within [45m before falling asleep .. 15m after waking] so giant iPhone schedules cannot stretch sleep!
+            let primaryInBed: [ClosedRange<Int64>] = {
+                guard let pr = primaryAsleepRange else { return candInBed }
+                let lo = pr.lowerBound - 45 * 60
+                let hi = pr.upperBound + 15 * 60
+                return candInBed.compactMap { sp in
+                    guard sp.upperBound >= lo && sp.lowerBound <= hi else { return nil }
+                    let cLo = max(sp.lowerBound, lo)
+                    let cHi = min(sp.upperBound, hi)
+                    return cHi > cLo ? (cLo...cHi) : nil
+                }
+            }()
 
             let deepSec = mergeIntervalSeconds(primaryDeep)
             let remSec = mergeIntervalSeconds(primaryRem)
@@ -326,8 +349,10 @@ enum AppleHealthExportImporter {
             }()
 
             // 2. Build SleepSessionDetail & extract overnight vitals STRICTLY during ACTUAL ASLEEP stages
-            //    (Matches Bevel "Entire Sleep": explicitly EXCLUDES `InBed` before falling asleep AND `Awake` periods!)
-            let allAsleepSpans = primaryDeep + primaryRem + primaryCore + primaryUnspec
+            //    (Matches Bevel "Entire Sleep": explicitly EXCLUDES `InBed`, `Awake`, and secondary `Durmiendo` when staged sleep exists!)
+            let allAsleepSpans = hasRealStagedSleep
+                ? (primaryDeep + primaryRem + primaryCore)
+                : (primaryDeep + primaryRem + primaryCore + primaryUnspec)
             let mergedAsleepSpans = mergeIntervals(allAsleepSpans)
             let mergedAwakeSpans = mergeIntervals(primaryAwake)
             let allSleepSpans = allAsleepSpans + primaryAwake + primaryInBed
@@ -492,7 +517,10 @@ enum AppleHealthExportImporter {
             let syncDiagLine: String = {
                 var parts: [String] = []
                 if let ss = sleepSession {
-                    parts.append("Sueño \(ss.startTimeLabel)–\(ss.endTimeLabel)")
+                    let sLbl = ss.startTimeLabel ?? "?"
+                    let eLbl = ss.endTimeLabel ?? "?"
+                    let durTag = asleepOrNil.map { " (\($0 / 60)h\(String(format: "%02d", $0 % 60))m)" } ?? ""
+                    parts.append("Sueño \(sLbl)–\(eLbl)\(durTag)")
                 } else {
                     parts.append("Sin bloques de sueño")
                 }
@@ -1346,16 +1374,17 @@ enum AppleHealthExportImporter {
         return ("Entrenamiento", "Actividad", false)
     }
 
-    /// Clusters sleep intervals separated by <= 90 min gaps and picks the primary overnight sleep cluster
+    /// Clusters sleep intervals separated by <= 60 min gaps and picks the primary overnight sleep cluster
     /// (longest total asleep duration). Prevents afternoon naps or next-night bedtimes from stretching the
     /// sleep window across daytime hours and dragging sleeping HRV/RHR down.
     private static func primarySleepSessionRange(
         allSpans: [ClosedRange<Int64>],
         asleepSpans: [ClosedRange<Int64>]
     ) -> ClosedRange<Int64>? {
-        guard !allSpans.isEmpty else { return nil }
-        let sorted = allSpans.sorted { $0.lowerBound < $1.lowerBound }
-        let maxGapSec: Int64 = 90 * 60
+        let validSpans = allSpans.filter { ($0.upperBound - $0.lowerBound) > 0 && ($0.upperBound - $0.lowerBound) <= 14 * 3600 }
+        guard !validSpans.isEmpty else { return nil }
+        let sorted = validSpans.sorted { $0.lowerBound < $1.lowerBound }
+        let maxGapSec: Int64 = 60 * 60
 
         var clusters: [ClosedRange<Int64>] = []
         var curStart = sorted[0].lowerBound
@@ -1376,7 +1405,7 @@ enum AppleHealthExportImporter {
         var best = clusters[0]
         var bestScore: Int64 = -1
         for c in clusters {
-            let inside = asleepSpans.filter { $0.upperBound >= c.lowerBound && $0.lowerBound <= c.upperBound }
+            let inside = asleepSpans.filter { $0.lowerBound >= c.lowerBound && $0.upperBound <= c.upperBound }
             let asleepDur = mergeIntervalSeconds(inside)
             let score = asleepDur > 0 ? asleepDur : max(c.upperBound - c.lowerBound, 0)
             if score > bestScore {
