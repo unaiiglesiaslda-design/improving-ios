@@ -39,6 +39,7 @@ enum OverlayRoute: String, Equatable, Hashable, Identifiable {
     case energia
     case nutricion
     case nutrientDetail
+    case nutritionTrends
     case journalInsights
     case healthMetricDetail
     case trendMetricDetail
@@ -319,6 +320,197 @@ struct JournalHabitImpactItem: Identifiable, Equatable {
     }
 }
 
+enum NutritionTrendTab: String, CaseIterable, Identifiable {
+    case score = "Puntuación de nutrición"
+    case macroBalance = "Equilibrio macro"
+    case netEnergy = "Energía neta"
+
+    var id: String { rawValue }
+}
+
+enum FoodQualityFactorKind: String, CaseIterable, Codable, Identifiable {
+    case wholeGrains
+    case excessSugar
+    case excessSodium
+    case vegetables
+    case healthyFats
+    case fruit
+    case nutsLegumes
+    case omega3
+    case redMeat
+    case processedMeat
+    case alcohol
+
+    var id: String { rawValue }
+
+    var emoji: String {
+        switch self {
+        case .wholeGrains: return "🌾"
+        case .excessSugar: return "🍰"
+        case .excessSodium: return "🧂"
+        case .vegetables: return "🥬"
+        case .healthyFats: return "🥑"
+        case .fruit: return "🍓"
+        case .nutsLegumes: return "🥜"
+        case .omega3: return "🐟"
+        case .redMeat: return "🥩"
+        case .processedMeat: return "🌭"
+        case .alcohol: return "🍷"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .wholeGrains: return "Cereales integrales"
+        case .excessSugar: return "Exceso de azúcar"
+        case .excessSodium: return "Exceso de sodio"
+        case .vegetables: return "Verdura"
+        case .healthyFats: return "Grasas saludables"
+        case .fruit: return "Fruta"
+        case .nutsLegumes: return "Frutos secos/legumbres"
+        case .omega3: return "Omega-3"
+        case .redMeat: return "Carne roja"
+        case .processedMeat: return "Carne procesada"
+        case .alcohol: return "Alcohol"
+        }
+    }
+
+    var isPositive: Bool {
+        switch self {
+        case .wholeGrains, .vegetables, .healthyFats, .fruit, .nutsLegumes, .omega3:
+            return true
+        case .excessSugar, .excessSodium, .redMeat, .processedMeat, .alcohol:
+            return false
+        }
+    }
+
+    /// Relative safe-threshold marker position along track (0...1) for negative factors matching Bevel UI.
+    var safeThresholdFraction: Double? {
+        switch self {
+        case .excessSugar: return 0.50
+        case .excessSodium: return 0.58
+        case .redMeat, .processedMeat, .alcohol: return 0.35
+        default: return nil
+        }
+    }
+
+    var maxTrackMagnitude: Double {
+        isPositive ? 12.0 : 14.0
+    }
+
+    var explanation: String {
+        switch self {
+        case .wholeGrains: return "Avena, pan 100% integral, quinoa o arroz integral aportan fibra prebiótica y estabilizan la glucosa."
+        case .excessSugar: return "Los azúcares añadidos por encima del umbral seguro disparan picos glucémicos y reducen la puntuación nutricional."
+        case .excessSodium: return "Un exceso de sodio por encima del umbral seguro eleva la retención hídrica y la carga cardiovascular."
+        case .vegetables: return "Verduras y hortalizas aportan micronutrientes, potasio, antioxidantes y saciedad."
+        case .healthyFats: return "Aguacate, aceite de oliva virgen extra, nueces y semillas protegen el perfil lipídico y hormonal."
+        case .fruit: return "Fruta entera fresca aporta polifenoles, vitamina C y fibra soluble."
+        case .nutsLegumes: return "Legumbres y frutos secos suman proteína vegetal, magnesio y fibra fermentable."
+        case .omega3: return "Pescado azul (salmón, sardinas, atún), chía o nueces reducen la inflamación y favorecen la VFC."
+        case .redMeat: return "Un consumo elevado de carne roja en el día penaliza ligeramente la calidad nutricional global."
+        case .processedMeat: return "Embutidos y carnes ultraprocesadas suman sodio, nitritos y grasas saturadas."
+        case .alcohol: return "El alcohol deteriora directamente la arquitectura de sueño REM, la VFC nocturna y la recuperación."
+        }
+    }
+}
+
+struct NutritionQualityFactors: Codable, Equatable, Hashable {
+    var wholeGrains: Double = 0
+    var excessSugar: Double = 0
+    var excessSodium: Double = 0
+    var vegetables: Double = 0
+    var healthyFats: Double = 0
+    var fruit: Double = 0
+    var nutsLegumes: Double = 0
+    var omega3: Double = 0
+    var redMeat: Double = 0
+    var processedMeat: Double = 0
+    var alcohol: Double = 0
+
+    enum CodingKeys: String, CodingKey {
+        case wholeGrains, excessSugar, excessSodium, vegetables, healthyFats
+        case fruit, nutsLegumes, omega3, redMeat, processedMeat, alcohol
+    }
+
+    init(
+        wholeGrains: Double = 0,
+        excessSugar: Double = 0,
+        excessSodium: Double = 0,
+        vegetables: Double = 0,
+        healthyFats: Double = 0,
+        fruit: Double = 0,
+        nutsLegumes: Double = 0,
+        omega3: Double = 0,
+        redMeat: Double = 0,
+        processedMeat: Double = 0,
+        alcohol: Double = 0
+    ) {
+        self.wholeGrains = wholeGrains
+        self.excessSugar = excessSugar
+        self.excessSodium = excessSodium
+        self.vegetables = vegetables
+        self.healthyFats = healthyFats
+        self.fruit = fruit
+        self.nutsLegumes = nutsLegumes
+        self.omega3 = omega3
+        self.redMeat = redMeat
+        self.processedMeat = processedMeat
+        self.alcohol = alcohol
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        wholeGrains = try c.decodeIfPresent(Double.self, forKey: .wholeGrains) ?? 0
+        excessSugar = try c.decodeIfPresent(Double.self, forKey: .excessSugar) ?? 0
+        excessSodium = try c.decodeIfPresent(Double.self, forKey: .excessSodium) ?? 0
+        vegetables = try c.decodeIfPresent(Double.self, forKey: .vegetables) ?? 0
+        healthyFats = try c.decodeIfPresent(Double.self, forKey: .healthyFats) ?? 0
+        fruit = try c.decodeIfPresent(Double.self, forKey: .fruit) ?? 0
+        nutsLegumes = try c.decodeIfPresent(Double.self, forKey: .nutsLegumes) ?? 0
+        omega3 = try c.decodeIfPresent(Double.self, forKey: .omega3) ?? 0
+        redMeat = try c.decodeIfPresent(Double.self, forKey: .redMeat) ?? 0
+        processedMeat = try c.decodeIfPresent(Double.self, forKey: .processedMeat) ?? 0
+        alcohol = try c.decodeIfPresent(Double.self, forKey: .alcohol) ?? 0
+    }
+
+    func value(for kind: FoodQualityFactorKind) -> Double {
+        switch kind {
+        case .wholeGrains: return wholeGrains
+        case .excessSugar: return excessSugar
+        case .excessSodium: return excessSodium
+        case .vegetables: return vegetables
+        case .healthyFats: return healthyFats
+        case .fruit: return fruit
+        case .nutsLegumes: return nutsLegumes
+        case .omega3: return omega3
+        case .redMeat: return redMeat
+        case .processedMeat: return processedMeat
+        case .alcohol: return alcohol
+        }
+    }
+
+    var hasAnyNonZero: Bool {
+        FoodQualityFactorKind.allCases.contains { abs(value(for: $0)) > 0.05 }
+    }
+
+    static func + (lhs: NutritionQualityFactors, rhs: NutritionQualityFactors) -> NutritionQualityFactors {
+        NutritionQualityFactors(
+            wholeGrains: lhs.wholeGrains + rhs.wholeGrains,
+            excessSugar: lhs.excessSugar + rhs.excessSugar,
+            excessSodium: lhs.excessSodium + rhs.excessSodium,
+            vegetables: lhs.vegetables + rhs.vegetables,
+            healthyFats: lhs.healthyFats + rhs.healthyFats,
+            fruit: lhs.fruit + rhs.fruit,
+            nutsLegumes: lhs.nutsLegumes + rhs.nutsLegumes,
+            omega3: lhs.omega3 + rhs.omega3,
+            redMeat: lhs.redMeat + rhs.redMeat,
+            processedMeat: lhs.processedMeat + rhs.processedMeat,
+            alcohol: lhs.alcohol + rhs.alcohol
+        )
+    }
+}
+
 struct NutritionMealItem: Identifiable, Codable, Hashable {
     let id: String
     var title: String
@@ -333,10 +525,14 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
     var calciumMg: Double? = nil
     var aiNotes: String? = nil
     var photoFilename: String? = nil
+    var emoji: String? = nil
+    var qualityFactors: NutritionQualityFactors? = nil
+    var isFavorite: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, title, timeLabel, kcal, proteinG, carbsG, fatG, qualityScore
         case caffeineMg, alcoholDrinks, calciumMg, aiNotes, photoFilename
+        case emoji, qualityFactors, isFavorite
     }
 
     init(
@@ -352,7 +548,10 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
         alcoholDrinks: Double? = nil,
         calciumMg: Double? = nil,
         aiNotes: String? = nil,
-        photoFilename: String? = nil
+        photoFilename: String? = nil,
+        emoji: String? = nil,
+        qualityFactors: NutritionQualityFactors? = nil,
+        isFavorite: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -367,6 +566,9 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
         self.calciumMg = calciumMg
         self.aiNotes = aiNotes
         self.photoFilename = photoFilename
+        self.emoji = emoji
+        self.qualityFactors = qualityFactors
+        self.isFavorite = isFavorite
     }
 
     init(from decoder: Decoder) throws {
@@ -384,11 +586,45 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
         calciumMg = try c.decodeIfPresent(Double.self, forKey: .calciumMg)
         aiNotes = try c.decodeIfPresent(String.self, forKey: .aiNotes)
         photoFilename = try c.decodeIfPresent(String.self, forKey: .photoFilename)
+        emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
+        qualityFactors = try c.decodeIfPresent(NutritionQualityFactors.self, forKey: .qualityFactors)
+        isFavorite = try c.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
     }
+}
+
+struct SavedFoodLibraryItem: Identifiable, Codable, Equatable, Hashable {
+    enum Kind: String, Codable, CaseIterable, Identifiable {
+        case favorite = "Favoritos"
+        case recipe = "Recetas"
+        case meal = "Comidas"
+        var id: String { rawValue }
+    }
+
+    let id: String
+    var kind: Kind
+    var emoji: String
+    var title: String
+    var kcal: Int
+    var proteinG: Int
+    var carbsG: Int
+    var fatG: Int
+    var qualityScore: Int
+    var caffeineMg: Double? = nil
+    var alcoholDrinks: Double? = nil
+    var calciumMg: Double? = nil
+    var qualityFactors: NutritionQualityFactors? = nil
+}
+
+struct CustomNutritionGoals: Codable, Equatable {
+    var caloriesKcal: Int? = nil
+    var fatG: Int? = nil
+    var carbsG: Int? = nil
+    var proteinG: Int? = nil
 }
 
 struct AnalyzedMealEstimate: Equatable {
     var title: String
+    var emoji: String = "🍽️"
     var kcal: Int
     var proteinG: Int
     var carbsG: Int
@@ -397,6 +633,7 @@ struct AnalyzedMealEstimate: Equatable {
     var alcoholDrinks: Double
     var calciumMg: Double
     var qualityScore: Int
+    var qualityFactors: NutritionQualityFactors = NutritionQualityFactors()
     var aiSummary: String
     var usedLiveAI: Bool
     var modelUsed: String

@@ -1267,6 +1267,7 @@ actor GeminiCoachService {
         Devuelve ÚNICAMENTE un objeto JSON válido sin bloques markdown con estas claves exactas:
         {
           "title": "Nombre corto y claro del plato en español (máx 48 caracteres)",
+          "emoji": "1 emoji exacto que represente el plato (ej. 🍪, 🥛, 🍳, 🥗, 🐟, 🥑)",
           "kcal": 520,
           "protein_g": 32,
           "carbs_g": 42,
@@ -1275,8 +1276,22 @@ actor GeminiCoachService {
           "alcohol_drinks": 0,
           "calcium_mg": 85,
           "quality_score": 90,
+          "factors": {
+            "whole_grains": 2.0,
+            "excess_sugar": 0.0,
+            "excess_sodium": 0.0,
+            "vegetables": 3.0,
+            "healthy_fats": 4.0,
+            "fruit": 0.0,
+            "nuts_legumes": 0.0,
+            "omega3": 0.0,
+            "red_meat": 0.0,
+            "processed_meat": 0.0,
+            "alcohol": 0.0
+          },
           "summary": "Breve explicación nutricional en 1 frase clara en español."
         }
+        Nota sobre `factors`: los positivos (whole_grains, vegetables, healthy_fats, fruit, nuts_legumes, omega3) van de 0 a +10; los negativos (excess_sugar, excess_sodium, red_meat, processed_meat, alcohol) van de 0 a -12 (números negativos o 0).
         """
 
         let userPrompt: String = {
@@ -1424,11 +1439,39 @@ actor GeminiCoachService {
         let alc = max(0, dblVal(["alcohol_drinks", "alcoholDrinks", "bebidas_alcohol"]))
         let calc = max(0, dblVal(["calcium_mg", "calciumMg", "calcio_mg"]))
         let q = min(max(intVal(["quality_score", "qualityScore", "calidad"], default: 80), 10), 100)
+        let rawEmoji = (obj["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let emoji = rawEmoji.isEmpty ? Self.inferEmoji(forTitle: rawTitle) : String(rawEmoji.prefix(2))
         let summary = ((obj["summary"] as? String) ?? (obj["resumen"] as? String) ?? "Estimación calculada por IA. Puedes ajustar cualquier valor antes de guardar.")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        var parsedFactors = NutritionQualityFactors()
+        if let fObj = obj["factors"] as? [String: Any] {
+            func fDbl(_ key: String) -> Double {
+                if let n = fObj[key] as? NSNumber { return n.doubleValue }
+                if let str = fObj[key] as? String, let d = Double(str.replacingOccurrences(of: ",", with: ".")) { return d }
+                return 0
+            }
+            parsedFactors = NutritionQualityFactors(
+                wholeGrains: max(0, min(12, fDbl("whole_grains"))),
+                excessSugar: -min(14, abs(fDbl("excess_sugar"))),
+                excessSodium: -min(14, abs(fDbl("excess_sodium"))),
+                vegetables: max(0, min(12, fDbl("vegetables"))),
+                healthyFats: max(0, min(12, fDbl("healthy_fats"))),
+                fruit: max(0, min(12, fDbl("fruit"))),
+                nutsLegumes: max(0, min(12, fDbl("nuts_legumes"))),
+                omega3: max(0, min(12, fDbl("omega3"))),
+                redMeat: -min(12, abs(fDbl("red_meat"))),
+                processedMeat: -min(12, abs(fDbl("processed_meat"))),
+                alcohol: -min(14, abs(fDbl("alcohol")))
+            )
+        }
+        if !parsedFactors.hasAnyNonZero {
+            parsedFactors = Self.inferQualityFactors(title: rawTitle, qualityScore: q, alcoholDrinks: alc)
+        }
+
         return AnalyzedMealEstimate(
             title: rawTitle.isEmpty ? "Comida analizada" : String(rawTitle.prefix(64)),
+            emoji: emoji,
             kcal: kcal,
             proteinG: p,
             carbsG: c,
@@ -1437,10 +1480,74 @@ actor GeminiCoachService {
             alcoholDrinks: alc,
             calciumMg: calc,
             qualityScore: q,
+            qualityFactors: parsedFactors,
             aiSummary: summary,
             usedLiveAI: usedLiveAI,
             modelUsed: modelUsed
         )
+    }
+
+    nonisolated static func inferEmoji(forTitle title: String) -> String {
+        let low = title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        if low.contains("galleta") || low.contains("cookie") { return "🍪" }
+        if low.contains("colacao") || low.contains("leche") || low.contains("batido") { return "🥛" }
+        if low.contains("huevo") || low.contains("tortilla") { return "🍳" }
+        if low.contains("salmon") || low.contains("atun") || low.contains("pescado") { return "🐟" }
+        if low.contains("ensalada") || low.contains("verdura") || low.contains("brocoli") { return "🥗" }
+        if low.contains("aguacate") { return "🥑" }
+        if low.contains("pollo") || low.contains("pavo") { return "🍗" }
+        if low.contains("arroz") || low.contains("avena") || low.contains("bowl") { return "🥣" }
+        if low.contains("pasta") || low.contains("macarron") || low.contains("espagueti") { return "🍝" }
+        if low.contains("pizza") { return "🍕" }
+        if low.contains("hamburguesa") || low.contains("burger") { return "🍔" }
+        if low.contains("fruta") || low.contains("platano") || low.contains("manzana") || low.contains("fresa") { return "🍓" }
+        if low.contains("cafe") || low.contains("espresso") { return "☕" }
+        if low.contains("vino") || low.contains("cerveza") || low.contains("copa") { return "🍷" }
+        if low.contains("tostada") || low.contains("bocadillo") || low.contains("pan") { return "🥪" }
+        return "🍽️"
+    }
+
+    nonisolated static func inferQualityFactors(title: String, qualityScore: Int, alcoholDrinks: Double = 0) -> NutritionQualityFactors {
+        let low = title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        var f = NutritionQualityFactors()
+
+        if low.contains("avena") || low.contains("integral") || low.contains("quinoa") || low.contains("centeno") || low.contains("cereal") {
+            f.wholeGrains += 2.5
+        }
+        if low.contains("galleta") || low.contains("chocolate") || low.contains("colacao") || low.contains("azucar") || low.contains("bolleria") || low.contains("tarta") || low.contains("helado") || low.contains("refresco") || low.contains("donut") || low.contains("croissant") {
+            f.excessSugar -= 4.2
+        }
+        if low.contains("pizza") || low.contains("hamburguesa") || low.contains("patatas fritas") || low.contains("embutido") || low.contains("salchicha") || low.contains("bacon") || low.contains("jamon") || low.contains("soja") {
+            f.excessSodium -= 2.4
+        }
+        if low.contains("ensalada") || low.contains("verdura") || low.contains("espinaca") || low.contains("brocoli") || low.contains("tomate") || low.contains("calabacin") || low.contains("pimiento") {
+            f.vegetables += 3.5
+        }
+        if low.contains("aguacate") || low.contains("aceite") || low.contains("nueces") || low.contains("almendra") || low.contains("pistacho") || low.contains("salmon") || low.contains("oliva") {
+            f.healthyFats += 3.0
+        }
+        if low.contains("fruta") || low.contains("fresa") || low.contains("arandano") || low.contains("platano") || low.contains("manzana") || low.contains("naranja") || low.contains("frutos rojos") || low.contains("kiwi") {
+            f.fruit += 3.0
+        }
+        if low.contains("lenteja") || low.contains("garbanzo") || low.contains("alubia") || low.contains("nuez") || low.contains("nueces") || low.contains("almendra") || low.contains("cacahuete") || low.contains("hummus") {
+            f.nutsLegumes += 3.0
+        }
+        if low.contains("salmon") || low.contains("sardina") || low.contains("atun") || low.contains("caballa") || low.contains("chia") || low.contains("nueces") {
+            f.omega3 += 3.5
+        }
+        if low.contains("ternera") || low.contains("chuleton") || low.contains("entrecot") || low.contains("cerdo") || low.contains("cordero") || low.contains("carne roja") {
+            f.redMeat -= 2.5
+        }
+        if low.contains("bacon") || low.contains("salchicha") || low.contains("chorizo") || low.contains("fuet") || low.contains("salami") || low.contains("embutido") || low.contains("mortadela") || low.contains("perrito") {
+            f.processedMeat -= 3.5
+        }
+        if alcoholDrinks > 0 || low.contains("cerveza") || low.contains("vino") || low.contains("copa") || low.contains("gin") || low.contains("ron") || low.contains("whisky") {
+            f.alcohol -= max(3.5, alcoholDrinks * 4.0)
+        }
+        if !f.hasAnyNonZero && qualityScore < 55 {
+            f.excessSugar = -Double(60 - qualityScore) * 0.25
+        }
+        return f
     }
 
     nonisolated static func estimateMealLocally(from rawText: String, hasPhoto: Bool) -> AnalyzedMealEstimate {
@@ -1564,8 +1671,12 @@ actor GeminiCoachService {
             ? "Estimación local instantánea calculada sobre los ingredientes detectados (sin conexión a Gemini en vivo). Puedes ajustar cualquier cifra."
             : "Configura tu API Key de Gemini o conéctate a internet para análisis visual exacto; ajusta los valores manualmente si lo necesitas."
 
+        let clampedQ = min(max(quality, 15), 96)
+        let factors = Self.inferQualityFactors(title: cleanTitle, qualityScore: clampedQ, alcoholDrinks: totalAlc)
+
         return AnalyzedMealEstimate(
             title: cleanTitle,
+            emoji: Self.inferEmoji(forTitle: cleanTitle),
             kcal: Int(totalKcal.rounded()),
             proteinG: Int(totalP.rounded()),
             carbsG: Int(totalC.rounded()),
@@ -1573,7 +1684,8 @@ actor GeminiCoachService {
             caffeineMg: totalCaff,
             alcoholDrinks: totalAlc,
             calciumMg: totalCalc,
-            qualityScore: min(max(quality, 15), 96),
+            qualityScore: clampedQ,
+            qualityFactors: factors,
             aiSummary: note,
             usedLiveAI: false,
             modelUsed: "local-nutrition"

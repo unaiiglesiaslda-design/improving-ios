@@ -457,72 +457,51 @@ struct HoyScreen: View {
                     }
                 }
 
-                // 6. Nutrición y Actividad
-                Text("Nutrición y Actividad")
+                // 6. Nutrición — Exact Screenshot 1 "Alimentos de hoy" Card (Plate Tick Gauge + 3 Dot-Matrix Grids!)
+                Text("Nutrición")
                     .font(ImprovingFont.sectionTitle(18.5))
                     .foregroundColor(BevelColors.textPrimary)
 
-                BevelCard(cornerRadius: 20) {
-                    VStack(spacing: 14) {
-                        if let w = store.workoutsToday.first {
-                            Button { onNavigate(.esfuerzo) } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "figure.run")
-                                        .font(.system(size: 16, weight: .bold))
-                                        .foregroundColor(BevelColors.orangeEnd)
-                                        .frame(width: 42, height: 42)
-                                        .background(Circle().fill(BevelColors.amberSoftBg))
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(w.title)
-                                            .font(ImprovingFont.cardTitle(14.5))
-                                            .foregroundColor(BevelColors.textPrimary)
-                                        let meta = [
-                                            w.timeRange,
-                                            w.kcal > 0 ? "\(w.kcal) kcal" : nil,
-                                            w.avgHrBpm > 0 ? "\(w.avgHrBpm) ppm" : nil
-                                        ].compactMap { $0 }.joined(separator: " · ")
-                                        Text(meta)
-                                            .font(ImprovingFont.caption(12))
-                                            .foregroundColor(BevelColors.textSecondary)
-                                    }
-                                    Spacer()
-                                    Text("\(w.strainPct)%")
-                                        .font(ImprovingFont.caption(12.5))
-                                        .fontWeight(.bold)
-                                        .foregroundColor(BevelColors.orangeEnd)
-                                }
-                            }
-                            Divider().background(BevelColors.divider)
-                        }
+                NutritionHomeSummaryCard(store: store) {
+                    onNavigate(.nutricion)
+                }
 
-                        Button { onNavigate(.nutricion) } label: {
+                if let w = store.workoutsToday.first {
+                    Text("Actividad reciente")
+                        .font(ImprovingFont.sectionTitle(18.5))
+                        .foregroundColor(BevelColors.textPrimary)
+
+                    Button { onNavigate(.esfuerzo) } label: {
+                        BevelCard(cornerRadius: 20) {
                             HStack(spacing: 12) {
-                                Text("🥑")
-                                    .font(.system(size: 18))
+                                Image(systemName: w.categoryLabel == "Fuerza" ? "dumbbell.fill" : "figure.run")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(BevelColors.orangeEnd)
                                     .frame(width: 42, height: 42)
-                                    .background(Circle().fill(BevelColors.greenSoftBg))
+                                    .background(Circle().fill(BevelColors.amberSoftBg))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Nutrición · \(store.mealsToday.count) comidas")
+                                    Text(w.title)
                                         .font(ImprovingFont.cardTitle(14.5))
                                         .foregroundColor(BevelColors.textPrimary)
-                                    if let fq = store.foodQualityScore {
-                                        Text("\(store.totalCaloriesToday) kcal · \(store.totalProteinToday)g Prot · Calidad \(fq)")
-                                            .font(ImprovingFont.caption(12))
-                                            .foregroundColor(BevelColors.textSecondary)
-                                    } else {
-                                        Text("Sin comidas registradas este día")
-                                            .font(ImprovingFont.caption(12))
-                                            .foregroundColor(BevelColors.textSecondary)
-                                    }
+                                    let meta = [
+                                        w.timeRange,
+                                        w.kcal > 0 ? "\(w.kcal) kcal" : nil,
+                                        w.avgHrBpm > 0 ? "\(w.avgHrBpm) ppm" : nil
+                                    ].compactMap { $0 }.joined(separator: " · ")
+                                    Text(meta)
+                                        .font(ImprovingFont.caption(12))
+                                        .foregroundColor(BevelColors.textSecondary)
                                 }
                                 Spacer()
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(BevelColors.textMuted)
+                                Text("\(w.strainPct)%")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.orangeEnd)
                             }
+                            .padding(16)
                         }
                     }
-                    .padding(16)
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)

@@ -211,12 +211,26 @@ struct ImprovingRootView: View {
                 onOpenSleepSession: { push(.sleepSessionDetail) }
             )
         case .nutricion:
-            NutricionScreen(store: store, onBack: { pop() }) { key in
-                store.selectedNutrientKey = key
-                push(.nutrientDetail)
-            }
+            NutricionScreen(
+                store: store,
+                onBack: { pop() },
+                onOpenNutrient: { key in
+                    store.selectedNutrientKey = key
+                    push(.nutrientDetail)
+                },
+                onOpenTrends: { tab in
+                    store.selectedNutritionTrendTab = tab
+                    push(.nutritionTrends)
+                }
+            )
         case .nutrientDetail:
             NutrientDetailScreen(store: store, onBack: { pop() })
+        case .nutritionTrends:
+            NutritionTrendsDetailScreen(
+                store: store,
+                initialTab: store.selectedNutritionTrendTab,
+                onBack: { pop() }
+            )
         case .journalInsights:
             JournalInsightsScreen(store: store, onBack: { pop() })
         case .healthMetricDetail:

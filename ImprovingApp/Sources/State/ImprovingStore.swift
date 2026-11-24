@@ -52,6 +52,8 @@ final class ImprovingStore: ObservableObject {
         var customJournalHabits: [CustomJournalHabit]?
         var journalNotesByDate: [String: String]?
         var notificationSettings: SmartNotificationSettings?
+        var savedFoodsLibrary: [SavedFoodLibraryItem]?
+        var customNutritionGoals: CustomNutritionGoals?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -73,6 +75,9 @@ final class ImprovingStore: ObservableObject {
     @Published var journalNotesByDate: [String: String] = [:]
     @Published var notificationSettings: SmartNotificationSettings = SmartNotificationSettings()
     @Published var notificationStatusText: String = "Avisos listos para configurar"
+    @Published var savedFoodsLibrary: [SavedFoodLibraryItem] = []
+    @Published var customNutritionGoals: CustomNutritionGoals = CustomNutritionGoals()
+    @Published var selectedNutritionTrendTab: NutritionTrendTab = .score
     @Published var selectedHealthMetric: HealthMetricKind = .hrv
     @Published var selectedHealthRange: String = "30 d"
     @Published var selectedNutrientKey: String = "Proteína"
@@ -581,9 +586,157 @@ final class ImprovingStore: ObservableObject {
         mealsToday.compactMap(\.calciumMg).reduce(0, +) + manualNutrientAmount(for: "Calcio")
     }
     var foodQualityScore: Int? {
-        let m = mealsToday
-        guard !m.isEmpty else { return nil }
-        return m.reduce(0) { $0 + $1.qualityScore } / m.count
+        nutritionScore(for: selectedDateIso)
+    }
+
+    var effectiveNutritionGoals: (kcal: Int, fatG: Int, carbsG: Int, proteinG: Int) {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        return (
+            kcal: customNutritionGoals.caloriesKcal ?? norms.maintenanceCaloriesKcal,
+            fatG: customNutritionGoals.fatG ?? norms.fatGoalG,
+            carbsG: customNutritionGoals.carbsG ?? norms.carbsGoalG,
+            proteinG: customNutritionGoals.proteinG ?? norms.proteinGoalG
+        )
+    }
+
+    var savedFoodsCounts: (favorites: Int, recipes: Int, meals: Int) {
+        let favs = savedFoodsLibrary.filter { $0.kind == .favorite }.count
+        let recs = savedFoodsLibrary.filter { $0.kind == .recipe }.count
+        let mls = savedFoodsLibrary.filter { $0.kind == .meal }.count
+        return (favs, recs, mls)
+    }
+
+    func nutritionScore(for dateIso: String) -> Int? {
+        let meals = mealsByDate[dateIso] ?? []
+        guard !meals.isEmpty else { return nil }
+        let totalKcal = max(meals.reduce(0) { $0 + max($1.kcal, 50) }, 1)
+        let weighted = meals.reduce(0.0) { acc, m in
+            acc + Double(m.qualityScore) * Double(max(m.kcal, 50))
+        }
+        return min(max(Int((weighted / Double(totalKcal)).rounded()), 1), 100)
+    }
+
+    func nutritionScoreStatus(for score: Int?) -> (label: String, color: Color) {
+        guard let s = score else { return ("sin datos", BevelColors.textMuted) }
+        if s >= 80 { return ("excelente", BevelColors.greenPrimary) }
+        if s >= 60 { return ("bueno", Color(hex: 0x60A5FA)) }
+        if s >= 40 { return ("aceptable", Color(hex: 0x8BA0FF)) }
+        return ("mejorable", BevelColors.amberStart)
+    }
+
+    func nutritionDayTotals(for dateIso: String) -> (kcal: Int, fatG: Double, carbsG: Double, proteinG: Double, score: Int?, mealCount: Int) {
+        let meals = mealsByDate[dateIso] ?? []
+        let extraP = manualNutrientAmount(for: "Proteína", dateIso: dateIso)
+        let extraC = manualNutrientAmount(for: "Carbohidratos", dateIso: dateIso)
+        let extraF = manualNutrientAmount(for: "Grasas", dateIso: dateIso)
+        let p = Double(meals.reduce(0) { $0 + $1.proteinG }) + extraP
+        let c = Double(meals.reduce(0) { $0 + $1.carbsG }) + extraC
+        let f = Double(meals.reduce(0) { $0 + $1.fatG }) + extraF
+        let mealKcal = meals.reduce(0) { $0 + $1.kcal }
+        let kcal = mealKcal + Int((extraP * 4.0 + extraC * 4.0 + extraF * 9.0).rounded())
+        return (kcal, f, c, p, nutritionScore(for: dateIso), meals.count)
+    }
+
+    func burnedCalories(for dateIso: String) -> Int {
+        let bmr = WhoopPhysiologyEngine.computeBmrKcalPerDay(profile: userProfile)
+        guard let d = activeHistory[dateIso] else { return bmr }
+        if let active = d.activeKcal, active > 0 {
+            return bmr + active
+        }
+        let wkKcal = d.workouts.reduce(0) { $0 + $1.kcal }
+        return bmr + wkKcal
+    }
+
+    func netEnergyKcal(for dateIso: String) -> (net: Int, consumed: Int, burned: Int) {
+        let consumed = nutritionDayTotals(for: dateIso).kcal
+        let burned = burnedCalories(for: dateIso)
+        return (consumed - burned, consumed, burned)
+    }
+
+    func dailyFoodQualityFactors(for dateIso: String) -> NutritionQualityFactors {
+        let meals = mealsByDate[dateIso] ?? []
+        var total = NutritionQualityFactors()
+        for meal in meals {
+            let f = meal.qualityFactors ?? GeminiCoachService.inferQualityFactors(
+                title: meal.title,
+                qualityScore: meal.qualityScore,
+                alcoholDrinks: meal.alcoholDrinks ?? 0
+            )
+            total = total + f
+        }
+        let manualAlc = manualNutrientAmount(for: "Alcohol", dateIso: dateIso)
+        if manualAlc > 0 {
+            total.alcohol -= manualAlc * 4.0
+        }
+        return total
+    }
+
+    func updateNutritionGoals(_ goals: CustomNutritionGoals) {
+        customNutritionGoals = goals
+        dataRevision += 1
+        persistState()
+    }
+
+    func saveFoodToLibrary(_ item: SavedFoodLibraryItem) {
+        if let idx = savedFoodsLibrary.firstIndex(where: { $0.id == item.id }) {
+            savedFoodsLibrary[idx] = item
+        } else {
+            savedFoodsLibrary.insert(item, at: 0)
+        }
+        persistState()
+    }
+
+    func removeFoodFromLibrary(id: String) {
+        savedFoodsLibrary.removeAll { $0.id == id }
+        persistState()
+    }
+
+    func toggleMealFavorite(_ meal: NutritionMealItem) {
+        var updated = meal
+        updated.isFavorite.toggle()
+        saveMeal(updated)
+        if updated.isFavorite {
+            let libItem = SavedFoodLibraryItem(
+                id: "fav_\(updated.id)",
+                kind: .favorite,
+                emoji: updated.emoji ?? GeminiCoachService.inferEmoji(forTitle: updated.title),
+                title: updated.title,
+                kcal: updated.kcal,
+                proteinG: updated.proteinG,
+                carbsG: updated.carbsG,
+                fatG: updated.fatG,
+                qualityScore: updated.qualityScore,
+                caffeineMg: updated.caffeineMg,
+                alcoholDrinks: updated.alcoholDrinks,
+                calciumMg: updated.calciumMg,
+                qualityFactors: updated.qualityFactors
+            )
+            saveFoodToLibrary(libItem)
+        } else {
+            removeFoodFromLibrary(id: "fav_\(updated.id)")
+        }
+    }
+
+    func logLibraryFoodToday(_ item: SavedFoodLibraryItem) {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        let meal = NutritionMealItem(
+            id: UUID().uuidString,
+            title: item.title,
+            timeLabel: fmt.string(from: Date()),
+            kcal: item.kcal,
+            proteinG: item.proteinG,
+            carbsG: item.carbsG,
+            fatG: item.fatG,
+            qualityScore: item.qualityScore,
+            caffeineMg: item.caffeineMg,
+            alcoholDrinks: item.alcoholDrinks,
+            calciumMg: item.calciumMg,
+            emoji: item.emoji,
+            qualityFactors: item.qualityFactors,
+            isFavorite: item.kind == .favorite
+        )
+        saveMeal(meal)
     }
 
     var sleepDurationText: String {
@@ -3507,7 +3660,9 @@ final class ImprovingStore: ObservableObject {
             hiddenJournalHabitIds: Array(hiddenJournalHabitIds),
             customJournalHabits: customJournalHabits,
             journalNotesByDate: journalNotesByDate,
-            notificationSettings: notificationSettings
+            notificationSettings: notificationSettings,
+            savedFoodsLibrary: savedFoodsLibrary,
+            customNutritionGoals: customNutritionGoals
         )
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: persistenceURL, options: .atomic)
@@ -3562,6 +3717,8 @@ final class ImprovingStore: ObservableObject {
         if let customHabits = snap.customJournalHabits { customJournalHabits = customHabits }
         if let notes = snap.journalNotesByDate { journalNotesByDate = notes }
         if let notifCfg = snap.notificationSettings { notificationSettings = notifCfg }
+        if let library = snap.savedFoodsLibrary { savedFoodsLibrary = library }
+        if let nutGoals = snap.customNutritionGoals { customNutritionGoals = nutGoals }
 
         // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
         var sanitizedCorruptStrain = false

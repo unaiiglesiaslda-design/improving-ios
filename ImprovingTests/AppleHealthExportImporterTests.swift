@@ -1321,4 +1321,89 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.deleteWorkout(id: "wk_1", dateIso: iso)
         XCTAssertTrue(store.workoutsToday.isEmpty)
     }
+
+    @MainActor
+    func testNutritionQualityFactorsNetEnergyLibraryAndCustomGoals() throws {
+        // 1. Gemini 11-factor JSON parsing
+        let richJson = """
+        {
+          "title": "Galletas de avena con chispas de chocolate",
+          "emoji": "🍪",
+          "kcal": 310,
+          "protein_g": 5,
+          "carbs_g": 33,
+          "fat_g": 18,
+          "caffeine_mg": 10,
+          "alcohol_drinks": 0,
+          "calcium_mg": 35,
+          "quality_score": 44,
+          "factors": {
+            "whole_grains": 2.0,
+            "excess_sugar": -8.2,
+            "excess_sodium": 0,
+            "vegetables": 0,
+            "healthy_fats": 0,
+            "fruit": 0,
+            "nuts_legumes": 0,
+            "omega3": 0,
+            "red_meat": 0,
+            "processed_meat": 0,
+            "alcohol": 0
+          },
+          "summary": "Aporta cereales integrales de la avena pero supera el umbral seguro de azúcar."
+        }
+        """
+        let est = try XCTUnwrap(GeminiCoachService.parseMealEstimateJson(richJson, usedLiveAI: true, modelUsed: "gemini-3-flash"))
+        XCTAssertEqual(est.emoji, "🍪")
+        XCTAssertEqual(est.qualityFactors.wholeGrains, 2.0, accuracy: 0.01)
+        XCTAssertEqual(est.qualityFactors.excessSugar, -8.2, accuracy: 0.01)
+
+        // 2. Store daily factors, Net Energy, Mis Alimentos library & Custom Goals
+        let store = ImprovingStore()
+        store.mealsByDate = [:]
+        store.savedFoodsLibrary = []
+        store.customNutritionGoals = CustomNutritionGoals()
+        let iso = store.selectedDateIso
+
+        let meal = NutritionMealItem(
+            id: "nut_factor_1",
+            title: est.title,
+            timeLabel: "12:27",
+            kcal: est.kcal,
+            proteinG: est.proteinG,
+            carbsG: est.carbsG,
+            fatG: est.fatG,
+            qualityScore: est.qualityScore,
+            emoji: est.emoji,
+            qualityFactors: est.qualityFactors
+        )
+        store.saveMeal(meal)
+        let aggFactors = store.dailyFoodQualityFactors(for: iso)
+        XCTAssertEqual(aggFactors.wholeGrains, 2.0, accuracy: 0.01)
+        XCTAssertEqual(aggFactors.excessSugar, -8.2, accuracy: 0.01)
+
+        // Net energy = consumed - burned (deficit when only 310 kcal consumed!)
+        let net = store.netEnergyKcal(for: iso)
+        XCTAssertEqual(net.consumed, 310)
+        XCTAssertGreaterThan(net.burned, 1000)
+        XCTAssertLessThan(net.net, 0)
+
+        // Favorite library & 1-tap log
+        store.toggleMealFavorite(meal)
+        XCTAssertEqual(store.savedFoodsCounts.favorites, 1)
+        if let libItem = store.savedFoodsLibrary.first {
+            store.logLibraryFoodToday(libItem)
+            XCTAssertEqual(store.mealsToday.count, 2)
+        }
+
+        // Custom nutrition goals override + restore
+        store.updateNutritionGoals(CustomNutritionGoals(caloriesKcal: 2400, fatG: 75, carbsG: 260, proteinG: 170))
+        XCTAssertEqual(store.effectiveNutritionGoals.kcal, 2400)
+        XCTAssertEqual(store.effectiveNutritionGoals.proteinG, 170)
+
+        // Cleanup persisted test artifacts
+        store.mealsByDate = [:]
+        store.savedFoodsLibrary = []
+        store.updateNutritionGoals(CustomNutritionGoals())
+    }
 }

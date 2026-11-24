@@ -8,6 +8,7 @@ enum ShareSummaryKind: Identifiable {
     case strain
     case stress
     case energy
+    case nutrition
     case workout(EffortEventItem)
 
     var id: String {
@@ -17,6 +18,7 @@ enum ShareSummaryKind: Identifiable {
         case .strain: return "share_strain"
         case .stress: return "share_stress"
         case .energy: return "share_energy"
+        case .nutrition: return "share_nutrition"
         case .workout(let w): return "share_workout_\(w.id)"
         }
     }
@@ -156,6 +158,27 @@ struct ShareCardPayload {
                     ShareCardMetricTile(icon: "leaf.fill", label: "Recuperación", value: avail.hasRecoveryData ? "\(store.recoveryPercent)%" : "--"),
                     ShareCardMetricTile(icon: "bed.double.fill", label: "Sueño", value: avail.hasSleepData ? "\(store.sleepPercent)%" : "--"),
                     ShareCardMetricTile(icon: "flame.fill", label: "Esfuerzo", value: avail.hasStrainData ? "\(store.strainPercent)%" : "--")
+                ]
+            )
+
+        case .nutrition:
+            let scoreOpt = store.foodQualityScore
+            let net = store.netEnergyKcal(for: store.selectedDateIso)
+            let netText = net.net >= 0 ? "+\(net.net) kcal" : "\(net.net) kcal"
+            return ShareCardPayload(
+                pillarBadge: "NUTRICIÓN",
+                title: "Puntuación de nutrición",
+                subtitle: dateLine,
+                progress: scoreOpt.map { Double($0) / 100.0 } ?? 0.0,
+                centerValue: scoreOpt.map { "\($0)" } ?? "--",
+                centerCaption: store.nutritionScoreStatus(for: scoreOpt).label,
+                ringColors: [Color(hex: 0xA78BFA), Color(hex: 0x6E95F5)],
+                backgroundColors: [Color(hex: 0x26233A), Color(hex: 0x191A26), Color(hex: 0x0F1218)],
+                metrics: [
+                    ShareCardMetricTile(icon: "flame.fill", label: "Energía neta", value: netText),
+                    ShareCardMetricTile(icon: "drop.fill", label: "Grasas", value: "\(store.totalFatToday) g"),
+                    ShareCardMetricTile(icon: "leaf.fill", label: "Carbos", value: "\(store.totalCarbsToday) g"),
+                    ShareCardMetricTile(icon: "figure.strengthtraining.traditional", label: "Proteína", value: "\(store.totalProteinToday) g")
                 ]
             )
 
