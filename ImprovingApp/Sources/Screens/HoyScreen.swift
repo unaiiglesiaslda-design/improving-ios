@@ -33,7 +33,7 @@ struct HoyScreen: View {
         let sleepHours = Double(store.currentDaySummary?.asleepMinutes ?? 0) / 60.0
         let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: sleepBand.low, bandHigh: sleepBand.high, higherIsBetter: true, hasData: avail.hasSleepData)
 
-        let evalMap: [HealthMetricKind: VitalBandEvaluation] = [
+        let evalMap: [HealthMetricKind: VitalEvaluation] = [
             .respiratoryRate: respEval,
             .restingHeartRate: rhrEval,
             .hrv: hrvEval,
@@ -296,9 +296,9 @@ struct HoyScreen: View {
         _ section: HomeSectionKind,
         avail: DataAvailabilitySnapshot,
         visibleHealthKinds: [HealthMetricKind],
-        evalMap: [HealthMetricKind: VitalBandEvaluation],
+        evalMap: [HealthMetricKind: VitalEvaluation],
         tempAbs: Double,
-        recordedVitals: [VitalBandEvaluation],
+        recordedVitals: [VitalEvaluation],
         outOfRangeCount: Int,
         cardioAnalysis: TrainingLoadAnalysis,
         cardioSeries: [Double?],
@@ -664,7 +664,7 @@ struct HoyScreen: View {
     private func healthMonitorTile(
         kind: HealthMetricKind,
         avail: DataAvailabilitySnapshot,
-        eval: VitalBandEvaluation,
+        eval: VitalEvaluation,
         tempAbs: Double
     ) -> some View {
         switch kind {
