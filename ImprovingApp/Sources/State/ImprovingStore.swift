@@ -1993,12 +1993,12 @@ final class ImprovingStore: ObservableObject {
 
     private static func normalizedNutrientBucketKey(_ raw: String) -> String {
         let low = raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        if low.contains("carb") { return "carbohidratos" }
+        if low.contains("prote") { return "proteina" }
+        if low.contains("gras") { return "grasas" }
         if low.contains("hidra") || low.contains("agua") { return "hidratacion" }
         if low.contains("cafe") { return "cafeina" }
         if low.contains("alco") { return "alcohol" }
-        if low.contains("prote") { return "proteina" }
-        if low.contains("carb") { return "carbohidratos" }
-        if low.contains("gras") { return "grasas" }
         return "calcio"
     }
 

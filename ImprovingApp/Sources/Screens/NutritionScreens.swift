@@ -1096,7 +1096,31 @@ struct NutrientDetailScreen: View {
         let intFmt: (Double) -> String = { "\(Int($0.rounded()))" }
         let decFmt: (Double) -> String = { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) }
 
-        if lowKey.contains("hidra") || lowKey.contains("agua") {
+        if lowKey.contains("prote") {
+            return NutrientSpec(
+                displayTitle: "Proteína", emoji: "🍗", unit: "g", goal: Double(max(norms.proteinGoalG, 60)),
+                quickIncrement: 25, quickButtonLabel: "+ 25 g proteína",
+                accentColor: BevelColors.strengthPink, isHydration: false, isUpperLimit: false,
+                mealsContribution: Double(store.mealsToday.reduce(0) { $0 + $1.proteinG }),
+                mealExtractor: { Double($0.proteinG) }, formatValue: intFmt
+            )
+        } else if lowKey.contains("carb") {
+            return NutrientSpec(
+                displayTitle: "Carbohidratos", emoji: "🌾", unit: "g", goal: Double(max(norms.carbsGoalG, 80)),
+                quickIncrement: 30, quickButtonLabel: "+ 30 g carbos",
+                accentColor: BevelColors.amberStart, isHydration: false, isUpperLimit: false,
+                mealsContribution: Double(store.mealsToday.reduce(0) { $0 + $1.carbsG }),
+                mealExtractor: { Double($0.carbsG) }, formatValue: intFmt
+            )
+        } else if lowKey.contains("gras") {
+            return NutrientSpec(
+                displayTitle: "Grasas", emoji: "🥑", unit: "g", goal: Double(max(norms.fatGoalG, 40)),
+                quickIncrement: 10, quickButtonLabel: "+ 10 g grasas",
+                accentColor: BevelColors.skyBlue, isHydration: false, isUpperLimit: false,
+                mealsContribution: Double(store.mealsToday.reduce(0) { $0 + $1.fatG }),
+                mealExtractor: { Double($0.fatG) }, formatValue: intFmt
+            )
+        } else if lowKey.contains("hidra") || lowKey.contains("agua") {
             let goalMl = max(norms.hydrationGoalLiters * 1000.0, 1800.0)
             return NutrientSpec(
                 displayTitle: "Hidratación", emoji: "💧", unit: "ml", goal: goalMl,
@@ -1120,30 +1144,6 @@ struct NutrientDetailScreen: View {
                 accentColor: BevelColors.coralHigh, isHydration: false, isUpperLimit: true,
                 mealsContribution: store.mealsToday.compactMap(\.alcoholDrinks).reduce(0, +),
                 mealExtractor: { $0.alcoholDrinks ?? 0 }, formatValue: decFmt
-            )
-        } else if lowKey.contains("prote") {
-            return NutrientSpec(
-                displayTitle: "Proteína", emoji: "🍗", unit: "g", goal: Double(max(norms.proteinGoalG, 60)),
-                quickIncrement: 25, quickButtonLabel: "+ 25 g proteína",
-                accentColor: BevelColors.strengthPink, isHydration: false, isUpperLimit: false,
-                mealsContribution: Double(store.mealsToday.reduce(0) { $0 + $1.proteinG }),
-                mealExtractor: { Double($0.proteinG) }, formatValue: intFmt
-            )
-        } else if lowKey.contains("carb") {
-            return NutrientSpec(
-                displayTitle: "Carbohidratos", emoji: "🌾", unit: "g", goal: Double(max(norms.carbsGoalG, 80)),
-                quickIncrement: 30, quickButtonLabel: "+ 30 g carbos",
-                accentColor: BevelColors.amberStart, isHydration: false, isUpperLimit: false,
-                mealsContribution: Double(store.mealsToday.reduce(0) { $0 + $1.carbsG }),
-                mealExtractor: { Double($0.carbsG) }, formatValue: intFmt
-            )
-        } else if lowKey.contains("gras") {
-            return NutrientSpec(
-                displayTitle: "Grasas", emoji: "🥑", unit: "g", goal: Double(max(norms.fatGoalG, 40)),
-                quickIncrement: 10, quickButtonLabel: "+ 10 g grasas",
-                accentColor: BevelColors.skyBlue, isHydration: false, isUpperLimit: false,
-                mealsContribution: Double(store.mealsToday.reduce(0) { $0 + $1.fatG }),
-                mealExtractor: { Double($0.fatG) }, formatValue: intFmt
             )
         } else {
             return NutrientSpec(
