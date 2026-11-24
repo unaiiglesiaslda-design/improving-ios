@@ -141,7 +141,14 @@ struct ImprovingRootView: View {
         case .none:
             EmptyView()
         case .esfuerzo:
-            EsfuerzoScreen(store: store, onBack: { pop() }, onOpenTrend: { _ in push(.healthMetricDetail) })
+            EsfuerzoScreen(
+                store: store,
+                onBack: { pop() },
+                onOpenTrend: { item in
+                    store.selectedTrendItem = item
+                    push(.trendMetricDetail)
+                }
+            )
         case .recuperacion:
             RecuperacionScreen(
                 store: store,
@@ -151,7 +158,10 @@ struct ImprovingRootView: View {
                     push(.healthMetricDetail)
                 },
                 onOpenSleepSession: { push(.sleepSessionDetail) },
-                onOpenTrend: { _ in push(.healthMetricDetail) }
+                onOpenTrend: { item in
+                    store.selectedTrendItem = item
+                    push(.trendMetricDetail)
+                }
             )
         case .suenoDetail:
             SuenoDetailScreen(
@@ -159,9 +169,14 @@ struct ImprovingRootView: View {
                 onBack: { pop() },
                 onOpenSleepNeed: { push(.sleepNeedDetail) },
                 onOpenSleepSession: { push(.sleepSessionDetail) },
-                onOpenTrend: { _ in
-                    store.selectedHealthMetric = .sleepDuration
-                    push(.healthMetricDetail)
+                onOpenTrend: { item in
+                    if item.id == "s_dur" {
+                        store.selectedHealthMetric = .sleepDuration
+                        push(.healthMetricDetail)
+                    } else {
+                        store.selectedTrendItem = item
+                        push(.trendMetricDetail)
+                    }
                 }
             )
         case .sleepSessionDetail:
@@ -173,7 +188,14 @@ struct ImprovingRootView: View {
         case .sleepNeedDetail:
             SleepNeedDetailScreen(store: store, onBack: { pop() })
         case .estres:
-            EstresScreen(store: store, onBack: { pop() }, onOpenTrend: { _ in push(.healthMetricDetail) })
+            EstresScreen(
+                store: store,
+                onBack: { pop() },
+                onOpenTrend: { item in
+                    store.selectedTrendItem = item
+                    push(.trendMetricDetail)
+                }
+            )
         case .energia:
             EnergiaScreen(
                 store: store,
@@ -189,8 +211,14 @@ struct ImprovingRootView: View {
             NutrientDetailScreen(store: store, onBack: { pop() })
         case .journalInsights:
             JournalInsightsScreen(store: store, onBack: { pop() })
-        case .healthMetricDetail, .trendMetricDetail:
+        case .healthMetricDetail:
             HealthMetricDetailScreen(store: store, onBack: { pop() })
+        case .trendMetricDetail:
+            if let trend = store.selectedTrendItem {
+                TrendMetricDetailScreen(store: store, trend: trend, onBack: { pop() })
+            } else {
+                HealthMetricDetailScreen(store: store, onBack: { pop() })
+            }
         case .trainingLoad:
             TrainingLoadDetailScreen(store: store, initialTab: trainingLoadTab, onBack: { pop() })
         case .cardioMetricDetail:

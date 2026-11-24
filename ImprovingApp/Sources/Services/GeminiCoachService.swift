@@ -18,15 +18,134 @@ actor GeminiCoachService {
     static let shared = GeminiCoachService()
 
     static let supportedModels = [
+        "auto",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash",
+        "gemini-flash-latest",
         "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
-        "gemini-2.0-flash",
     ]
+
+    nonisolated static func displayLabel(for modelId: String) -> String {
+        switch modelId {
+        case "auto": return "Auto (Recomendado)"
+        case "gemini-flash-latest": return "gemini-flash-latest"
+        default: return modelId
+        }
+    }
 
     private let interactionsEndpoint = "https://generativelanguage.googleapis.com/v1/interactions"
     private let apiRevision = "2026-05-20"
     private let keylessEndpoint = "https://text.pollinations.ai/openai"
+    private var discoveredModelsByKeyHash: [Int: [String]] = [:]
+
+    /// Ranks raw Gemini API `/v1beta/models` identifiers, keeping only active text-generation Gemini models
+    /// (filtering out embedding/image/video/tts/audio/robotics/gemma models) with newest Flash models first!
+    nonisolated static func rankDiscoveredModels(_ rawEntries: [(name: String, methods: [String])]) -> [String] {
+        let excludedTokens = [
+            "embedding", "imagen", "veo", "tts", "audio", "aqa", "robotics",
+            "computer-use", "bison", "gecko", "learnlm", "gemma", "deep-research",
+            "native-audio", "live", "image"
+        ]
+        var names: [String] = []
+        var seen = Set<String>()
+        for entry in rawEntries {
+            guard entry.methods.contains("generateContent") else { continue }
+            let clean = entry.name.hasPrefix("models/") ? String(entry.name.dropFirst(7)) : entry.name
+            let low = clean.lowercased()
+            guard low.hasPrefix("gemini-") else { continue }
+            if excludedTokens.contains(where: { low.contains($0) }) { continue }
+            if seen.insert(clean).inserted {
+                names.append(clean)
+            }
+        }
+        func priorityScore(_ m: String) -> Int {
+            let low = m.lowercased()
+            if low.hasPrefix("gemini-4") && low.contains("flash") { return 100 }
+            if low.hasPrefix("gemini-3.8") && low.contains("flash") { return 96 }
+            if low.hasPrefix("gemini-3.5") && low.contains("flash-lite") { return 94 }
+            if low.hasPrefix("gemini-3.5") && low.contains("flash") { return 93 }
+            if low.hasPrefix("gemini-3.1") && low.contains("flash-lite") { return 91 }
+            if low.hasPrefix("gemini-3.1") && low.contains("flash") { return 90 }
+            if low.hasPrefix("gemini-3") && low.contains("flash") { return 88 }
+            if low == "gemini-flash-latest" { return 85 }
+            if low == "gemini-flash-lite-latest" { return 84 }
+            if low.hasPrefix("gemini-3") { return 80 }
+            if low.hasPrefix("gemini-2.5-flash") && !low.contains("lite") { return 72 }
+            if low.hasPrefix("gemini-2.5-flash-lite") { return 68 }
+            if low.hasPrefix("gemini-2.5-pro") { return 64 }
+            if low.contains("flash") { return 55 }
+            return 40
+        }
+        return names.sorted { a, b in
+            let pa = priorityScore(a)
+            let pb = priorityScore(b)
+            if pa != pb { return pa > pb }
+            // Prefer stable non-preview names when priority ties
+            let aPrev = a.contains("preview") || a.contains("exp")
+            let bPrev = b.contains("preview") || b.contains("exp")
+            if aPrev != bPrev { return !aPrev }
+            return a > b
+        }
+    }
+
+    private func discoverAvailableModels(apiKey: String, forceRefresh: Bool = false) async -> [String] {
+        let keyHash = apiKey.hashValue
+        if !forceRefresh, let cached = discoveredModelsByKeyHash[keyHash], !cached.isEmpty {
+            return cached
+        }
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100") else {
+            return []
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 14
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let models = json["models"] as? [[String: Any]] else {
+                return []
+            }
+            let rawEntries: [(String, [String])] = models.compactMap { m in
+                guard let name = m["name"] as? String else { return nil }
+                let methods = (m["supportedGenerationMethods"] as? [String]) ?? []
+                return (name, methods)
+            }
+            let ranked = Self.rankDiscoveredModels(rawEntries)
+            if !ranked.isEmpty {
+                discoveredModelsByKeyHash[keyHash] = ranked
+            }
+            return ranked
+        } catch {
+            return []
+        }
+    }
+
+    private func resolveCandidateModels(apiKey: String, selectedModel: String, forceDiscovery: Bool = false) async -> [String] {
+        let trimmed = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isAuto = trimmed.isEmpty || trimmed == "auto"
+        let staticFallbacks = [
+            "gemini-flash-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash",
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash",
+        ]
+        var list: [String] = []
+        if !isAuto {
+            list.append(trimmed)
+        }
+        if isAuto || forceDiscovery {
+            let discovered = await discoverAvailableModels(apiKey: apiKey, forceRefresh: forceDiscovery)
+            list.append(contentsOf: discovered.prefix(5))
+        }
+        list.append(contentsOf: staticFallbacks)
+        var seen = Set<String>()
+        return list.filter { !$0.isEmpty && $0 != "auto" && seen.insert($0).inserted }
+    }
 
     nonisolated static func sanitizeApiKey(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -49,29 +168,44 @@ actor GeminiCoachService {
         return "HTTP \(statusCode)"
     }
 
-    func testGeminiConnection(apiKey: String, selectedModel: String) async -> (ok: Bool, detail: String) {
+    func testGeminiConnection(apiKey: String, selectedModel: String) async -> (ok: Bool, detail: String, resolvedModel: String?) {
         let cleanKey = Self.sanitizeApiKey(apiKey)
-        let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
+        let trimmedModel = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else {
             // Test keyless cloud fallback when user has no API key
             if let _ = await callKeylessCloudChat(prompt: "Di solo OK", sysPrompt: "Responde únicamente OK.", history: [], seed: nextSeed()) {
-                return (true, "✓ Motor cloud Improving IA activo (sin API Key)")
+                return (true, "✓ Motor cloud Improving IA activo (sin API Key)", nil)
             }
-            return (false, "Introduce una API Key de Google AI Studio o revisa tu conexión.")
+            return (false, "Introduce una API Key de Google AI Studio o revisa tu conexión.", nil)
         }
         let start = Date()
-        let attempt = await callGeminiChatGenerateContent(
-            prompt: "Responde únicamente con la palabra OK.",
-            sysPrompt: "Responde en español brevemente.",
-            history: [],
-            apiKey: cleanKey,
-            model: model
-        )
-        let ms = Int((Date().timeIntervalSince(start) * 1000.0).rounded())
-        if attempt.result != nil {
-            return (true, "✓ Conectado a \(model) (\(ms) ms)")
+        let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: trimmedModel, forceDiscovery: true)
+        var lastErr: String? = nil
+
+        for m in candidates.prefix(5) {
+            let attempt = await callGeminiChatGenerateContent(
+                prompt: "Responde únicamente con la palabra OK.",
+                sysPrompt: "Responde en español brevemente.",
+                history: [],
+                apiKey: cleanKey,
+                model: m
+            )
+            if attempt.result != nil {
+                let ms = Int((Date().timeIntervalSince(start) * 1000.0).rounded())
+                let switched = !trimmedModel.isEmpty && trimmedModel != "auto" && trimmedModel != m
+                let msg = switched
+                    ? "✓ Conectado automáticamente a \(m) (\(ms) ms)"
+                    : "✓ Conectado a \(m) (\(ms) ms)"
+                return (true, msg, m)
+            }
+            if let err = attempt.errorDetail {
+                lastErr = err
+                if err.contains("API_KEY_INVALID") || err.contains("API key not valid") {
+                    return (false, "API Key no válida: \(err)", nil)
+                }
+            }
         }
-        return (false, "Error con \(model): \(attempt.errorDetail ?? "sin respuesta")")
+        return (false, "Error conectando con Gemini: \(lastErr ?? "sin respuesta")", nil)
     }
 
     private let coachingStyles = [
@@ -295,7 +429,7 @@ actor GeminiCoachService {
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
         var lastCloudError: String? = nil
 
-        // Tier 1: User's Gemini API Key (auto-cascade across active free/paid Gemini models!)
+        // Tier 1: User's Gemini API Key (auto-discovers live active models via /v1beta/models so 404 deprecations self-heal!)
         if !cleanKey.isEmpty {
             if model.hasPrefix("gemini-4"),
                let res = await callGeminiInteractionsChat(
@@ -309,13 +443,15 @@ actor GeminiCoachService {
                 return res
             }
 
-            let rawCandidates: [String] = model.hasPrefix("gemini-4")
-                ? ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
-                : [model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]
-            var seen = Set<String>()
-            let candidates = rawCandidates.filter { seen.insert($0).inserted }
+            var candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: false)
+            var tried = Set<String>()
+            var didDynamicDiscovery = (model.isEmpty || model == "auto")
 
-            for m in candidates {
+            var idx = 0
+            while idx < candidates.count {
+                let m = candidates[idx]
+                idx += 1
+                guard tried.insert(m).inserted else { continue }
                 let attempt = await callGeminiChatGenerateContent(
                     prompt: prompt,
                     sysPrompt: sysPrompt,
@@ -328,9 +464,16 @@ actor GeminiCoachService {
                 }
                 if let err = attempt.errorDetail {
                     lastCloudError = err
-                    // Invalid API key (400 API_KEY_INVALID / 403) won't succeed on other Gemini models -> jump straight to Tier 2!
                     if err.contains("API_KEY_INVALID") || err.contains("API key not valid") {
                         break
+                    }
+                    // On HTTP 404 (model retired / unavailable to new users), immediately query Google's live /models endpoint!
+                    if !didDynamicDiscovery && (err.contains("404") || err.lowercased().contains("no longer available") || err.lowercased().contains("not found")) {
+                        didDynamicDiscovery = true
+                        let fresh = await discoverAvailableModels(apiKey: cleanKey, forceRefresh: true)
+                        if !fresh.isEmpty {
+                            candidates.insert(contentsOf: fresh.prefix(4), at: idx)
+                        }
                     }
                 }
             }
@@ -719,15 +862,10 @@ actor GeminiCoachService {
         let cleanKey = Self.sanitizeApiKey(apiKey)
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
 
-        // Tier 1: User's Gemini API Key
+        // Tier 1: User's Gemini API Key (auto-discovers live active models on 404/auto!)
         if !cleanKey.isEmpty {
-            let rawCandidates: [String] = model.hasPrefix("gemini-4")
-                ? ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
-                : [model, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
-            var seen = Set<String>()
-            let candidates = rawCandidates.filter { seen.insert($0).inserted }
-
-            for m in candidates {
+            let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: model == "auto")
+            for m in candidates.prefix(4) {
                 if let raw = await callGeminiJsonOneShot(prompt: userPrompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: m),
                    let card = parseSectionCoachingJson(
                     raw: raw,

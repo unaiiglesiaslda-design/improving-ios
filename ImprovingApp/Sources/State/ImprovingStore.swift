@@ -108,7 +108,7 @@ final class ImprovingStore: ObservableObject {
 
     @Published var importStatus: ExportImportStatus = ExportImportStatus()
     @Published var geminiApiKey: String = ""
-    @Published var selectedGeminiModel: String = "gemini-2.5-flash"
+    @Published var selectedGeminiModel: String = "auto"
     @Published var coachMessages: [CoachChatMessage] = []
     @Published var isCoachThinking: Bool = false
     private var activeCoachInteractionId: String? = nil
@@ -153,10 +153,9 @@ final class ImprovingStore: ObservableObject {
         seedPreviewOnlyItemsIfNeeded()
         bindWhoopBle()
         bindHealthKit()
-        // Ensure `En mi iPhone / Improving` folder is visible in Files app, watch for live writes & scan on startup
+        // Ensure `En mi iPhone / Improving` folder is visible in Files app & run ONE silent sync on cold launch only!
         _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
-        startInboxDirectoryWatcher()
-        scanAutoSyncInboxIfNeeded(showBanner: true)
+        scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
     }
 
     deinit {
@@ -1197,6 +1196,65 @@ final class ImprovingStore: ObservableObject {
         ]
     }
 
+    func trendExtractor(for trendId: String) -> (RealBiometricDaySummary) -> Double? {
+        let bmr = Double(WhoopPhysiologyEngine.computeBmrKcalPerDay(profile: userProfile))
+        switch trendId {
+        case "t_strain":
+            return { $0.strainPct.map { Double($0) } }
+        case "t_dur":
+            return { d in d.workouts.isEmpty ? nil : Double(d.workouts.reduce(0) { $0 + $1.durationMin }) }
+        case "t_day_hr":
+            return { $0.liveHrBpm.map { Double($0) } }
+        case "t_kcal":
+            return { $0.activeKcal.map { Double($0) + bmr } }
+        case "t_steps":
+            return { $0.stepsCount.map { Double($0) } }
+        case "t_perf":
+            return { d in
+                guard let st = d.strainPct, let rec = d.recoveryPct else { return nil }
+                let r = WhoopPhysiologyEngine.optimalTargetRange(for: rec)
+                return Double(st) - (r.lowerBound + r.upperBound) * 50.0
+            }
+        case "r_rec":
+            return { $0.recoveryPct.map { Double($0) } }
+        case "r_hrv":
+            return { $0.hrvMs }
+        case "r_rhr":
+            return { $0.restingHrBpm }
+        case "r_resp":
+            return { $0.respRateRpm }
+        case "r_spo2":
+            return { $0.spo2Percent }
+        case "r_temp":
+            return { $0.wristTempAbsoluteC ?? $0.wristTempDeltaC.map { AppleHealthExportImporter.round1(35.8 + $0) } }
+        case "s_score":
+            return { $0.sleepPct.map { Double($0) } }
+        case "s_dur":
+            return { $0.asleepMinutes.map { Double($0) } }
+        case "s_rem":
+            return { $0.remMinutes.flatMap { $0 > 0 ? Double($0) : nil } }
+        case "s_deep":
+            return { $0.deepMinutes.flatMap { $0 > 0 ? Double($0) : nil } }
+        case "s_dip":
+            return { $0.sleepSession?.hrDipPct }
+        case "s_eff":
+            return { $0.sleepSession?.efficiencyPct.map { Double($0) } }
+        case "s_lat":
+            return { $0.sleepSession?.latencyMinutes.map { Double($0) } }
+        case "st_score":
+            return { $0.stressScore.map { Double($0) } }
+        case "st_sleep":
+            return { d in
+                guard !d.stressSamples5m.isEmpty else { return nil }
+                let night = d.stressSamples5m.filter { $0.minuteOfDay < 480 }.map(\.value)
+                guard !night.isEmpty else { return nil }
+                return night.reduce(0, +) / Double(night.count)
+            }
+        default:
+            return { $0.recoveryPct.map { Double($0) } }
+        }
+    }
+
     // MARK: - Paginated Time-Window Metric Series (7 d | 30 d | 3 M | 6 M | 1 A with < / > arrows!)
 
     func metricWindowSeries(
@@ -1983,18 +2041,14 @@ final class ImprovingStore: ObservableObject {
         }
     }
 
-    /// Pull-to-refresh on `HoyScreen`:
-    /// - When `autoRunShortcutOnOpen == false` (default 100% silent in-app mode): stays inside Improving,
-    ///   animates the top floating `Sincronizando…` -> `Sincronizado` bubble, and reloads the latest data from
-    ///   `En mi iPhone / Improving` (plus live HealthKit if authorized) WITHOUT ever jumping out to the Shortcuts app!
-    /// - When `autoRunShortcutOnOpen == true`: launches `shortcuts://x-callback-url/run-shortcut` directly.
+    /// Deliberate deep pull-to-refresh on `HoyScreen` (>= 135 pt pull):
+    /// Quietly runs the user's sync shortcut (if configured) or refreshes inbox/HealthKit WITHOUT vibrating!
     func handlePullToRefresh() async {
         if autoRunShortcutOnOpen {
             triggerShortcutRefreshSync(userInitiated: true)
             try? await Task.sleep(nanoseconds: 350_000_000)
             return
         }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         presentSyncBanner(.syncing("Sincronizando…"))
         scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
         #if os(iOS)
@@ -2005,8 +2059,9 @@ final class ImprovingStore: ObservableObject {
         try? await Task.sleep(nanoseconds: 550_000_000)
     }
 
-    /// Called whenever the app becomes `.active` (reopen / reload / returning from Shortcuts).
-    /// Enforces a 90s anti-loop cooldown so returning from `x-callback-url` NEVER triggers an infinite loop!
+    /// Called whenever the app becomes `.active`.
+    /// Strict anti-reload & zero-vibration policy: ONLY handles midnight calendar rollover and explicit return
+    /// from a user-triggered Shortcut. Never reloads, flashes banners, or vibrates on normal app switching!
     func handleAppBecameActive() {
         // Refresh calendar day rollover so overnight suspended apps immediately show Today!
         let todayIso = isoFormatter.string(from: Date())
@@ -2014,65 +2069,24 @@ final class ImprovingStore: ObservableObject {
             dataRevision += 1
         }
         lastActiveCalendarDayIso = todayIso
-        attachDirectSyncFileWatchers()
 
-        // 1. Returned manually from Shortcuts without x-callback firing yet -> read fresh file immediately
+        // Only act when returning from an explicit user-initiated shortcut run
         if awaitingShortcutCallback {
             awaitingShortcutCallback = false
             shortcutTimeoutTask?.cancel()
-            presentSyncBanner(.syncing("Sincronizando…"))
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
-                self?.scheduleSilentAutomationRechecks()
+            if let paste = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+               paste.hasPrefix("{"),
+               (paste.contains("hr_values") || paste.contains("generated_at") || paste.contains("steps_values") || paste.contains("sleep_starts")) {
+                ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
+            } else {
+                scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
             }
-            return
-        }
-
-        // 2. Anti-loop cooldown (90s): if we just ran/returned from the shortcut, check folder immediately
-        //    AND keep lightweight rechecks running so late background writes are NEVER missed!
-        if let last = lastShortcutTriggerAt, Date().timeIntervalSince(last) < 90.0 {
-            scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
-            scheduleSilentAutomationRechecks()
-            return
-        }
-
-        // 3. Reopening / reloading app:
-        //    - If `autoRunShortcutOnOpen == true`: jump to Shortcuts via x-callback-url
-        //    - If `autoRunShortcutOnOpen == false` (silent 100% background Personal Automation mode):
-        //      NEVER leave Improving! Scan immediately AND re-check across the full Shortcuts runtime window (1.2s..16.5s)
-        //      to catch background iOS Personal Automation writes ("Al abrir Improving -> Ejecutar inmediatamente")!
-        if autoRunShortcutOnOpen && !shortcutSyncName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 320_000_000)
-                guard let self else { return }
-                self.triggerShortcutRefreshSync(userInitiated: false)
-            }
-        } else {
-            scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
-            scheduleSilentAutomationRechecks()
         }
     }
 
     private func scheduleSilentAutomationRechecks() {
+        // Disabled background polling loops to keep the app calm, battery-friendly, and free of constant reloads.
         backgroundRecheckTask?.cancel()
-        backgroundRecheckTask = Task { @MainActor [weak self] in
-            // Shortcuts with 10+ HealthKit queries take 2-14s in background -> lightweight stat() checks catch every late write!
-            let deltasNs: [UInt64] = [
-                1_200_000_000,
-                1_500_000_000,
-                2_200_000_000,
-                3_000_000_000,
-                4_000_000_000,
-                5_000_000_000
-            ]
-            for delayNs in deltasNs {
-                try? await Task.sleep(nanoseconds: delayNs)
-                guard !Task.isCancelled, let self else { return }
-                self.attachDirectSyncFileWatchers()
-                self.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
-            }
-        }
     }
 
     /// Launches the user's Apple Shortcut via `shortcuts://x-callback-url/run-shortcut`, shows the floating
@@ -2086,10 +2100,6 @@ final class ImprovingStore: ObservableObject {
         guard let url = Self.buildShortcutCallbackURL(shortcutName: shortcutSyncName) else {
             scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
             return false
-        }
-
-        if userInitiated {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
 
         lastShortcutTriggerAt = Date()
@@ -2238,7 +2248,6 @@ final class ImprovingStore: ObservableObject {
                     self.autoSyncStatusText = "✓ Sync \(hhmm) (\(newestFileName)) · \(result.days.count)d\(latestReading)"
                     self.persistState()
                     if showBanner || self.syncBannerState != .hidden {
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
                         self.presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 2.1)
                     }
                 } else {
@@ -2324,9 +2333,7 @@ final class ImprovingStore: ObservableObject {
             }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 280_000_000)
-                self?.attachDirectSyncFileWatchers()
                 self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
-                self?.scheduleSilentAutomationRechecks()
             }
             return
         }
@@ -2401,7 +2408,6 @@ final class ImprovingStore: ObservableObject {
                     let latestReading = Self.formatLatestReadingTag(from: result.days)
                     self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d\(latestReading)"
                     self.persistState()
-                    UINotificationFeedbackGenerator().notificationOccurred(.success)
                     self.presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 2.1)
                 } else {
                     self.autoSyncStatusText = result.errorMessage ?? "Sin lecturas válidas en \(sourceLabel)"
@@ -3103,7 +3109,12 @@ final class ImprovingStore: ObservableObject {
         journalCheckinsByDate = snap.journalCheckins
         journalMoodByDate = snap.journalMoodByDate
         geminiApiKey = snap.geminiApiKey
-        selectedGeminiModel = snap.selectedGeminiModel
+        // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
+        if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {
+            selectedGeminiModel = "auto"
+        } else {
+            selectedGeminiModel = snap.selectedGeminiModel
+        }
         mealsByDate = snap.mealsByDate
         hydrationGlassesByDate = snap.hydrationGlassesByDate
         smartAlarmEnabled = snap.smartAlarmEnabled

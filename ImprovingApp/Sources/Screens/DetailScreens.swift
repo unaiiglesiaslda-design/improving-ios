@@ -262,12 +262,20 @@ struct RecuperacionScreen: View {
                         .padding(.top, 4)
 
                     let recIcons = ["leaf.fill", "waveform.path.ecg", "heart.fill", "lungs.fill", "drop.fill", "thermometer.medium"]
-                    let recKinds: [HealthMetricKind] = [.hrv, .hrv, .restingHeartRate, .respiratoryRate, .oxygenSaturation, .wristTemperature]
                     ForEach(Array(store.recoveryTrends.enumerated()), id: \.element.id) { idx, item in
                         BevelTrendLightCard(
                             trend: item,
                             systemIcon: recIcons[idx % recIcons.count],
-                            onClick: { onSelectHealthMetric(recKinds[idx % recKinds.count]) }
+                            onClick: {
+                                switch item.id {
+                                case "r_hrv": onSelectHealthMetric(.hrv)
+                                case "r_rhr": onSelectHealthMetric(.restingHeartRate)
+                                case "r_resp": onSelectHealthMetric(.respiratoryRate)
+                                case "r_spo2": onSelectHealthMetric(.oxygenSaturation)
+                                case "r_temp": onSelectHealthMetric(.wristTemperature)
+                                default: onOpenTrend?(item)
+                                }
+                            }
                         )
                     }
                 }

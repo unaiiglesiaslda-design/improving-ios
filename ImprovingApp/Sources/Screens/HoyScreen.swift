@@ -6,6 +6,10 @@ struct HoyScreen: View {
     let onSelectHealthMetric: (HealthMetricKind) -> Void
 
     @State private var showCalendarSheet: Bool = false
+    @State private var deepPullOffset: CGFloat = 0
+    @State private var deepPullTriggered: Bool = false
+    @State private var lastDeepPullAt: Date = .distantPast
+    private let deepPullThreshold: CGFloat = 135.0
 
     var body: some View {
         let avail = store.dataAvailability
@@ -41,6 +45,41 @@ struct HoyScreen: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                // Deep deliberate pull-down overscroll sensor (>= 135 pt required — zero accidental reloads or vibration!)
+                GeometryReader { geo in
+                    let minY = geo.frame(in: .named("hoyScrollSpace")).minY
+                    Color.clear
+                        .onChange(of: minY) { _, newY in
+                            let clamped = max(newY, 0)
+                            deepPullOffset = clamped
+                            if clamped >= deepPullThreshold && !deepPullTriggered && Date().timeIntervalSince(lastDeepPullAt) > 6.0 {
+                                deepPullTriggered = true
+                                lastDeepPullAt = Date()
+                                Task {
+                                    await store.handlePullToRefresh()
+                                }
+                            } else if clamped < 12 {
+                                deepPullTriggered = false
+                            }
+                        }
+                }
+                .frame(height: 0)
+
+                if deepPullOffset > 45 && store.syncBannerState == .hidden {
+                    let progress = min(max((deepPullOffset - 45) / (deepPullThreshold - 45), 0), 1)
+                    HStack(spacing: 8) {
+                        Image(systemName: progress >= 1 ? "checkmark.circle.fill" : "arrow.down.circle")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(progress >= 1 ? BevelColors.emeraldEnd : BevelColors.textSecondary)
+                        Text(progress >= 1 ? "Sincronizando…" : "Desliza más para sincronizar")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .opacity(Double(min(progress * 1.4, 1.0)))
+                }
+
                 // 1. Top Bar with Dropdown Calendar Picker + < Date > Navigation Arrows
                 HStack(spacing: 8) {
                     Button { showCalendarSheet = true } label: {
@@ -490,9 +529,7 @@ struct HoyScreen: View {
             .padding(.top, 8)
             .padding(.bottom, 150)
         }
-        .refreshable {
-            await store.handlePullToRefresh()
-        }
+        .coordinateSpace(name: "hoyScrollSpace")
         .background(BevelColors.canvas)
         .overlay(alignment: .top) {
             SyncStatusBubbleOverlay(state: store.syncBannerState)

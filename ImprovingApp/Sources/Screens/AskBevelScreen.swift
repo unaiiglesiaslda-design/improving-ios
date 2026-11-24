@@ -47,7 +47,7 @@ struct AskBevelScreen: View {
                             Circle()
                                 .fill(hasKey ? BevelColors.greenPrimary : BevelColors.skyBlue)
                                 .frame(width: 7, height: 7)
-                            Text(hasKey ? store.selectedGeminiModel : "Improving IA Live")
+                            Text(hasKey ? (store.selectedGeminiModel == "auto" ? "Gemini Auto" : store.selectedGeminiModel) : "Improving IA Live")
                                 .font(ImprovingFont.caption(12))
                                 .fontWeight(.semibold)
                                 .foregroundColor(BevelColors.textPrimary)

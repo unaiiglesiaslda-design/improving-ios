@@ -1,5 +1,274 @@
 import SwiftUI
 
+// MARK: - 0. Specific Trend Metric Detail Screen (Esfuerzo / Recuperación / Sueño / Estrés Trends — Never Forces HRV!)
+
+struct TrendMetricDetailScreen: View {
+    @ObservedObject var store: ImprovingStore
+    let trend: EffortTrendItem
+    let onBack: () -> Void
+
+    @State private var selectedRange: String = "30 d"
+    @State private var windowPageOffset: Int = 0
+    @State private var inspectedFloat: Double? = nil
+    @State private var inspectedDate: String? = nil
+
+    private var spanDays: Int {
+        switch selectedRange {
+        case "7 d": return 7
+        case "30 d": return 30
+        case "3 M": return 90
+        case "6 M": return 180
+        case "1 A": return 365
+        default: return 30
+        }
+    }
+
+    private var isDurationMinutesTrend: Bool {
+        trend.id == "s_dur" || trend.id == "s_rem" || trend.id == "s_deep"
+    }
+
+    private func formatValue(_ val: Double) -> String {
+        if isDurationMinutesTrend {
+            let m = Int(val.rounded())
+            return "\(m / 60) h \(String(format: "%02d", m % 60)) min"
+        }
+        if trend.id == "t_perf" {
+            return String(format: "%+.0f %@", val, trend.unitText).trimmingCharacters(in: .whitespaces)
+        }
+        if trend.id == "t_steps" || trend.id == "t_kcal" || trend.id == "t_strain" || trend.id == "r_rec" || trend.id == "s_score" || trend.id == "s_eff" || trend.id == "t_dur" || trend.id == "t_day_hr" || trend.id == "st_score" || trend.id == "st_sleep" || trend.id == "s_lat" || trend.id == "s_dip" {
+            let core = "\(Int(val.rounded()))"
+            return trend.unitText.isEmpty ? core : "\(core) \(trend.unitText)"
+        }
+        let core = String(format: "%.1f", locale: Locale(identifier: "es_ES"), val)
+        return trend.unitText.isEmpty ? core : "\(core) \(trend.unitText)"
+    }
+
+    var body: some View {
+        let extractor = store.trendExtractor(for: trend.id)
+        let window = store.customWindowSeries(spanDays: spanDays, windowPageOffset: windowPageOffset, extractor: extractor)
+        let realPoints = window.realPoints
+        let avgVal: Double? = realPoints.isEmpty ? nil : (realPoints.reduce(0, +) / Double(realPoints.count))
+        let maxVal: Double? = realPoints.max()
+        let minVal: Double? = realPoints.min()
+        let currentNumeric: Double? = store.currentDaySummary.flatMap(extractor)
+        let displayVal: Double? = inspectedFloat ?? (windowPageOffset == 0 ? currentNumeric : nil) ?? realPoints.last
+        let accent = Color(hex: trend.lineColorHex)
+        let multiTrends = WhoopPhysiologyEngine.computeMultiPeriodTrendRows(
+            history: store.activeHistory,
+            anchorDate: store.selectedDate,
+            extractor: extractor
+        )
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 14) {
+                    DetailSheetHeader(title: trend.title, onBack: onBack)
+
+                    HStack(alignment: .bottom) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let val = displayVal {
+                                Text(formatValue(val))
+                                    .font(ImprovingFont.displayLarge(31))
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.textPrimary)
+                            } else {
+                                Text("Sin datos")
+                                    .font(ImprovingFont.displayLarge(28))
+                                    .foregroundColor(BevelColors.textMuted)
+                            }
+                            Text(inspectedDate ?? window.windowRangeLabel)
+                                .font(ImprovingFont.caption(13))
+                                .foregroundColor(BevelColors.textSecondary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text("Rango habitual")
+                                .font(ImprovingFont.cardTitle(13))
+                                .foregroundColor(accent)
+                            Text("\(formatValue(trend.bandLow)) – \(formatValue(trend.bandHigh))")
+                                .font(ImprovingFont.caption(12))
+                                .fontWeight(.semibold)
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+
+                    HealthMetricBaselineChart(
+                        optionalPoints: window.values,
+                        dates: window.dates,
+                        bandLow: trend.bandLow,
+                        bandHigh: trend.bandHigh,
+                        averageText: avgVal.map { "Prom. \(formatValue($0))" } ?? "",
+                        accentColor: accent,
+                        valueFormatter: { formatValue($0) },
+                        onPointSelected: { _, v, d in
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                inspectedFloat = v
+                                inspectedDate = d
+                            }
+                        }
+                    )
+                    .padding(.horizontal, 14)
+
+                    // Range selector: < [ 7 d | 30 d | 3 M | 6 M | 1 A ] >
+                    HStack(spacing: 6) {
+                        Button {
+                            if window.canStepBackward {
+                                inspectedFloat = nil
+                                inspectedDate = nil
+                                windowPageOffset += 1
+                            }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(window.canStepBackward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
+                                .frame(width: 32, height: 32)
+                                .background(Circle().fill(Color.white.opacity(window.canStepBackward ? 0.08 : 0.03)))
+                        }
+                        .disabled(!window.canStepBackward)
+
+                        HStack(spacing: 2) {
+                            ForEach(["7 d", "30 d", "3 M", "6 M", "1 A"], id: \.self) { r in
+                                let active = selectedRange == r
+                                Button {
+                                    inspectedFloat = nil
+                                    inspectedDate = nil
+                                    windowPageOffset = 0
+                                    selectedRange = r
+                                } label: {
+                                    Text(r)
+                                        .font(ImprovingFont.caption(11.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 6)
+                                        .background(Capsule().fill(active ? Color(hex: 0x6A6E7A) : .clear))
+                                }
+                            }
+                        }
+                        .padding(3)
+                        .background(Capsule().fill(Color.white.opacity(0.06)))
+
+                        Button {
+                            if window.canStepForward {
+                                inspectedFloat = nil
+                                inspectedDate = nil
+                                windowPageOffset = max(0, windowPageOffset - 1)
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(window.canStepForward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
+                                .frame(width: 32, height: 32)
+                                .background(Circle().fill(Color.white.opacity(window.canStepForward ? 0.08 : 0.03)))
+                        }
+                        .disabled(!window.canStepForward)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 16)
+                }
+                .background(BevelColors.sheetHeaderBg)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    // Period Summary Cards
+                    HStack(spacing: 10) {
+                        summaryPill(label: "Promedio", value: avgVal.map(formatValue) ?? "--", color: accent)
+                        summaryPill(label: "Máximo", value: maxVal.map(formatValue) ?? "--", color: BevelColors.textPrimary)
+                        summaryPill(label: "Mínimo", value: minVal.map(formatValue) ?? "--", color: BevelColors.textSecondary)
+                    }
+
+                    // Multi-period Trend Table (3d / 7d / 14d / 30d / 90d)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Tendencias por período")
+                            .font(ImprovingFont.sectionTitle(17.5))
+                            .foregroundColor(BevelColors.textPrimary)
+
+                        BevelCard(cornerRadius: 18) {
+                            VStack(spacing: 0) {
+                                ForEach(Array(multiTrends.enumerated()), id: \.element.id) { idx, row in
+                                    HStack {
+                                        Text(row.label)
+                                            .font(ImprovingFont.body(13.5))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                        Spacer()
+                                        Text(row.currentAvg.map(formatValue) ?? "--")
+                                            .font(ImprovingFont.cardTitle(14))
+                                            .monospacedDigit()
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        if let delta = row.delta {
+                                            let sign = delta >= 0 ? "+" : ""
+                                            let dTxt = isDurationMinutesTrend
+                                                ? "\(sign)\(Int(delta.rounded()))m"
+                                                : String(format: "%@%.1f", locale: Locale(identifier: "es_ES"), sign, delta)
+                                            Text(dTxt)
+                                                .font(ImprovingFont.caption(12))
+                                                .fontWeight(.semibold)
+                                                .monospacedDigit()
+                                                .foregroundColor(abs(delta) < 0.05 ? BevelColors.textMuted : (delta >= 0 ? BevelColors.greenPrimary : BevelColors.coralHigh))
+                                                .frame(width: 64, alignment: .trailing)
+                                        } else {
+                                            Text("--")
+                                                .font(ImprovingFont.caption(12))
+                                                .foregroundColor(BevelColors.textMuted)
+                                                .frame(width: 64, alignment: .trailing)
+                                        }
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 12)
+                                    if idx < multiTrends.count - 1 {
+                                        Divider().background(BevelColors.divider).padding(.horizontal, 14)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Educational note
+                    if !trend.detailNote.isEmpty {
+                        BevelCard(cornerRadius: 18) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Sobre esta tendencia")
+                                    .font(ImprovingFont.cardTitle(14.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text(trend.detailNote)
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+            }
+            .padding(.bottom, 150)
+        }
+        .background(BevelColors.canvas)
+    }
+
+    private func summaryPill(label: String, value: String, color: Color) -> some View {
+        BevelCard(cornerRadius: 14) {
+            VStack(spacing: 4) {
+                Text(label)
+                    .font(ImprovingFont.caption(11))
+                    .foregroundColor(BevelColors.textMuted)
+                Text(value)
+                    .font(ImprovingFont.cardTitle(13.5))
+                    .monospacedDigit()
+                    .foregroundColor(color)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 6)
+        }
+    }
+}
+
 // MARK: - 1. Health Monitor Metric Detail Sheet (7 d | 30 d | 3 M | 6 M | 1 A + Working < > Time Navigation + Zero Fake Data)
 
 struct HealthMetricDetailScreen: View {

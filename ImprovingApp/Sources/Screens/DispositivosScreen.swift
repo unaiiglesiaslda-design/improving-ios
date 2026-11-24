@@ -11,7 +11,7 @@ struct DispositivosScreen: View {
     @State private var showShortcutsGuide = false
     @State private var copiedUrlToast = false
     @State private var apiKeyDraft: String = ""
-    @State private var selectedModelDraft: String = "gemini-2.5-flash"
+    @State private var selectedModelDraft: String = "auto"
     @State private var shortcutNameDraft: String = "Sync Improving"
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
@@ -410,7 +410,7 @@ struct DispositivosScreen: View {
                                     Button {
                                         selectedModelDraft = m
                                     } label: {
-                                        Text(m)
+                                        Text(GeminiCoachService.displayLabel(for: m))
                                             .font(ImprovingFont.caption(12))
                                             .fontWeight(.semibold)
                                             .foregroundColor(active ? .white : BevelColors.textSecondary)
@@ -447,6 +447,10 @@ struct DispositivosScreen: View {
                                     let res = await GeminiCoachService.shared.testGeminiConnection(apiKey: k, selectedModel: m)
                                     await MainActor.run {
                                         testingAi = false
+                                        if res.ok, let resolved = res.resolvedModel, !resolved.isEmpty {
+                                            selectedModelDraft = GeminiCoachService.supportedModels.contains(resolved) ? resolved : "auto"
+                                            store.updateGeminiConfig(apiKey: k, model: resolved)
+                                        }
                                         aiTestResult = (res.ok, res.detail)
                                     }
                                 }
@@ -486,7 +490,7 @@ struct DispositivosScreen: View {
                                 .foregroundColor(BevelColors.greenPrimary)
                         }
 
-                        Text("Con tu clave de Gemini usa la API oficial (v1beta con cabecera segura x-goog-api-key) y cambia automáticamente a gemini-2.5-flash-lite o nube de respaldo si un modelo se satura.")
+                        Text("En modo Auto detecta automáticamente el modelo Gemini activo disponible para tu clave (Gemini 3 / 3.1 Flash) sin errores 404 cuando Google jubila modelos antiguos.")
                             .font(ImprovingFont.caption(11))
                             .foregroundColor(BevelColors.textMuted)
                     }

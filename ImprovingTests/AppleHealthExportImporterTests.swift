@@ -897,11 +897,45 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertLessThan(pecs.freshnessPct, 80)
     }
 
+    @MainActor
     func testGeminiApiKeySanitizationAndSupportedModels() {
         XCTAssertEqual(GeminiCoachService.sanitizeApiKey("  \"Bearer AIzaSyTestKey123 \" \n"), "AIzaSyTestKey123")
         XCTAssertEqual(GeminiCoachService.sanitizeApiKey("'AIzaSyClean456'"), "AIzaSyClean456")
-        XCTAssertEqual(GeminiCoachService.supportedModels.first, "gemini-2.5-flash")
-        XCTAssertTrue(GeminiCoachService.supportedModels.contains("gemini-2.5-flash-lite"))
+        XCTAssertEqual(GeminiCoachService.supportedModels.first, "auto")
+        XCTAssertTrue(GeminiCoachService.supportedModels.contains("gemini-3.1-flash-lite"))
+        XCTAssertTrue(GeminiCoachService.supportedModels.contains("gemini-flash-latest"))
+
+        // Auto-discovery ranking filters out embedding/tts/imagen/gemma and prioritizes newest active Flash models!
+        let ranked = GeminiCoachService.rankDiscoveredModels([
+            ("models/text-embedding-004", ["embedContent"]),
+            ("models/gemini-2.5-flash-tts", ["generateContent"]),
+            ("models/gemma-3-27b-it", ["generateContent"]),
+            ("models/gemini-2.5-flash", ["generateContent"]),
+            ("models/gemini-3.1-flash-lite", ["generateContent"]),
+            ("models/gemini-3.5-flash-lite", ["generateContent"]),
+            ("models/imagen-3.0-generate-002", ["generateContent"]),
+        ])
+        XCTAssertEqual(ranked.first, "gemini-3.5-flash-lite")
+        XCTAssertEqual(ranked.dropFirst().first, "gemini-3.1-flash-lite")
+        XCTAssertFalse(ranked.contains(where: { $0.contains("tts") || $0.contains("embedding") || $0.contains("gemma") || $0.contains("imagen") }))
+
+        // Trend extractors map every Esfuerzo / Recuperación / Sueño / Estrés trend ID to its OWN real metric (never HRV!)
+        let store = ImprovingStore()
+        var day = RealBiometricDaySummary(dateIso: "2026-11-24")
+        day.strainPct = 44
+        day.recoveryPct = 78
+        day.sleepPct = 94
+        day.remMinutes = 110
+        day.deepMinutes = 85
+        day.stepsCount = 8200
+        day.stressScore = 31
+        XCTAssertEqual(store.trendExtractor(for: "t_strain")(day), 44)
+        XCTAssertEqual(store.trendExtractor(for: "t_steps")(day), 8200)
+        XCTAssertEqual(store.trendExtractor(for: "r_rec")(day), 78)
+        XCTAssertEqual(store.trendExtractor(for: "s_score")(day), 94)
+        XCTAssertEqual(store.trendExtractor(for: "s_rem")(day), 110)
+        XCTAssertEqual(store.trendExtractor(for: "s_deep")(day), 85)
+        XCTAssertEqual(store.trendExtractor(for: "st_score")(day), 31)
     }
 
     @MainActor
