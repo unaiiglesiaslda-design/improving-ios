@@ -66,192 +66,219 @@ struct TrendMetricDetailScreen: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 14) {
-                    DetailSheetHeader(title: trend.title, onBack: onBack)
-
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            if let val = displayVal {
-                                Text(formatValue(val))
-                                    .font(ImprovingFont.displayLarge(31))
-                                    .monospacedDigit()
-                                    .foregroundColor(BevelColors.textPrimary)
-                            } else {
-                                Text("Sin datos")
-                                    .font(ImprovingFont.displayLarge(28))
-                                    .foregroundColor(BevelColors.textMuted)
-                            }
-                            Text(inspectedDate ?? window.windowRangeLabel)
-                                .font(ImprovingFont.caption(13))
-                                .foregroundColor(BevelColors.textSecondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text("Rango habitual")
-                                .font(ImprovingFont.cardTitle(13))
-                                .foregroundColor(accent)
-                            Text("\(formatValue(trend.bandLow)) – \(formatValue(trend.bandHigh))")
-                                .font(ImprovingFont.caption(12))
-                                .fontWeight(.semibold)
-                                .monospacedDigit()
-                                .foregroundColor(BevelColors.textPrimary)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-
-                    HealthMetricBaselineChart(
-                        optionalPoints: window.values,
-                        dates: window.dates,
-                        bandLow: trend.bandLow,
-                        bandHigh: trend.bandHigh,
-                        averageText: avgVal.map { "Prom. \(formatValue($0))" } ?? "",
-                        accentColor: accent,
-                        valueFormatter: { formatValue($0) },
-                        onPointSelected: { _, v, d in
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                inspectedFloat = v
-                                inspectedDate = d
-                            }
-                        }
-                    )
-                    .padding(.horizontal, 14)
-
-                    // Range selector: < [ 7 d | 30 d | 3 M | 6 M | 1 A ] >
-                    HStack(spacing: 6) {
-                        Button {
-                            if window.canStepBackward {
-                                inspectedFloat = nil
-                                inspectedDate = nil
-                                windowPageOffset += 1
-                            }
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(window.canStepBackward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
-                                .frame(width: 32, height: 32)
-                                .background(Circle().fill(Color.white.opacity(window.canStepBackward ? 0.08 : 0.03)))
-                        }
-                        .disabled(!window.canStepBackward)
-
-                        HStack(spacing: 2) {
-                            ForEach(["7 d", "30 d", "3 M", "6 M", "1 A"], id: \.self) { r in
-                                let active = selectedRange == r
-                                Button {
-                                    inspectedFloat = nil
-                                    inspectedDate = nil
-                                    windowPageOffset = 0
-                                    selectedRange = r
-                                } label: {
-                                    Text(r)
-                                        .font(ImprovingFont.caption(11.5))
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(active ? .white : BevelColors.textSecondary)
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 6)
-                                        .background(Capsule().fill(active ? Color(hex: 0x6A6E7A) : .clear))
-                                }
-                            }
-                        }
-                        .padding(3)
-                        .background(Capsule().fill(Color.white.opacity(0.06)))
-
-                        Button {
-                            if window.canStepForward {
-                                inspectedFloat = nil
-                                inspectedDate = nil
-                                windowPageOffset = max(0, windowPageOffset - 1)
-                            }
-                        } label: {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(window.canStepForward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
-                                .frame(width: 32, height: 32)
-                                .background(Circle().fill(Color.white.opacity(window.canStepForward ? 0.08 : 0.03)))
-                        }
-                        .disabled(!window.canStepForward)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 16)
-                }
-                .background(BevelColors.sheetHeaderBg)
-
-                VStack(alignment: .leading, spacing: 16) {
-                    // Period Summary Cards
-                    HStack(spacing: 10) {
-                        summaryPill(label: "Promedio", value: avgVal.map(formatValue) ?? "--", color: accent)
-                        summaryPill(label: "Máximo", value: maxVal.map(formatValue) ?? "--", color: BevelColors.textPrimary)
-                        summaryPill(label: "Mínimo", value: minVal.map(formatValue) ?? "--", color: BevelColors.textSecondary)
-                    }
-
-                    // Multi-period Trend Table (3d / 7d / 14d / 30d / 90d)
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Tendencias por período")
-                            .font(ImprovingFont.sectionTitle(17.5))
-                            .foregroundColor(BevelColors.textPrimary)
-
-                        BevelCard(cornerRadius: 18) {
-                            VStack(spacing: 0) {
-                                ForEach(Array(multiTrends.enumerated()), id: \.element.id) { idx, row in
-                                    HStack {
-                                        Text(row.label)
-                                            .font(ImprovingFont.body(13.5))
-                                            .foregroundColor(BevelColors.textSecondary)
-                                        Spacer()
-                                        Text(row.currentAvg.map(formatValue) ?? "--")
-                                            .font(ImprovingFont.cardTitle(14))
-                                            .monospacedDigit()
-                                            .foregroundColor(BevelColors.textPrimary)
-                                        if let delta = row.delta {
-                                            let sign = delta >= 0 ? "+" : ""
-                                            let dTxt = isDurationMinutesTrend
-                                                ? "\(sign)\(Int(delta.rounded()))m"
-                                                : String(format: "%@%.1f", locale: Locale(identifier: "es_ES"), sign, delta)
-                                            Text(dTxt)
-                                                .font(ImprovingFont.caption(12))
-                                                .fontWeight(.semibold)
-                                                .monospacedDigit()
-                                                .foregroundColor(abs(delta) < 0.05 ? BevelColors.textMuted : (delta >= 0 ? BevelColors.greenPrimary : BevelColors.coralHigh))
-                                                .frame(width: 64, alignment: .trailing)
-                                        } else {
-                                            Text("--")
-                                                .font(ImprovingFont.caption(12))
-                                                .foregroundColor(BevelColors.textMuted)
-                                                .frame(width: 64, alignment: .trailing)
-                                        }
-                                    }
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 12)
-                                    if idx < multiTrends.count - 1 {
-                                        Divider().background(BevelColors.divider).padding(.horizontal, 14)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Educational note
-                    if !trend.detailNote.isEmpty {
-                        BevelCard(cornerRadius: 18) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Sobre esta tendencia")
-                                    .font(ImprovingFont.cardTitle(14.5))
-                                    .foregroundColor(BevelColors.textPrimary)
-                                Text(trend.detailNote)
-                                    .font(ImprovingFont.body(13.5))
-                                    .foregroundColor(BevelColors.textSecondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(16)
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
+                headerChartSection(window: window, displayVal: displayVal, avgVal: avgVal, accent: accent)
+                detailsSection(avgVal: avgVal, maxVal: maxVal, minVal: minVal, accent: accent, multiTrends: multiTrends)
             }
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+    }
+
+    @ViewBuilder
+    private func headerChartSection(
+        window: MetricWindowSeries,
+        displayVal: Double?,
+        avgVal: Double?,
+        accent: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            DetailSheetHeader(title: trend.title, onBack: onBack)
+
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let val = displayVal {
+                        Text(formatValue(val))
+                            .font(ImprovingFont.displayLarge(31))
+                            .monospacedDigit()
+                            .foregroundColor(BevelColors.textPrimary)
+                    } else {
+                        Text("Sin datos")
+                            .font(ImprovingFont.displayLarge(28))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+                    Text(inspectedDate ?? window.windowRangeLabel)
+                        .font(ImprovingFont.caption(13))
+                        .foregroundColor(BevelColors.textSecondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("Rango habitual")
+                        .font(ImprovingFont.cardTitle(13))
+                        .foregroundColor(accent)
+                    Text("\(formatValue(trend.bandLow)) – \(formatValue(trend.bandHigh))")
+                        .font(ImprovingFont.caption(12))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                        .foregroundColor(BevelColors.textPrimary)
+                }
+            }
+            .padding(.horizontal, 16)
+
+            HealthMetricBaselineChart(
+                optionalPoints: window.values,
+                dates: window.dates,
+                bandLow: trend.bandLow,
+                bandHigh: trend.bandHigh,
+                averageText: avgVal.map { "Prom. \(formatValue($0))" } ?? "",
+                accentColor: accent,
+                valueFormatter: { formatValue($0) },
+                onPointSelected: { _, v, d in
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        inspectedFloat = v
+                        inspectedDate = d
+                    }
+                }
+            )
+            .padding(.horizontal, 14)
+
+            rangeSelectorBar(window: window)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 16)
+        }
+        .background(BevelColors.sheetHeaderBg)
+    }
+
+    @ViewBuilder
+    private func rangeSelectorBar(window: MetricWindowSeries) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                if window.canStepBackward {
+                    inspectedFloat = nil
+                    inspectedDate = nil
+                    windowPageOffset += 1
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(window.canStepBackward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.white.opacity(window.canStepBackward ? 0.08 : 0.03)))
+            }
+            .disabled(!window.canStepBackward)
+
+            HStack(spacing: 2) {
+                ForEach(["7 d", "30 d", "3 M", "6 M", "1 A"], id: \.self) { r in
+                    let active = selectedRange == r
+                    Button {
+                        inspectedFloat = nil
+                        inspectedDate = nil
+                        windowPageOffset = 0
+                        selectedRange = r
+                    } label: {
+                        Text(r)
+                            .font(ImprovingFont.caption(11.5))
+                            .fontWeight(.semibold)
+                            .foregroundColor(active ? .white : BevelColors.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(active ? Color(hex: 0x6A6E7A) : .clear))
+                    }
+                }
+            }
+            .padding(3)
+            .background(Capsule().fill(Color.white.opacity(0.06)))
+
+            Button {
+                if window.canStepForward {
+                    inspectedFloat = nil
+                    inspectedDate = nil
+                    windowPageOffset = max(0, windowPageOffset - 1)
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(window.canStepForward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.white.opacity(window.canStepForward ? 0.08 : 0.03)))
+            }
+            .disabled(!window.canStepForward)
+        }
+    }
+
+    @ViewBuilder
+    private func detailsSection(
+        avgVal: Double?,
+        maxVal: Double?,
+        minVal: Double?,
+        accent: Color,
+        multiTrends: [MetricTrendPeriodRow]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                summaryPill(label: "Promedio", value: avgVal.map(formatValue) ?? "--", color: accent)
+                summaryPill(label: "Máximo", value: maxVal.map(formatValue) ?? "--", color: BevelColors.textPrimary)
+                summaryPill(label: "Mínimo", value: minVal.map(formatValue) ?? "--", color: BevelColors.textSecondary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Tendencias por período")
+                    .font(ImprovingFont.sectionTitle(17.5))
+                    .foregroundColor(BevelColors.textPrimary)
+
+                BevelCard(cornerRadius: 18) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(multiTrends.enumerated()), id: \.element.id) { idx, row in
+                            multiPeriodRowView(row: row, accent: accent)
+                            if idx < multiTrends.count - 1 {
+                                Divider().background(BevelColors.divider).padding(.horizontal, 14)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !trend.detailNote.isEmpty {
+                BevelCard(cornerRadius: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Sobre esta tendencia")
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(trend.detailNote)
+                            .font(ImprovingFont.body(13.5))
+                            .foregroundColor(BevelColors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+    }
+
+    @ViewBuilder
+    private func multiPeriodRowView(row: MetricTrendPeriodRow, accent: Color) -> some View {
+        let latestVal = row.sparklinePoints.last
+        HStack {
+            Text(row.label)
+                .font(ImprovingFont.body(13.5))
+                .foregroundColor(BevelColors.textSecondary)
+            Spacer()
+            Text(latestVal.map(formatValue) ?? "--")
+                .font(ImprovingFont.cardTitle(14))
+                .monospacedDigit()
+                .foregroundColor(BevelColors.textPrimary)
+            if let delta = row.delta {
+                let sign = delta >= 0 ? "+" : ""
+                let dTxt = isDurationMinutesTrend
+                    ? "\(sign)\(Int(delta.rounded()))m"
+                    : String(format: "%@%.1f", locale: Locale(identifier: "es_ES"), sign, delta)
+                Text(dTxt)
+                    .font(ImprovingFont.caption(12))
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundColor(abs(delta) < 0.05 ? BevelColors.textMuted : (delta >= 0 ? accent : BevelColors.coralHigh))
+                    .frame(width: 64, alignment: .trailing)
+            } else {
+                Text("--")
+                    .font(ImprovingFont.caption(12))
+                    .foregroundColor(BevelColors.textMuted)
+                    .frame(width: 64, alignment: .trailing)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     private func summaryPill(label: String, value: String, color: Color) -> some View {
