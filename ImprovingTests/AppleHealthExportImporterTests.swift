@@ -1150,4 +1150,175 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let hrr = try XCTUnwrap(day.hrRecoveryBpm)
         XCTAssertEqual(hrr, 28.0, accuracy: 2.0)
     }
+
+    func testMultimodalNutritionJsonParserAndLocalSpanishFoodFallback() throws {
+        let geminiJson = """
+        ```json
+        {
+          "title": "Huevos revueltos con tostada y aguacate",
+          "kcal": 510,
+          "protein_g": 24,
+          "carbs_g": 34,
+          "fat_g": 31,
+          "caffeine_mg": 80,
+          "alcohol_drinks": 0,
+          "calcium_mg": 95,
+          "quality_score": 91,
+          "summary": "Desayuno denso en proteína completa, grasas monoinsaturadas y fibra."
+        }
+        ```
+        """
+        let parsed = try XCTUnwrap(GeminiCoachService.parseMealEstimateJson(geminiJson, usedLiveAI: true, modelUsed: "gemini-3-flash"))
+        XCTAssertEqual(parsed.title, "Huevos revueltos con tostada y aguacate")
+        XCTAssertEqual(parsed.kcal, 510)
+        XCTAssertEqual(parsed.proteinG, 24)
+        XCTAssertEqual(parsed.carbsG, 34)
+        XCTAssertEqual(parsed.fatG, 31)
+        XCTAssertEqual(parsed.caffeineMg, 80, accuracy: 0.1)
+        XCTAssertEqual(parsed.qualityScore, 91)
+        XCTAssertTrue(parsed.usedLiveAI)
+
+        let offlineEst = GeminiCoachService.estimateMealLocally(from: "2 huevos revueltos con tostada y aguacate y un café", hasPhoto: false)
+        XCTAssertGreaterThan(offlineEst.kcal, 380)
+        XCTAssertGreaterThanOrEqual(offlineEst.proteinG, 16)
+        XCTAssertGreaterThanOrEqual(offlineEst.caffeineMg, 75)
+        XCTAssertGreaterThanOrEqual(offlineEst.qualityScore, 80)
+    }
+
+    @MainActor
+    func testPersistedMealsEditDeleteAndManualNutrients() throws {
+        let store = ImprovingStore()
+        store.mealsByDate = [:]
+        store.hydrationGlassesByDate = [:]
+        store.manualNutrientsByDate = [:]
+
+        let meal = NutritionMealItem(
+            id: "meal_test_1",
+            title: "Salmón con arroz",
+            timeLabel: "14:20",
+            kcal: 640,
+            proteinG: 44,
+            carbsG: 52,
+            fatG: 24,
+            qualityScore: 92,
+            caffeineMg: 75,
+            alcoholDrinks: nil,
+            calciumMg: 60
+        )
+        store.saveMeal(meal)
+        XCTAssertEqual(store.mealsToday.count, 1)
+        XCTAssertEqual(store.totalCaloriesToday, 640)
+        XCTAssertEqual(store.totalProteinToday, 44)
+        XCTAssertEqual(store.foodQualityScore, 92)
+
+        // Add manual caffeine + custom hydration ml and verify persistence across calculations
+        store.addNutrientAmount(key: "Cafeína", amount: 50)
+        store.addNutrientAmount(key: "Hidratación", amount: 330)
+        XCTAssertEqual(store.totalCaffeineTodayMg, 125, accuracy: 0.1)
+        XCTAssertEqual(store.totalHydrationTodayMl, 330, accuracy: 0.1)
+
+        // Edit meal in place
+        var edited = meal
+        edited.kcal = 700
+        edited.proteinG = 50
+        store.saveMeal(edited)
+        XCTAssertEqual(store.mealsToday.count, 1)
+        XCTAssertEqual(store.totalCaloriesToday, 700)
+        XCTAssertEqual(store.totalProteinToday, 50)
+
+        // Delete meal
+        store.deleteMeal(id: "meal_test_1")
+        XCTAssertTrue(store.mealsToday.isEmpty)
+        XCTAssertEqual(store.totalCaffeineTodayMg, 50, accuracy: 0.1)
+    }
+
+    @MainActor
+    func testCustomizableDiarioHabitsAndDailyNotePersistence() throws {
+        let store = ImprovingStore()
+        store.hiddenJournalHabitIds = []
+        store.customJournalHabits = []
+        store.journalNotesByDate = [:]
+
+        store.addCustomJournalHabit(emoji: "📚", title: "Exámenes UPV", isNightHabit: false)
+        XCTAssertEqual(store.customJournalHabits.count, 1)
+        let customId = try XCTUnwrap(store.customJournalHabits.first?.id)
+
+        store.setJournalCheck(habitId: customId, state: .yes)
+        store.setJournalNote("Día intenso de examen y poco descanso previo")
+        XCTAssertEqual(store.journalNote(), "Día intenso de examen y poco descanso previo")
+        XCTAssertTrue(store.hasAnyJournalActivity(for: store.selectedDateIso))
+
+        // Hide 18 built-in habits -> requiredManualCountForCompletion adapts dynamically so day remains completable!
+        for hid in ImprovingStore.manualHabitIds.prefix(20) {
+            store.toggleHabitHidden(hid)
+        }
+        XCTAssertLessThan(store.requiredManualCountForCompletion, 20)
+        store.resetHiddenHabits()
+        store.deleteCustomJournalHabit(id: customId)
+        store.setJournalNote("")
+    }
+
+    func testSmartNotificationSleepPlanCalculation() {
+        // Wake at 07:30 (450m), need 8h 25m (505m), lead 30m -> Bedtime 23:05, Notify 22:35!
+        let plan = LocalNotificationManager.computeSleepNotificationPlan(
+            wakeHour: 7,
+            wakeMinute: 30,
+            sleepNeedMinutes: 505,
+            leadMinutes: 30
+        )
+        XCTAssertEqual(plan.wakeLabel, "07:30")
+        XCTAssertEqual(plan.bedtimeLabel, "23:05")
+        XCTAssertEqual(plan.notifyLabel, "22:35")
+        XCTAssertEqual(plan.sleepNeedLabel, "8 h 25 min")
+    }
+
+    @MainActor
+    func testIndividualWorkoutEditDeleteAndShareCardPayload() throws {
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        let iso = store.selectedDateIso
+        let initialWk = EffortEventItem(
+            id: "wk_1",
+            title: "Carrera",
+            timeRange: "18:00 - 18:40",
+            durationMin: 40,
+            avgHrBpm: 152,
+            strainScore: 11.4,
+            strainPct: 54,
+            categoryLabel: "Cardio",
+            kcal: 460,
+            distanceKm: 7.5,
+            dateIso: iso
+        )
+        store.realHistory[iso] = RealBiometricDaySummary(dateIso: iso, workouts: [initialWk])
+
+        // Share card payload reflects real workout figures
+        let card = ShareCardPayload.build(for: .workout(initialWk), store: store)
+        XCTAssertEqual(card.title, "Carrera")
+        XCTAssertEqual(card.metrics.count, 4)
+
+        // Update workout duration & title -> recalculates strain & persists
+        var edited = initialWk
+        edited = EffortEventItem(
+            id: initialWk.id,
+            title: "Series en pista",
+            timeRange: "18:00 - 19:00",
+            durationMin: 60,
+            avgHrBpm: 164,
+            strainScore: initialWk.strainScore,
+            strainPct: initialWk.strainPct,
+            categoryLabel: "Carrera",
+            kcal: 680,
+            distanceKm: 11.2,
+            dateIso: iso
+        )
+        store.updateWorkout(edited, originalDateIso: iso)
+        let updatedWk = try XCTUnwrap(store.workoutsToday.first)
+        XCTAssertEqual(updatedWk.title, "Series en pista")
+        XCTAssertGreaterThan(updatedWk.strainScore, initialWk.strainScore)
+
+        // Delete workout
+        store.deleteWorkout(id: "wk_1", dateIso: iso)
+        XCTAssertTrue(store.workoutsToday.isEmpty)
+    }
 }

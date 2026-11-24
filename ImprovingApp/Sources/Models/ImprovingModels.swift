@@ -44,6 +44,7 @@ enum OverlayRoute: String, Equatable, Hashable, Identifiable {
     case trendMetricDetail
     case trainingLoad
     case cardioMetricDetail
+    case workoutDetail
     case askBevel
     case dispositivos
 
@@ -320,13 +321,141 @@ struct JournalHabitImpactItem: Identifiable, Equatable {
 
 struct NutritionMealItem: Identifiable, Codable, Hashable {
     let id: String
-    let title: String
-    let timeLabel: String
-    let kcal: Int
-    let proteinG: Int
-    let carbsG: Int
-    let fatG: Int
-    let qualityScore: Int
+    var title: String
+    var timeLabel: String
+    var kcal: Int
+    var proteinG: Int
+    var carbsG: Int
+    var fatG: Int
+    var qualityScore: Int
+    var caffeineMg: Double? = nil
+    var alcoholDrinks: Double? = nil
+    var calciumMg: Double? = nil
+    var aiNotes: String? = nil
+    var photoFilename: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, timeLabel, kcal, proteinG, carbsG, fatG, qualityScore
+        case caffeineMg, alcoholDrinks, calciumMg, aiNotes, photoFilename
+    }
+
+    init(
+        id: String,
+        title: String,
+        timeLabel: String,
+        kcal: Int,
+        proteinG: Int,
+        carbsG: Int,
+        fatG: Int,
+        qualityScore: Int,
+        caffeineMg: Double? = nil,
+        alcoholDrinks: Double? = nil,
+        calciumMg: Double? = nil,
+        aiNotes: String? = nil,
+        photoFilename: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.timeLabel = timeLabel
+        self.kcal = kcal
+        self.proteinG = proteinG
+        self.carbsG = carbsG
+        self.fatG = fatG
+        self.qualityScore = qualityScore
+        self.caffeineMg = caffeineMg
+        self.alcoholDrinks = alcoholDrinks
+        self.calciumMg = calciumMg
+        self.aiNotes = aiNotes
+        self.photoFilename = photoFilename
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        timeLabel = try c.decode(String.self, forKey: .timeLabel)
+        kcal = try c.decodeIfPresent(Int.self, forKey: .kcal) ?? 0
+        proteinG = try c.decodeIfPresent(Int.self, forKey: .proteinG) ?? 0
+        carbsG = try c.decodeIfPresent(Int.self, forKey: .carbsG) ?? 0
+        fatG = try c.decodeIfPresent(Int.self, forKey: .fatG) ?? 0
+        qualityScore = try c.decodeIfPresent(Int.self, forKey: .qualityScore) ?? 80
+        caffeineMg = try c.decodeIfPresent(Double.self, forKey: .caffeineMg)
+        alcoholDrinks = try c.decodeIfPresent(Double.self, forKey: .alcoholDrinks)
+        calciumMg = try c.decodeIfPresent(Double.self, forKey: .calciumMg)
+        aiNotes = try c.decodeIfPresent(String.self, forKey: .aiNotes)
+        photoFilename = try c.decodeIfPresent(String.self, forKey: .photoFilename)
+    }
+}
+
+struct AnalyzedMealEstimate: Equatable {
+    var title: String
+    var kcal: Int
+    var proteinG: Int
+    var carbsG: Int
+    var fatG: Int
+    var caffeineMg: Double
+    var alcoholDrinks: Double
+    var calciumMg: Double
+    var qualityScore: Int
+    var aiSummary: String
+    var usedLiveAI: Bool
+    var modelUsed: String
+}
+
+struct CustomJournalHabit: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var emoji: String
+    var title: String
+    var isNightHabit: Bool
+}
+
+struct SmartNotificationSettings: Codable, Equatable {
+    var journalReminderEnabled: Bool = false
+    var journalReminderHour: Int = 22
+    var journalReminderMinute: Int = 0
+    var bedtimeReminderEnabled: Bool = false
+    var bedtimeLeadMinutes: Int = 30
+    var smartAlarmHour: Int = 7
+    var smartAlarmMinute: Int = 30
+    var smartAlarmWindowMinutes: Int = 20
+
+    enum CodingKeys: String, CodingKey {
+        case journalReminderEnabled, journalReminderHour, journalReminderMinute
+        case bedtimeReminderEnabled, bedtimeLeadMinutes
+        case smartAlarmHour, smartAlarmMinute, smartAlarmWindowMinutes
+    }
+
+    init(
+        journalReminderEnabled: Bool = false,
+        journalReminderHour: Int = 22,
+        journalReminderMinute: Int = 0,
+        bedtimeReminderEnabled: Bool = false,
+        bedtimeLeadMinutes: Int = 30,
+        smartAlarmHour: Int = 7,
+        smartAlarmMinute: Int = 30,
+        smartAlarmWindowMinutes: Int = 20
+    ) {
+        self.journalReminderEnabled = journalReminderEnabled
+        self.journalReminderHour = journalReminderHour
+        self.journalReminderMinute = journalReminderMinute
+        self.bedtimeReminderEnabled = bedtimeReminderEnabled
+        self.bedtimeLeadMinutes = bedtimeLeadMinutes
+        self.smartAlarmHour = smartAlarmHour
+        self.smartAlarmMinute = smartAlarmMinute
+        self.smartAlarmWindowMinutes = smartAlarmWindowMinutes
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        journalReminderEnabled = try c.decodeIfPresent(Bool.self, forKey: .journalReminderEnabled) ?? false
+        journalReminderHour = try c.decodeIfPresent(Int.self, forKey: .journalReminderHour) ?? 22
+        journalReminderMinute = try c.decodeIfPresent(Int.self, forKey: .journalReminderMinute) ?? 0
+        bedtimeReminderEnabled = try c.decodeIfPresent(Bool.self, forKey: .bedtimeReminderEnabled) ?? false
+        bedtimeLeadMinutes = try c.decodeIfPresent(Int.self, forKey: .bedtimeLeadMinutes) ?? 30
+        smartAlarmHour = try c.decodeIfPresent(Int.self, forKey: .smartAlarmHour) ?? 7
+        smartAlarmMinute = try c.decodeIfPresent(Int.self, forKey: .smartAlarmMinute) ?? 30
+        smartAlarmWindowMinutes = try c.decodeIfPresent(Int.self, forKey: .smartAlarmWindowMinutes) ?? 20
+    }
 }
 
 struct CoachChatMessage: Identifiable, Codable, Hashable {

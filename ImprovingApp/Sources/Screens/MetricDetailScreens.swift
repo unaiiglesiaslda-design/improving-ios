@@ -1106,6 +1106,7 @@ struct CardioMetricDetailScreen: View {
     @ObservedObject var store: ImprovingStore
     let route: CardioMetricRoute
     let onBack: () -> Void
+    var onOpenWorkout: ((EffortEventItem) -> Void)? = nil
 
     @State private var currentRoute: CardioMetricRoute = .activitiesDuration
     @State private var selectedRange: String = "30 d"
@@ -1547,7 +1548,12 @@ struct CardioMetricDetailScreen: View {
                                     .padding(.top, 4)
 
                                 ForEach(group.items) { w in
-                                    FitnessActivityHistoryRow(workout: w)
+                                    Button {
+                                        onOpenWorkout?(w)
+                                    } label: {
+                                        FitnessActivityHistoryRow(workout: w)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -2493,7 +2499,14 @@ struct CardioMetricDetailScreen: View {
                                     .font(ImprovingFont.cardTitle(14.5))
                                     .foregroundColor(BevelColors.textSecondary)
                                     .padding(.top, 4)
-                                ForEach(g.items) { w in FitnessActivityHistoryRow(workout: w) }
+                                ForEach(g.items) { w in
+                                    Button {
+                                        onOpenWorkout?(w)
+                                    } label: {
+                                        FitnessActivityHistoryRow(workout: w)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                         }
                     }

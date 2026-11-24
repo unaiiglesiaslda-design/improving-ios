@@ -607,6 +607,128 @@ struct DispositivosScreen: View {
                     .padding(16)
                 }
                 .padding(.horizontal, 16)
+
+                // Smart Local Notifications & Wake Alarm Hub Card
+                BevelCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bell.badge.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(BevelColors.amberStart)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("NOTIFICACIONES Y ALARMA INTELIGENTE")
+                                    .font(ImprovingFont.microLabel(11))
+                                    .foregroundColor(BevelColors.amberStart)
+                                Text("Gratis y locales en tu iPhone (Diario, Sueño y Despertar)")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        Toggle(isOn: Binding(
+                            get: { store.notificationSettings.journalReminderEnabled },
+                            set: { val in
+                                var cfg = store.notificationSettings
+                                cfg.journalReminderEnabled = val
+                                store.updateNotificationSettings(cfg, promptPermission: val)
+                            }
+                        )) {
+                            HStack {
+                                Text("Recordatorio nocturno Diario")
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                DatePicker("", selection: Binding(
+                                    get: {
+                                        var c = DateComponents()
+                                        c.hour = store.notificationSettings.journalReminderHour
+                                        c.minute = store.notificationSettings.journalReminderMinute
+                                        return Calendar.current.date(from: c) ?? Date()
+                                    },
+                                    set: { d in
+                                        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+                                        var cfg = store.notificationSettings
+                                        cfg.journalReminderHour = c.hour ?? 22
+                                        cfg.journalReminderMinute = c.minute ?? 0
+                                        store.updateNotificationSettings(cfg, promptPermission: cfg.journalReminderEnabled)
+                                    }
+                                ), displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                            }
+                        }
+
+                        Divider().background(BevelColors.divider)
+
+                        Toggle(isOn: Binding(
+                            get: { store.notificationSettings.bedtimeReminderEnabled },
+                            set: { val in
+                                var cfg = store.notificationSettings
+                                cfg.bedtimeReminderEnabled = val
+                                store.updateNotificationSettings(cfg, promptPermission: val)
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Aviso de hora óptima de dormir")
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Hoy acostarse \(store.computedSleepPlan.bedtimeLabel) (aviso \(store.computedSleepPlan.notifyLabel))")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        Divider().background(BevelColors.divider)
+
+                        Toggle(isOn: Binding(
+                            get: { store.smartAlarmEnabled },
+                            set: { store.setSmartAlarmEnabled($0, promptPermission: true) }
+                        )) {
+                            HStack {
+                                Text("Alarma de despertar")
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                DatePicker("", selection: Binding(
+                                    get: {
+                                        var c = DateComponents()
+                                        c.hour = store.notificationSettings.smartAlarmHour
+                                        c.minute = store.notificationSettings.smartAlarmMinute
+                                        return Calendar.current.date(from: c) ?? Date()
+                                    },
+                                    set: { d in
+                                        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+                                        var cfg = store.notificationSettings
+                                        cfg.smartAlarmHour = c.hour ?? 7
+                                        cfg.smartAlarmMinute = c.minute ?? 30
+                                        store.updateNotificationSettings(cfg, promptPermission: store.smartAlarmEnabled || cfg.bedtimeReminderEnabled)
+                                    }
+                                ), displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                            }
+                        }
+
+                        HStack {
+                            Text(store.notificationStatusText)
+                                .font(ImprovingFont.caption(11.5))
+                                .foregroundColor(BevelColors.greenPrimary)
+                                .lineLimit(2)
+                            Spacer()
+                            Button {
+                                store.triggerTestLocalNotification()
+                            } label: {
+                                Text("Probar (3 s)")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Capsule().fill(BevelColors.indigoEnd))
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
             }
             .padding(.bottom, 120)
         }

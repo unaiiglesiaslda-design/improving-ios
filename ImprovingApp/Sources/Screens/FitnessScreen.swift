@@ -5,6 +5,7 @@ struct FitnessScreen: View {
     let onNavigate: (OverlayRoute) -> Void
     let onOpenTrainingLoad: (TrainingLoadTab) -> Void
     let onOpenCardioMetric: (CardioMetricRoute) -> Void
+    var onOpenWorkout: ((EffortEventItem) -> Void)? = nil
 
     @State private var showWorkoutLoggerSheet: Bool = false
     @State private var showCalendarSheet: Bool = false
@@ -276,9 +277,16 @@ struct FitnessScreen: View {
 
                         if !store.workoutsToday.isEmpty {
                             ForEach(store.workoutsToday) { w in
-                                Button { onOpenCardioMetric(.activitiesDuration) } label: {
+                                Button {
+                                    if let onOpenWorkout {
+                                        onOpenWorkout(w)
+                                    } else {
+                                        onOpenCardioMetric(.activitiesDuration)
+                                    }
+                                } label: {
                                     FitnessActivityHistoryRow(workout: w, dateLabelOverride: w.timeRange)
                                 }
+                                .buttonStyle(.plain)
                             }
                         } else {
                             HStack(spacing: 14) {

@@ -55,6 +55,10 @@ struct ImprovingRootView: View {
                                 onOpenCardioMetric: { c in
                                     cardioRoute = c
                                     push(.cardioMetricDetail)
+                                },
+                                onOpenWorkout: { w in
+                                    store.selectWorkout(w)
+                                    push(.workoutDetail)
                                 }
                             )
                         case .biologia:
@@ -147,6 +151,10 @@ struct ImprovingRootView: View {
                 onOpenTrend: { item in
                     store.selectedTrendItem = item
                     push(.trendMetricDetail)
+                },
+                onOpenWorkout: { w in
+                    store.selectWorkout(w)
+                    push(.workoutDetail)
                 }
             )
         case .recuperacion:
@@ -222,7 +230,21 @@ struct ImprovingRootView: View {
         case .trainingLoad:
             TrainingLoadDetailScreen(store: store, initialTab: trainingLoadTab, onBack: { pop() })
         case .cardioMetricDetail:
-            CardioMetricDetailScreen(store: store, route: cardioRoute, onBack: { pop() })
+            CardioMetricDetailScreen(
+                store: store,
+                route: cardioRoute,
+                onBack: { pop() },
+                onOpenWorkout: { w in
+                    store.selectWorkout(w)
+                    push(.workoutDetail)
+                }
+            )
+        case .workoutDetail:
+            if let workout = store.selectedWorkoutItem {
+                WorkoutDetailScreen(store: store, workout: workout, onBack: { pop() })
+            } else {
+                CardioMetricDetailScreen(store: store, route: cardioRoute, onBack: { pop() })
+            }
         case .askBevel:
             AskBevelScreen(store: store, onClose: { pop() }, onOpenSettings: { push(.dispositivos) })
         case .dispositivos:

@@ -323,6 +323,7 @@ actor GeminiCoachService {
         - \(dataConnection)
         - \(missingWarning)
         - PROHIBIDO inventar, estimar o rellenar ninguna cifra marcada como "NO_DISPONIBLE". Si pregunta por una métrica ausente, díselo con total naturalidad sin inventar ningún número.
+        - Presta especial atención al bloque `diario_hoy` (hábitos personalizados, `nota_del_dia` y `notas_recientes`) y `nutricion_hoy` (comidas, macros, cafeína, hidratación y alcohol) para explicar variaciones reales en su VFC, sueño, recuperación o energía cuando vengan al caso.
 
         DATOS REALES DE \(name.uppercased()):
         \(biometricContextJson)
@@ -1238,6 +1239,344 @@ actor GeminiCoachService {
             expandedMessage: fullMsg,
             structureIndex: s % 5,
             variationSeed: s
+        )
+    }
+
+    // MARK: - 4. Multimodal Nutrition Analyzer (Photo + Natural Spanish Text via Gemini 3/3.1 Flash)
+
+    func analyzeMealWithAI(
+        descriptionText: String,
+        jpegImageData: Data?,
+        apiKey: String,
+        selectedModel: String
+    ) async -> AnalyzedMealEstimate {
+        let trimmedDesc = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanKey = Self.sanitizeApiKey(apiKey)
+        let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "auto" : selectedModel
+
+        let sysPrompt = """
+        Eres un nutricionista deportivo clínico experto dentro de Improving.
+        Tu tarea es analizar la comida del usuario (a partir de la fotografía del plato, la descripción en lenguaje natural, o ambas) y calcular con precisión realista sus calorías, macronutrientes, cafeína, alcohol, calcio y una puntuación de calidad nutricional de 0 a 100.
+
+        CRITERIOS DE PUNTUACIÓN DE CALIDAD (0 a 100):
+        - 85 a 98: Comida real mínimamente procesada, buena densidad proteica, grasas saludables, fibra o micronutrientes (ej. huevos, aguacate, pescado, verduras, legumbres, fruta, avena).
+        - 65 a 84: Comida equilibrada estándar con algún refinado moderado (ej. bocadillo limpio, arroz blanco con pollo, pasta con atún).
+        - 35 a 64: Ultraprocesados moderados, frituras, exceso de azúcares añadidos o bollería.
+        - 10 a 34: Alcohol, refrescos azucarados, comida rápida muy densa en grasas trans/azúcar.
+
+        Devuelve ÚNICAMENTE un objeto JSON válido sin bloques markdown con estas claves exactas:
+        {
+          "title": "Nombre corto y claro del plato en español (máx 48 caracteres)",
+          "kcal": 520,
+          "protein_g": 32,
+          "carbs_g": 42,
+          "fat_g": 24,
+          "caffeine_mg": 0,
+          "alcohol_drinks": 0,
+          "calcium_mg": 85,
+          "quality_score": 90,
+          "summary": "Breve explicación nutricional en 1 frase clara en español."
+        }
+        """
+
+        let userPrompt: String = {
+            if !trimmedDesc.isEmpty && jpegImageData != nil {
+                return "Analiza la foto del plato junto con esta descripción del usuario: «\(trimmedDesc)». Calcula raciones, calorías, macros y calidad."
+            } else if jpegImageData != nil {
+                return "Analiza visualmente todos los alimentos y raciones de la fotografía adjunta y calcula calorías, macros y calidad nutricional."
+            } else {
+                return "Analiza nutricionalmente esta comida descrita por el usuario: «\(trimmedDesc)». Calcula calorías, macros, cafeína/alcohol si los hay y calidad nutricional."
+            }
+        }()
+
+        // Tier 1: Live Multimodal Gemini API (supports both JPEG inline_data + text!)
+        if !cleanKey.isEmpty {
+            let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: model == "auto")
+            for m in candidates.prefix(5) {
+                if let raw = await callGeminiMultimodalJson(
+                    prompt: userPrompt,
+                    sysPrompt: sysPrompt,
+                    jpegImageData: jpegImageData,
+                    apiKey: cleanKey,
+                    model: m
+                ), let parsed = Self.parseMealEstimateJson(raw, usedLiveAI: true, modelUsed: m) {
+                    return parsed
+                }
+            }
+        }
+
+        // Tier 2: Keyless Live Cloud LLM when text description is available
+        if !trimmedDesc.isEmpty {
+            if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
+               let parsed = Self.parseMealEstimateJson(raw, usedLiveAI: true, modelUsed: "improving-cloud") {
+                return parsed
+            }
+        }
+
+        // Tier 3: Deterministic Spanish Nutrition Lexicon Fallback (instant offline resilience, editable before saving)
+        return Self.estimateMealLocally(from: trimmedDesc, hasPhoto: jpegImageData != nil)
+    }
+
+    private func callGeminiMultimodalJson(
+        prompt: String,
+        sysPrompt: String,
+        jpegImageData: Data?,
+        apiKey: String,
+        model: String
+    ) async -> String? {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 28
+        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+
+        var userParts: [[String: Any]] = []
+        if let img = jpegImageData, !img.isEmpty {
+            userParts.append([
+                "inline_data": [
+                    "mime_type": "image/jpeg",
+                    "data": img.base64EncodedString()
+                ]
+            ])
+        }
+        userParts.append(["text": prompt])
+
+        var genConfig: [String: Any] = [
+            "temperature": 0.25,
+            "maxOutputTokens": 650,
+            "responseMimeType": "application/json"
+        ]
+        if model.hasPrefix("gemini-2.5-flash") {
+            genConfig["thinkingConfig"] = ["thinkingBudget": 0]
+        }
+
+        let body: [String: Any] = [
+            "system_instruction": ["parts": [["text": sysPrompt]]],
+            "contents": [["role": "user", "parts": userParts]],
+            "generationConfig": genConfig
+        ]
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = httpBody
+
+        do {
+            let (respData, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let content = candidates.first?["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]] else { return nil }
+            let joined = parts.compactMap { part -> String? in
+                if (part["thought"] as? Bool) == true { return nil }
+                return part["text"] as? String
+            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            return joined.isEmpty ? nil : joined
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated static func parseMealEstimateJson(_ raw: String, usedLiveAI: Bool = true, modelUsed: String = "gemini") -> AnalyzedMealEstimate? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["```json", "```JSON", "```"] {
+            if cleaned.hasPrefix(prefix) { cleaned = String(cleaned.dropFirst(prefix.count)) }
+        }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let s = cleaned.firstIndex(of: "{"), let e = cleaned.lastIndex(of: "}"), e > s,
+              let data = String(cleaned[s...e]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        func intVal(_ keys: [String], default def: Int = 0) -> Int {
+            for k in keys {
+                if let n = obj[k] as? NSNumber { return Int(n.doubleValue.rounded()) }
+                if let str = obj[k] as? String, let d = Double(str.replacingOccurrences(of: ",", with: ".")) {
+                    return Int(d.rounded())
+                }
+            }
+            return def
+        }
+
+        func dblVal(_ keys: [String], default def: Double = 0) -> Double {
+            for k in keys {
+                if let n = obj[k] as? NSNumber { return n.doubleValue }
+                if let str = obj[k] as? String, let d = Double(str.replacingOccurrences(of: ",", with: ".")) {
+                    return d
+                }
+            }
+            return def
+        }
+
+        let rawTitle = (obj["title"] as? String ?? obj["nombre"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let p = max(0, intVal(["protein_g", "proteinG", "proteina", "protein"]))
+        let c = max(0, intVal(["carbs_g", "carbsG", "carbos", "carbs"]))
+        let f = max(0, intVal(["fat_g", "fatG", "grasas", "fat"]))
+        var kcal = max(0, intVal(["kcal", "calories", "calorias"]))
+        if kcal == 0 && (p + c + f) > 0 {
+            kcal = p * 4 + c * 4 + f * 9
+        }
+        guard !rawTitle.isEmpty || kcal > 0 else { return nil }
+
+        let caff = max(0, dblVal(["caffeine_mg", "caffeineMg", "cafeina_mg"]))
+        let alc = max(0, dblVal(["alcohol_drinks", "alcoholDrinks", "bebidas_alcohol"]))
+        let calc = max(0, dblVal(["calcium_mg", "calciumMg", "calcio_mg"]))
+        let q = min(max(intVal(["quality_score", "qualityScore", "calidad"], default: 80), 10), 100)
+        let summary = ((obj["summary"] as? String) ?? (obj["resumen"] as? String) ?? "Estimación calculada por IA. Puedes ajustar cualquier valor antes de guardar.")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return AnalyzedMealEstimate(
+            title: rawTitle.isEmpty ? "Comida analizada" : String(rawTitle.prefix(64)),
+            kcal: kcal,
+            proteinG: p,
+            carbsG: c,
+            fatG: f,
+            caffeineMg: caff,
+            alcoholDrinks: alc,
+            calciumMg: calc,
+            qualityScore: q,
+            aiSummary: summary,
+            usedLiveAI: usedLiveAI,
+            modelUsed: modelUsed
+        )
+    }
+
+    nonisolated static func estimateMealLocally(from rawText: String, hasPhoto: Bool) -> AnalyzedMealEstimate {
+        let low = rawText
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        struct FoodEntry {
+            let pattern: String
+            let kcal: Double
+            let p: Double
+            let c: Double
+            let f: Double
+            let caff: Double
+            let alc: Double
+            let calc: Double
+            let qualityDelta: Int
+        }
+
+        let catalog: [FoodEntry] = [
+            FoodEntry(pattern: "huevo", kcal: 78, p: 6.5, c: 0.6, f: 5.5, caff: 0, alc: 0, calc: 28, qualityDelta: 6),
+            FoodEntry(pattern: "tostada", kcal: 110, p: 3.8, c: 20.0, f: 1.5, caff: 0, alc: 0, calc: 25, qualityDelta: 1),
+            FoodEntry(pattern: "pan", kcal: 120, p: 4.0, c: 23.0, f: 1.5, caff: 0, alc: 0, calc: 20, qualityDelta: 0),
+            FoodEntry(pattern: "aguacate", kcal: 145, p: 1.8, c: 7.5, f: 13.5, caff: 0, alc: 0, calc: 12, qualityDelta: 7),
+            FoodEntry(pattern: "pollo", kcal: 245, p: 42.0, c: 0.0, f: 7.5, caff: 0, alc: 0, calc: 18, qualityDelta: 6),
+            FoodEntry(pattern: "pavo", kcal: 210, p: 39.0, c: 0.0, f: 5.0, caff: 0, alc: 0, calc: 16, qualityDelta: 6),
+            FoodEntry(pattern: "salmon", kcal: 330, p: 34.0, c: 0.0, f: 21.0, caff: 0, alc: 0, calc: 24, qualityDelta: 8),
+            FoodEntry(pattern: "atun", kcal: 195, p: 35.0, c: 0.0, f: 5.5, caff: 0, alc: 0, calc: 18, qualityDelta: 6),
+            FoodEntry(pattern: "ternera", kcal: 290, p: 36.0, c: 0.0, f: 16.0, caff: 0, alc: 0, calc: 16, qualityDelta: 4),
+            FoodEntry(pattern: "arroz", kcal: 215, p: 4.5, c: 46.0, f: 0.8, caff: 0, alc: 0, calc: 15, qualityDelta: 2),
+            FoodEntry(pattern: "pasta", kcal: 260, p: 9.0, c: 51.0, f: 2.0, caff: 0, alc: 0, calc: 20, qualityDelta: 1),
+            FoodEntry(pattern: "avena", kcal: 230, p: 8.5, c: 39.0, f: 4.5, caff: 0, alc: 0, calc: 40, qualityDelta: 6),
+            FoodEntry(pattern: "patata", kcal: 165, p: 4.0, c: 37.0, f: 0.4, caff: 0, alc: 0, calc: 22, qualityDelta: 4),
+            FoodEntry(pattern: "boniato", kcal: 170, p: 3.5, c: 39.0, f: 0.3, caff: 0, alc: 0, calc: 35, qualityDelta: 6),
+            FoodEntry(pattern: "lenteja", kcal: 250, p: 18.0, c: 40.0, f: 1.5, caff: 0, alc: 0, calc: 45, qualityDelta: 7),
+            FoodEntry(pattern: "garbanzo", kcal: 270, p: 15.0, c: 44.0, f: 4.2, caff: 0, alc: 0, calc: 65, qualityDelta: 7),
+            FoodEntry(pattern: "ensalada", kcal: 135, p: 3.5, c: 10.0, f: 9.0, caff: 0, alc: 0, calc: 55, qualityDelta: 7),
+            FoodEntry(pattern: "verdura", kcal: 95, p: 3.5, c: 13.0, f: 3.5, caff: 0, alc: 0, calc: 60, qualityDelta: 7),
+            FoodEntry(pattern: "platano", kcal: 105, p: 1.3, c: 27.0, f: 0.4, caff: 0, alc: 0, calc: 8, qualityDelta: 5),
+            FoodEntry(pattern: "manzana", kcal: 85, p: 0.4, c: 22.0, f: 0.3, caff: 0, alc: 0, calc: 10, qualityDelta: 5),
+            FoodEntry(pattern: "yogur", kcal: 130, p: 12.0, c: 9.0, f: 4.5, caff: 0, alc: 0, calc: 180, qualityDelta: 5),
+            FoodEntry(pattern: "queso", kcal: 160, p: 11.0, c: 1.5, f: 12.5, caff: 0, alc: 0, calc: 240, qualityDelta: 2),
+            FoodEntry(pattern: "leche", kcal: 125, p: 8.0, c: 12.0, f: 4.8, caff: 0, alc: 0, calc: 290, qualityDelta: 3),
+            FoodEntry(pattern: "batido", kcal: 150, p: 26.0, c: 6.0, f: 2.2, caff: 0, alc: 0, calc: 120, qualityDelta: 5),
+            FoodEntry(pattern: "proteina", kcal: 130, p: 25.0, c: 4.0, f: 1.8, caff: 0, alc: 0, calc: 110, qualityDelta: 5),
+            FoodEntry(pattern: "aceite", kcal: 90, p: 0.0, c: 0.0, f: 10.0, caff: 0, alc: 0, calc: 0, qualityDelta: 3),
+            FoodEntry(pattern: "nueces", kcal: 185, p: 4.5, c: 4.0, f: 18.0, caff: 0, alc: 0, calc: 28, qualityDelta: 5),
+            FoodEntry(pattern: "almendra", kcal: 170, p: 6.0, c: 6.0, f: 15.0, caff: 0, alc: 0, calc: 75, qualityDelta: 5),
+            FoodEntry(pattern: "cafe", kcal: 10, p: 0.3, c: 1.0, f: 0.2, caff: 80, alc: 0, calc: 8, qualityDelta: 0),
+            FoodEntry(pattern: "espresso", kcal: 5, p: 0.2, c: 0.8, f: 0.1, caff: 75, alc: 0, calc: 4, qualityDelta: 0),
+            FoodEntry(pattern: "te verde", kcal: 4, p: 0.0, c: 0.5, f: 0.0, caff: 35, alc: 0, calc: 2, qualityDelta: 2),
+            FoodEntry(pattern: "matcha", kcal: 25, p: 1.0, c: 4.0, f: 0.2, caff: 65, alc: 0, calc: 15, qualityDelta: 3),
+            FoodEntry(pattern: "cerveza", kcal: 145, p: 1.5, c: 13.0, f: 0.0, caff: 0, alc: 1.0, calc: 14, qualityDelta: -18),
+            FoodEntry(pattern: "vino", kcal: 125, p: 0.2, c: 4.0, f: 0.0, caff: 0, alc: 1.0, calc: 12, qualityDelta: -16),
+            FoodEntry(pattern: "copa", kcal: 180, p: 0.0, c: 12.0, f: 0.0, caff: 0, alc: 1.5, calc: 5, qualityDelta: -22),
+            FoodEntry(pattern: "pizza", kcal: 680, p: 26.0, c: 78.0, f: 28.0, caff: 0, alc: 0, calc: 280, qualityDelta: -14),
+            FoodEntry(pattern: "hamburguesa", kcal: 620, p: 32.0, c: 46.0, f: 33.0, caff: 0, alc: 0, calc: 140, qualityDelta: -12)
+        ]
+
+        func multiplierBefore(_ keyword: String, in text: String) -> Double {
+            guard let range = text.range(of: keyword) else { return 1.0 }
+            let prefix = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+            let lastToken = prefix.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+            switch lastToken {
+            case "1", "un", "una": return 1.0
+            case "2", "dos", "par": return 2.0
+            case "3", "tres": return 3.0
+            case "4", "cuatro": return 4.0
+            case "5", "cinco": return 5.0
+            case "medio", "media", "0.5", "1/2": return 0.5
+            default:
+                if let n = Double(lastToken), (0.25...12.0).contains(n) { return n }
+                return 1.0
+            }
+        }
+
+        var totalKcal = 0.0
+        var totalP = 0.0
+        var totalC = 0.0
+        var totalF = 0.0
+        var totalCaff = 0.0
+        var totalAlc = 0.0
+        var totalCalc = 0.0
+        var quality = 78
+        var matchedAny = false
+
+        for item in catalog {
+            if low.contains(item.pattern) {
+                let mult = multiplierBefore(item.pattern, in: low)
+                totalKcal += item.kcal * mult
+                totalP += item.p * mult
+                totalC += item.c * mult
+                totalF += item.f * mult
+                totalCaff += item.caff * mult
+                totalAlc += item.alc * mult
+                totalCalc += item.calc * mult
+                quality += item.qualityDelta
+                matchedAny = true
+            }
+        }
+
+        if !matchedAny {
+            totalKcal = 460
+            totalP = 28
+            totalC = 44
+            totalF = 18
+            totalCalc = 90
+            quality = 78
+        }
+
+        let cleanTitle: String = {
+            let t = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty {
+                let firstUpper = t.prefix(1).uppercased() + t.dropFirst()
+                return String(firstUpper.prefix(60))
+            }
+            return hasPhoto ? "Plato fotografiado" : "Comida registrada"
+        }()
+
+        let note = matchedAny
+            ? "Estimación local instantánea calculada sobre los ingredientes detectados (sin conexión a Gemini en vivo). Puedes ajustar cualquier cifra."
+            : "Configura tu API Key de Gemini o conéctate a internet para análisis visual exacto; ajusta los valores manualmente si lo necesitas."
+
+        return AnalyzedMealEstimate(
+            title: cleanTitle,
+            kcal: Int(totalKcal.rounded()),
+            proteinG: Int(totalP.rounded()),
+            carbsG: Int(totalC.rounded()),
+            fatG: Int(totalF.rounded()),
+            caffeineMg: totalCaff,
+            alcoholDrinks: totalAlc,
+            calciumMg: totalCalc,
+            qualityScore: min(max(quality, 15), 96),
+            aiSummary: note,
+            usedLiveAI: false,
+            modelUsed: "local-nutrition"
         )
     }
 }

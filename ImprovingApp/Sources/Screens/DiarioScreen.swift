@@ -58,6 +58,10 @@ struct DiarioScreen: View {
 
     @State private var showMoodSheet: Bool = false
     @State private var showCalendarSheet: Bool = false
+    @State private var showCustomizeSheet: Bool = false
+    @State private var noteDraft: String = ""
+    @State private var noteSavedFeedback: Bool = false
+    @FocusState private var isNoteFocused: Bool
 
     var body: some View {
         // STRICT RULE: Every manual checkbox starts UNSET (center —) unless the user actively chooses ✓ or ✕!
@@ -65,9 +69,17 @@ struct DiarioScreen: View {
         let moodOpt = store.journalMoodByDate[store.selectedDateIso]
         let moodLabels = ["Agotado", "Bajo", "Normal", "Bien", "Excelente"]
         let moodText = moodOpt.map { moodLabels[max(0, min(4, $0 - 1))] } ?? "Sin seleccionar"
-        let glasses = store.hydrationGlassesByDate[store.selectedDateIso] ?? 0
-        let waterMl = Double(glasses) * 250.0
+        let waterMl = store.totalHydrationTodayMl
         let curSummary = store.currentDaySummary
+
+        let visibleDayEntries: [DiarioEntrySpec] = dayEntries.filter { !store.isHabitHidden($0.id) }
+            + store.customJournalHabits.filter { !$0.isNightHabit && !store.isHabitHidden($0.id) }.map {
+                DiarioEntrySpec(id: $0.id, emoji: $0.emoji, title: $0.title, kind: .triState(id: $0.id))
+            }
+        let visibleNightEntries: [DiarioEntrySpec] = nightEntries.filter { !store.isHabitHidden($0.id) }
+            + store.customJournalHabits.filter { $0.isNightHabit && !store.isHabitHidden($0.id) }.map {
+                DiarioEntrySpec(id: $0.id, emoji: $0.emoji, title: $0.title, kind: .triState(id: $0.id))
+            }
 
         let autoRows: [AutoDiarioRow] = [
             AutoDiarioRow(id: "a_steps", emoji: "👟", title: "10.000+ pasos", state: store.automaticHabitState(id: "a_steps", day: curSummary)),
@@ -129,8 +141,8 @@ struct DiarioScreen: View {
                             .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                         }
 
-                        Button { onNavigate(.journalInsights) } label: {
-                            Image(systemName: "ellipsis")
+                        Button { showCustomizeSheet = true } label: {
+                            Image(systemName: "slider.horizontal.3")
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundColor(BevelColors.textPrimary)
                                 .frame(width: 38, height: 38)
@@ -181,7 +193,7 @@ struct DiarioScreen: View {
                         let iso = store.isoFormatter.string(from: dt)
                         let manualDone = store.manualCompletedCount(for: iso)
                         let isCompleted = store.isDiarioDayCompleted(for: iso)
-                        let progressFrac = min(Double(manualDone) / Double(ImprovingStore.diarioRequiredManualCount), 1.0)
+                        let progressFrac = min(Double(manualDone) / Double(max(store.requiredManualCountForCompletion, 1)), 1.0)
 
                         Button {
                             if !isFuture { store.selectDayOffset(pastOffset) }
@@ -256,7 +268,7 @@ struct DiarioScreen: View {
                         HStack(spacing: 5) {
                             Image(systemName: todayCompleted ? "checkmark.circle.fill" : "circle.dashed")
                                 .font(.system(size: 12, weight: .bold))
-                            Text("\(todayManualDone)/\(ImprovingStore.diarioRequiredManualCount) manuales")
+                            Text("\(todayManualDone)/\(store.requiredManualCountForCompletion) manuales")
                                 .font(ImprovingFont.caption(11.5))
                                 .fontWeight(.semibold)
                                 .monospacedDigit()
@@ -269,16 +281,76 @@ struct DiarioScreen: View {
                     }
                     .padding(.top, 12)
 
-                    Text("Completa al menos \(ImprovingStore.diarioRequiredManualCount) apartados manuales (sin contar los automáticos) para dar el día por completado. Las casillas en el centro (—) no se tienen en cuenta.")
+                    // Nota del día (Leída por tu Coach IA para explicar VFC, sueño y recuperación!)
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 9) {
+                            HStack(spacing: 7) {
+                                Text("📝").font(.system(size: 15))
+                                Text("Nota del día")
+                                    .font(ImprovingFont.cardTitle(14.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Coach IA")
+                                    .font(ImprovingFont.caption(10.5))
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(BevelColors.greenPrimary)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(BevelColors.greenSoftBg))
+                                Spacer()
+                                if noteSavedFeedback {
+                                    Text("✓ Guardada")
+                                        .font(ImprovingFont.caption(11))
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                } else if !noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Button("Guardar") {
+                                        isNoteFocused = false
+                                        store.setJournalNote(noteDraft)
+                                        noteSavedFeedback = true
+                                    }
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.skyBlue)
+                                }
+                            }
+
+                            TextField(
+                                "Añade contexto para hoy (ej. exámenes, mal descanso, agujetas, viaje, cena pesada)…",
+                                text: $noteDraft,
+                                axis: .vertical
+                            )
+                            .focused($isNoteFocused)
+                            .lineLimit(2...4)
+                            .font(ImprovingFont.body(13.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                            .onSubmit {
+                                store.setJournalNote(noteDraft)
+                                noteSavedFeedback = true
+                            }
+                        }
+                        .padding(13)
+                    }
+
+                    HStack {
+                        Text("Marca tus hábitos activos (\(store.requiredManualCountForCompletion) para completar el día).")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
+                        Spacer()
+                        Button("Personalizar") {
+                            showCustomizeSheet = true
+                        }
                         .font(ImprovingFont.caption(12))
-                        .foregroundColor(BevelColors.textSecondary)
+                        .fontWeight(.semibold)
+                        .foregroundColor(BevelColors.skyBlue)
+                    }
 
                     Text("Día")
                         .font(ImprovingFont.body(14))
                         .foregroundColor(BevelColors.textSecondary)
                         .padding(.top, 2)
 
-                    ForEach(dayEntries) { entry in
+                    ForEach(visibleDayEntries) { entry in
                         switch entry.kind {
                         case .triState(let hid):
                             triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .unset) { next in
@@ -296,10 +368,10 @@ struct DiarioScreen: View {
                                             .font(ImprovingFont.cardTitle(14.5))
                                             .foregroundColor(BevelColors.textPrimary)
                                         Spacer()
-                                        Text(glasses > 0 ? String(format: "%.0f ml", waterMl) : "Sin registrar")
+                                        Text(waterMl > 0 ? String(format: "%.0f ml", waterMl) : "Sin registrar")
                                             .font(ImprovingFont.cardTitle(13.5))
                                             .monospacedDigit()
-                                            .foregroundColor(glasses >= 8 ? BevelColors.greenPrimary : BevelColors.textSecondary)
+                                            .foregroundColor(waterMl >= 2000 ? BevelColors.greenPrimary : BevelColors.textSecondary)
                                         Image(systemName: "arrow.right")
                                             .font(.system(size: 13, weight: .semibold))
                                             .foregroundColor(BevelColors.textSecondary)
@@ -349,7 +421,7 @@ struct DiarioScreen: View {
                     }
                     .padding(.top, 12)
 
-                    ForEach(nightEntries) { entry in
+                    ForEach(visibleNightEntries) { entry in
                         if case .triState(let hid) = entry.kind {
                             triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .unset) { next in
                                 store.setJournalCheck(habitId: hid, state: next)
@@ -434,6 +506,28 @@ struct DiarioScreen: View {
             .padding(20)
             .background(BevelColors.sheetHeaderBg.ignoresSafeArea())
             .presentationDetents([.height(220)])
+        }
+        .sheet(isPresented: $showCustomizeSheet) {
+            JournalCustomizeSheet(store: store, onClose: { showCustomizeSheet = false })
+        }
+        .onAppear {
+            noteDraft = store.journalNote()
+            noteSavedFeedback = false
+        }
+        .onChange(of: store.selectedDateIso) { _, newIso in
+            noteDraft = store.journalNote(for: newIso)
+            noteSavedFeedback = false
+        }
+        .onChange(of: isNoteFocused) { _, focused in
+            if !focused {
+                let currentSaved = store.journalNote()
+                if noteDraft.trimmingCharacters(in: .whitespacesAndNewlines) != currentSaved {
+                    store.setJournalNote(noteDraft)
+                    noteSavedFeedback = true
+                }
+            } else {
+                noteSavedFeedback = false
+            }
         }
     }
 
@@ -849,6 +943,256 @@ struct JournalInsightsScreen: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
+        }
+    }
+}
+
+// MARK: - Personalizar Diario Sheet (Create Custom Habits + Hide Unused Habits + Nightly Reminder)
+
+private struct JournalCustomizeSheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onClose: () -> Void
+
+    @State private var newEmoji: String = "⚡"
+    @State private var newTitle: String = ""
+    @State private var isNightSection: Bool = false
+
+    private let suggestedEmojis = ["💊", "😴", "📚", "🏋️", "⚽", "🧘", "☕", "🍵", "❄️", "🧠", "🩹", "⚡"]
+    private let quickIdeas = ["Siesta", "Entreno noche", "Exámenes", "Electrolitos", "Sauna / Baño frío", "Estudio intenso"]
+
+    private var reminderTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var comps = DateComponents()
+                comps.hour = store.notificationSettings.journalReminderHour
+                comps.minute = store.notificationSettings.journalReminderMinute
+                return Calendar.current.date(from: comps) ?? Date()
+            },
+            set: { newDate in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                var cfg = store.notificationSettings
+                cfg.journalReminderHour = c.hour ?? 22
+                cfg.journalReminderMinute = c.minute ?? 0
+                store.updateNotificationSettings(cfg, promptPermission: cfg.journalReminderEnabled)
+            }
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // 1. Nightly Reminder Toggle & Time Picker
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Toggle(isOn: Binding(
+                                get: { store.notificationSettings.journalReminderEnabled },
+                                set: { val in
+                                    var cfg = store.notificationSettings
+                                    cfg.journalReminderEnabled = val
+                                    store.updateNotificationSettings(cfg, promptPermission: val)
+                                }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Recordatorio nocturno del Diario")
+                                        .font(ImprovingFont.cardTitle(14.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Solo te avisa si aún no has rellenado el día")
+                                        .font(ImprovingFont.caption(12))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                            }
+
+                            if store.notificationSettings.journalReminderEnabled {
+                                Divider().background(BevelColors.divider)
+                                HStack {
+                                    Text("Hora del aviso")
+                                        .font(ImprovingFont.body(13.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                    Spacer()
+                                    DatePicker("", selection: reminderTimeBinding, displayedComponents: .hourAndMinute)
+                                        .labelsHidden()
+                                }
+                            }
+                        }
+                        .padding(14)
+                    }
+
+                    // 2. Create Custom Habit
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 11) {
+                            Text("CREAR HÁBITO PERSONALIZADO")
+                                .font(ImprovingFont.microLabel(11))
+                                .foregroundColor(BevelColors.greenPrimary)
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(suggestedEmojis, id: \.self) { em in
+                                        Button {
+                                            newEmoji = em
+                                        } label: {
+                                            Text(em)
+                                                .font(.system(size: 18))
+                                                .frame(width: 36, height: 36)
+                                                .background(
+                                                    Circle().fill(newEmoji == em ? BevelColors.greenSoftBg : BevelColors.cardSubtle)
+                                                )
+                                                .overlay(
+                                                    Circle().strokeBorder(newEmoji == em ? BevelColors.greenPrimary : .clear, lineWidth: 1.4)
+                                                )
+                                        }
+                                    }
+                                }
+                            }
+
+                            HStack(spacing: 8) {
+                                TextField("✨", text: $newEmoji)
+                                    .font(.system(size: 18))
+                                    .multilineTextAlignment(.center)
+                                    .frame(width: 44)
+                                    .padding(.vertical, 9)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+
+                                TextField("Ej: Siesta, Exámenes, Electrolitos…", text: $newTitle)
+                                    .font(ImprovingFont.body(14))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                            }
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(quickIdeas, id: \.self) { idea in
+                                        Button {
+                                            newTitle = idea
+                                        } label: {
+                                            Text("+ \(idea)")
+                                                .font(ImprovingFont.caption(11.5))
+                                                .foregroundColor(BevelColors.skyBlue)
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 5)
+                                                .background(Capsule().fill(BevelColors.skySoftBg))
+                                        }
+                                    }
+                                }
+                            }
+
+                            HStack {
+                                Picker("Sección", selection: $isNightSection) {
+                                    Text("Día").tag(false)
+                                    Text("Noche").tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                .frame(width: 150)
+
+                                Spacer()
+
+                                Button {
+                                    let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !trimmed.isEmpty else { return }
+                                    store.addCustomJournalHabit(emoji: newEmoji, title: trimmed, isNightHabit: isNightSection)
+                                    newTitle = ""
+                                } label: {
+                                    Text("Añadir al Diario")
+                                        .font(ImprovingFont.caption(12.5))
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 9)
+                                        .background(Capsule().fill(BevelColors.emeraldEnd))
+                                }
+                            }
+                        }
+                        .padding(14)
+                    }
+
+                    // 3. User's Custom Habits List
+                    if !store.customJournalHabits.isEmpty {
+                        Text("Tus hábitos propios (\(store.customJournalHabits.count))")
+                            .font(ImprovingFont.sectionTitle(17))
+                            .foregroundColor(BevelColors.textPrimary)
+
+                        ForEach(store.customJournalHabits) { custom in
+                            BevelCard(cornerRadius: 16) {
+                                HStack(spacing: 10) {
+                                    Text(custom.emoji).font(.system(size: 18))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(custom.title)
+                                            .font(ImprovingFont.cardTitle(14.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text(custom.isNightHabit ? "Sección Noche · Entra en correlaciones 30 d" : "Sección Día · Entra en correlaciones 30 d")
+                                            .font(ImprovingFont.caption(11))
+                                            .foregroundColor(BevelColors.textMuted)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        store.deleteCustomJournalHabit(id: custom.id)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(BevelColors.coralHigh)
+                                            .frame(width: 32, height: 32)
+                                            .background(Circle().fill(BevelColors.coralHigh.opacity(0.12)))
+                                    }
+                                }
+                                .padding(12)
+                            }
+                        }
+                    }
+
+                    // 4. Show / Hide Default Habits
+                    HStack {
+                        Text("Mostrar u ocultar predeterminados")
+                            .font(ImprovingFont.sectionTitle(17))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Spacer()
+                        if !store.hiddenJournalHabitIds.isEmpty {
+                            Button("Mostrar todos") {
+                                store.resetHiddenHabits()
+                            }
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.skyBlue)
+                        }
+                    }
+
+                    BevelCard(cornerRadius: 18) {
+                        VStack(spacing: 0) {
+                            let allDefaults = dayEntries + nightEntries
+                            ForEach(Array(allDefaults.enumerated()), id: \.element.id) { idx, entry in
+                                let isVisible = !store.isHabitHidden(entry.id)
+                                HStack(spacing: 10) {
+                                    Text(entry.emoji).font(.system(size: 17))
+                                    Text(entry.title)
+                                        .font(ImprovingFont.body(14))
+                                        .foregroundColor(isVisible ? BevelColors.textPrimary : BevelColors.textMuted)
+                                    Spacer()
+                                    Toggle("", isOn: Binding(
+                                        get: { isVisible },
+                                        set: { _ in store.toggleHabitHidden(entry.id) }
+                                    ))
+                                    .labelsHidden()
+                                    .tint(BevelColors.greenPrimary)
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+
+                                if idx < allDefaults.count - 1 {
+                                    Divider().background(BevelColors.divider).padding(.leading, 44)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle("Personalizar Diario")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Listo", action: onClose)
+                }
+            }
         }
     }
 }

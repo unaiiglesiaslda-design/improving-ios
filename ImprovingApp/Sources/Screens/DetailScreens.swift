@@ -50,6 +50,9 @@ struct EsfuerzoScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
     let onOpenTrend: (EffortTrendItem) -> Void
+    var onOpenWorkout: ((EffortEventItem) -> Void)? = nil
+
+    @State private var showShareSheet: Bool = false
 
     var body: some View {
         let avail = store.dataAvailability
@@ -70,7 +73,9 @@ struct EsfuerzoScreen: View {
                     onBack: onBack,
                     onPrevDay: { store.shiftDay(1) },
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
-                    canGoNextDay: store.dayOffset > 0
+                    canGoNextDay: store.dayOffset > 0,
+                    onRightPrimary: { showShareSheet = true },
+                    onRightSecondary: { showShareSheet = true }
                 ) {
                     BevelRecessedRingGauge(
                         progress: Double(store.strainPercent) / 100.0,
@@ -116,26 +121,34 @@ struct EsfuerzoScreen: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             } else {
                                 ForEach(store.workoutsToday) { w in
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "figure.run")
-                                            .font(.system(size: 16, weight: .bold))
-                                            .foregroundColor(BevelColors.amberStart)
-                                            .frame(width: 40, height: 40)
-                                            .background(Circle().fill(BevelColors.amberSoftBg))
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(w.timeRange).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textMuted)
-                                            Text(w.title).font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
-                                            let parts = [
-                                                "○ \(w.strainPct)%",
-                                                w.kcal > 0 ? "🔥 \(w.kcal) kcal" : nil,
-                                                w.avgHrBpm > 0 ? "♡ \(w.avgHrBpm) ppm" : nil
-                                            ].compactMap { $0 }.joined(separator: "   ")
-                                            Text(parts)
-                                                .font(ImprovingFont.caption(12))
-                                                .foregroundColor(BevelColors.textSecondary)
+                                    Button {
+                                        onOpenWorkout?(w)
+                                    } label: {
+                                        HStack(spacing: 12) {
+                                            Image(systemName: w.categoryLabel == "Fuerza" ? "dumbbell.fill" : "figure.run")
+                                                .font(.system(size: 16, weight: .bold))
+                                                .foregroundColor(BevelColors.amberStart)
+                                                .frame(width: 40, height: 40)
+                                                .background(Circle().fill(BevelColors.amberSoftBg))
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(w.timeRange).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textMuted)
+                                                Text(w.title).font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                                let parts = [
+                                                    "○ \(w.strainPct)%",
+                                                    w.kcal > 0 ? "🔥 \(w.kcal) kcal" : nil,
+                                                    w.avgHrBpm > 0 ? "♡ \(w.avgHrBpm) ppm" : nil
+                                                ].compactMap { $0 }.joined(separator: "   ")
+                                                Text(parts)
+                                                    .font(ImprovingFont.caption(12))
+                                                    .foregroundColor(BevelColors.textSecondary)
+                                            }
+                                            Spacer()
+                                            Image(systemName: "chevron.right")
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundColor(BevelColors.textMuted)
                                         }
-                                        Spacer()
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -161,6 +174,9 @@ struct EsfuerzoScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSummaryCardSheet(store: store, kind: .strain, onClose: { showShareSheet = false })
+        }
     }
 }
 
@@ -172,6 +188,8 @@ struct RecuperacionScreen: View {
     let onSelectHealthMetric: (HealthMetricKind) -> Void
     let onOpenSleepSession: () -> Void
     var onOpenTrend: ((EffortTrendItem) -> Void)? = nil
+
+    @State private var showShareSheet: Bool = false
 
     var body: some View {
         let avail = store.dataAvailability
@@ -186,7 +204,9 @@ struct RecuperacionScreen: View {
                     onBack: onBack,
                     onPrevDay: { store.shiftDay(1) },
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
-                    canGoNextDay: store.dayOffset > 0
+                    canGoNextDay: store.dayOffset > 0,
+                    onRightPrimary: { showShareSheet = true },
+                    onRightSecondary: { showShareSheet = true }
                 ) {
                     BevelRecessedRingGauge(
                         progress: Double(store.recoveryPercent) / 100.0,
@@ -284,6 +304,9 @@ struct RecuperacionScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSummaryCardSheet(store: store, kind: .recovery, onClose: { showShareSheet = false })
+        }
     }
 }
 
@@ -295,6 +318,8 @@ struct SuenoDetailScreen: View {
     let onOpenSleepNeed: () -> Void
     let onOpenSleepSession: () -> Void
     var onOpenTrend: ((EffortTrendItem) -> Void)? = nil
+
+    @State private var showShareSheet: Bool = false
 
     var body: some View {
         let avail = store.dataAvailability
@@ -316,6 +341,7 @@ struct SuenoDetailScreen: View {
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
                     canGoNextDay: store.dayOffset > 0,
                     rightPrimaryIcon: "square.and.arrow.up",
+                    onRightPrimary: { showShareSheet = true },
                     rightSecondaryIcon: "alarm.fill",
                     onRightSecondary: onOpenSleepNeed
                 ) {
@@ -423,6 +449,9 @@ struct SuenoDetailScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSummaryCardSheet(store: store, kind: .sleep, onClose: { showShareSheet = false })
+        }
     }
 }
 
@@ -991,18 +1020,40 @@ struct SleepNeedDetailScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
 
+    private var wakeTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var comps = DateComponents()
+                comps.hour = store.notificationSettings.smartAlarmHour
+                comps.minute = store.notificationSettings.smartAlarmMinute
+                return Calendar.current.date(from: comps) ?? Date()
+            },
+            set: { newDate in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                var cfg = store.notificationSettings
+                cfg.smartAlarmHour = c.hour ?? 7
+                cfg.smartAlarmMinute = c.minute ?? 30
+                store.updateNotificationSettings(cfg, promptPermission: store.smartAlarmEnabled || cfg.bedtimeReminderEnabled)
+            }
+        )
+    }
+
     var body: some View {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let baseNeedMin = Int((norms.sleepTargetHours * 60.0).rounded())
         let debt = store.currentDaySummary?.sleepDebtMinutes ?? 0
         let strainExtra = store.dataAvailability.hasStrainData ? (store.strainPercent > 70 ? 25 : (store.strainPercent > 45 ? 10 : 0)) : 0
         let totalNeed = baseNeedMin + debt + strainExtra
-        let wakeHint = store.realSleepScheduleLabels.map { "Despertar habitual sobre las \($0.wakeTime) en fase de sueño ligero" }
-            ?? "Despertar inteligente en fase de sueño ligero según tu horario"
+        let plan = LocalNotificationManager.computeSleepNotificationPlan(
+            wakeHour: store.notificationSettings.smartAlarmHour,
+            wakeMinute: store.notificationSettings.smartAlarmMinute,
+            sleepNeedMinutes: totalNeed,
+            leadMinutes: store.notificationSettings.bedtimeLeadMinutes
+        )
 
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                DetailSheetHeader(title: "Necesidad de sueño", onBack: onBack)
+                DetailSheetHeader(title: "Necesidad de sueño y Alarma", onBack: onBack)
 
                 BevelCard {
                     VStack(alignment: .leading, spacing: 10) {
@@ -1013,9 +1064,9 @@ struct SleepNeedDetailScreen: View {
                             .font(ImprovingFont.displayLarge(32))
                             .monospacedDigit()
                             .foregroundColor(BevelColors.textPrimary)
-                        Text("Calculado a partir de tu perfil fisiológico y tus lecturas reales registradas.")
+                        Text("Para despertar a las \(plan.wakeLabel), tu hora óptima de acostarte hoy es las \(plan.bedtimeLabel).")
                             .font(ImprovingFont.caption(12.5))
-                            .foregroundColor(BevelColors.textSecondary)
+                            .foregroundColor(BevelColors.greenPrimary)
 
                         Divider().background(BevelColors.divider)
 
@@ -1026,21 +1077,114 @@ struct SleepNeedDetailScreen: View {
                         if debt > 0 {
                             planRow("+ Deuda de sueño acumulada", "+ \(debt / 60) h \(String(format: "%02d", debt % 60)) m", BevelColors.periwinkleStart)
                         }
+                        planRow("Hora recomendada de dormir", plan.bedtimeLabel, BevelColors.skyBlue)
                     }
                     .padding(18)
                 }
                 .padding(.horizontal, 16)
 
+                // Real Wake-Up Alarm Card
                 BevelCard {
-                    Toggle(isOn: $store.smartAlarmEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Alarma Háptica Inteligente")
-                                .font(ImprovingFont.cardTitle(15))
-                                .foregroundColor(BevelColors.textPrimary)
-                            Text(wakeHint)
-                                .font(ImprovingFont.caption(12))
-                                .foregroundColor(BevelColors.textSecondary)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: Binding(
+                            get: { store.smartAlarmEnabled },
+                            set: { store.setSmartAlarmEnabled($0, promptPermission: true) }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Alarma de Despertar Inteligente")
+                                    .font(ImprovingFont.cardTitle(15))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Programa aviso real en iOS a tu hora objetivo")
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
                         }
+
+                        Divider().background(BevelColors.divider)
+
+                        HStack {
+                            Text("Hora objetivo de despertar")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                            Spacer()
+                            DatePicker("", selection: wakeTimeBinding, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                        }
+
+                        HStack {
+                            Text("Ventana de sueño ligero")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                            Spacer()
+                            Picker("Ventana", selection: Binding(
+                                get: { store.notificationSettings.smartAlarmWindowMinutes },
+                                set: { val in
+                                    var cfg = store.notificationSettings
+                                    cfg.smartAlarmWindowMinutes = val
+                                    store.updateNotificationSettings(cfg, promptPermission: store.smartAlarmEnabled)
+                                }
+                            )) {
+                                Text("Exacta").tag(0)
+                                Text("15 min").tag(15)
+                                Text("20 min").tag(20)
+                                Text("30 min").tag(30)
+                            }
+                            .pickerStyle(.menu)
+                            .tint(BevelColors.skyBlue)
+                        }
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
+
+                // Bedtime Wind-Down Notification Card
+                BevelCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: Binding(
+                            get: { store.notificationSettings.bedtimeReminderEnabled },
+                            set: { val in
+                                var cfg = store.notificationSettings
+                                cfg.bedtimeReminderEnabled = val
+                                store.updateNotificationSettings(cfg, promptPermission: val)
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Aviso de hora recomendada para dormir")
+                                    .font(ImprovingFont.cardTitle(15))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Te avisa a las \(plan.notifyLabel) según tu deuda y esfuerzo de hoy")
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        if store.notificationSettings.bedtimeReminderEnabled {
+                            Divider().background(BevelColors.divider)
+                            HStack {
+                                Text("Avisarme antes de acostarme")
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                Spacer()
+                                Picker("Antelación", selection: Binding(
+                                    get: { store.notificationSettings.bedtimeLeadMinutes },
+                                    set: { val in
+                                        var cfg = store.notificationSettings
+                                        cfg.bedtimeLeadMinutes = val
+                                        store.updateNotificationSettings(cfg, promptPermission: true)
+                                    }
+                                )) {
+                                    Text("15 min antes").tag(15)
+                                    Text("30 min antes").tag(30)
+                                    Text("45 min antes").tag(45)
+                                }
+                                .pickerStyle(.menu)
+                                .tint(BevelColors.skyBlue)
+                            }
+                        }
+
+                        Text(store.notificationStatusText)
+                            .font(ImprovingFont.caption(11.5))
+                            .foregroundColor(BevelColors.greenPrimary)
                     }
                     .padding(16)
                 }
@@ -1066,6 +1210,8 @@ struct EstresScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
     var onOpenTrend: ((EffortTrendItem) -> Void)? = nil
+
+    @State private var showShareSheet: Bool = false
 
     private func formatHM(_ mins: Int) -> String {
         String(format: "%d:%02d:00", mins / 60, mins % 60)
@@ -1096,7 +1242,9 @@ struct EstresScreen: View {
                     onBack: onBack,
                     onPrevDay: { store.shiftDay(1) },
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
-                    canGoNextDay: store.dayOffset > 0
+                    canGoNextDay: store.dayOffset > 0,
+                    onRightPrimary: { showShareSheet = true },
+                    onRightSecondary: { showShareSheet = true }
                 ) {
                     VStack(spacing: 10) {
                         StressRadialDial(score: store.displayStressScore, statusLabel: store.stressStatusLabel, size: 176, isHeroGauge: true, hasData: avail.hasStressData)
@@ -1184,6 +1332,9 @@ struct EstresScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSummaryCardSheet(store: store, kind: .stress, onClose: { showShareSheet = false })
+        }
     }
 
     private func stressZonePill(label: String, pct: Int, duration: String, color: Color) -> some View {
@@ -1230,6 +1381,8 @@ struct EnergiaScreen: View {
     let onBack: () -> Void
     let onOpenSleepSession: () -> Void
 
+    @State private var showShareSheet: Bool = false
+
     var body: some View {
         let avail = store.dataAvailability
         let energySamples = store.energySamplesToday
@@ -1271,8 +1424,10 @@ struct EnergiaScreen: View {
                     onPrevDay: { store.shiftDay(1) },
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
                     canGoNextDay: store.dayOffset > 0,
-                    rightPrimaryIcon: "ellipsis",
-                    rightSecondaryIcon: "info.circle"
+                    rightPrimaryIcon: "square.and.arrow.up",
+                    onRightPrimary: { showShareSheet = true },
+                    rightSecondaryIcon: "info.circle",
+                    onRightSecondary: { showShareSheet = true }
                 ) {
                     VStack(spacing: 14) {
                         HStack(spacing: 4) {
@@ -1435,5 +1590,8 @@ struct EnergiaScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSummaryCardSheet(store: store, kind: .energy, onClose: { showShareSheet = false })
+        }
     }
 }

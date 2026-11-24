@@ -47,6 +47,11 @@ final class ImprovingStore: ObservableObject {
         var autoRunShortcutOnOpen: Bool?
         var workoutRoutines: [WorkoutRoutineTemplate]?
         var strengthLogs: [StrengthLoggedSet]?
+        var manualNutrientsByDate: [String: [String: Double]]?
+        var hiddenJournalHabitIds: [String]?
+        var customJournalHabits: [CustomJournalHabit]?
+        var journalNotesByDate: [String: String]?
+        var notificationSettings: SmartNotificationSettings?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -62,10 +67,17 @@ final class ImprovingStore: ObservableObject {
     @Published var journalMoodByDate: [String: Int] = [:]
     @Published var mealsByDate: [String: [NutritionMealItem]] = [:]
     @Published var hydrationGlassesByDate: [String: Int] = [:]
+    @Published var manualNutrientsByDate: [String: [String: Double]] = [:]
+    @Published var hiddenJournalHabitIds: Set<String> = []
+    @Published var customJournalHabits: [CustomJournalHabit] = []
+    @Published var journalNotesByDate: [String: String] = [:]
+    @Published var notificationSettings: SmartNotificationSettings = SmartNotificationSettings()
+    @Published var notificationStatusText: String = "Avisos listos para configurar"
     @Published var selectedHealthMetric: HealthMetricKind = .hrv
     @Published var selectedHealthRange: String = "30 d"
-    @Published var selectedNutrientKey: String = "proteina"
+    @Published var selectedNutrientKey: String = "Proteína"
     @Published var selectedTrendItem: EffortTrendItem? = nil
+    @Published var selectedWorkoutItem: EffortEventItem? = nil
 
     @Published var smartAlarmEnabled: Bool = true
     @Published var wakeOffsetMinutes: Int = 0
@@ -156,6 +168,7 @@ final class ImprovingStore: ObservableObject {
         // Ensure `En mi iPhone / Improving` folder is visible in Files app & run ONE silent sync on cold launch only!
         _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
         scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
+        refreshSmartNotificationSchedules(promptPermission: false)
     }
 
     deinit {
@@ -539,10 +552,34 @@ final class ImprovingStore: ObservableObject {
     var cgmMgDl: Int? { currentDaySummary?.glucoseMgDl }
     var workoutsToday: [EffortEventItem] { currentDaySummary?.workouts ?? [] }
     var mealsToday: [NutritionMealItem] { mealsByDate[selectedDateIso] ?? [] }
-    var totalCaloriesToday: Int { mealsToday.reduce(0) { $0 + $1.kcal } }
-    var totalProteinToday: Int { mealsToday.reduce(0) { $0 + $1.proteinG } }
-    var totalCarbsToday: Int { mealsToday.reduce(0) { $0 + $1.carbsG } }
-    var totalFatToday: Int { mealsToday.reduce(0) { $0 + $1.fatG } }
+    var totalProteinToday: Int {
+        mealsToday.reduce(0) { $0 + $1.proteinG } + Int(manualNutrientAmount(for: "Proteína").rounded())
+    }
+    var totalCarbsToday: Int {
+        mealsToday.reduce(0) { $0 + $1.carbsG } + Int(manualNutrientAmount(for: "Carbohidratos").rounded())
+    }
+    var totalFatToday: Int {
+        mealsToday.reduce(0) { $0 + $1.fatG } + Int(manualNutrientAmount(for: "Grasas").rounded())
+    }
+    var totalCaloriesToday: Int {
+        let mealKcal = mealsToday.reduce(0) { $0 + $1.kcal }
+        let extraMacroKcal = manualNutrientAmount(for: "Proteína") * 4.0
+            + manualNutrientAmount(for: "Carbohidratos") * 4.0
+            + manualNutrientAmount(for: "Grasas") * 9.0
+        return mealKcal + Int(extraMacroKcal.rounded())
+    }
+    var totalHydrationTodayMl: Double {
+        manualNutrientAmount(for: "Hidratación")
+    }
+    var totalCaffeineTodayMg: Double {
+        mealsToday.compactMap(\.caffeineMg).reduce(0, +) + manualNutrientAmount(for: "Cafeína")
+    }
+    var totalAlcoholTodayDrinks: Double {
+        mealsToday.compactMap(\.alcoholDrinks).reduce(0, +) + manualNutrientAmount(for: "Alcohol")
+    }
+    var totalCalciumTodayMg: Double {
+        mealsToday.compactMap(\.calciumMg).reduce(0, +) + manualNutrientAmount(for: "Calcio")
+    }
     var foodQualityScore: Int? {
         let m = mealsToday
         guard !m.isEmpty else { return nil }
@@ -1399,43 +1436,71 @@ final class ImprovingStore: ObservableObject {
 
     static let manualHabitIds: [String] = journalCatalog.filter { !$0.isAuto }.map(\.id)
 
+    var allCatalogAndCustomEntries: [(id: String, emoji: String, title: String, isAuto: Bool)] {
+        let customTuples = customJournalHabits.map { (id: $0.id, emoji: $0.emoji, title: $0.title, isAuto: false) }
+        return Self.journalCatalog + customTuples
+    }
+
+    var allTrackableManualHabitIds: [String] {
+        Self.manualHabitIds + customJournalHabits.map(\.id)
+    }
+
+    var requiredManualCountForCompletion: Int {
+        let visibleManualTriStates = allTrackableManualHabitIds.filter { !hiddenJournalHabitIds.contains($0) }.count
+        let moodVisible = hiddenJournalHabitIds.contains("mood") ? 0 : 1
+        let hydVisible = hiddenJournalHabitIds.contains("hydration") ? 0 : 1
+        let totalVisibleSlots = max(visibleManualTriStates + moodVisible + hydVisible, 1)
+        return min(Self.diarioRequiredManualCount, totalVisibleSlots)
+    }
+
     /// Counts strictly MANUAL (non-automatic) Diario items completed on `dateIso` (tri-state ✓/✕ + mood + hydration).
     func manualCompletedCount(for dateIso: String) -> Int {
         let map = journalCheckinsByDate[dateIso] ?? [:]
         var count = 0
-        for id in Self.manualHabitIds {
+        for id in allTrackableManualHabitIds {
             if let st = map[id], st != .unset {
                 count += 1
             }
         }
         if journalMoodByDate[dateIso] != nil { count += 1 }
-        if (hydrationGlassesByDate[dateIso] ?? 0) > 0 { count += 1 }
+        if (hydrationGlassesByDate[dateIso] ?? 0) > 0 || (manualNutrientsByDate[dateIso]?["hidratacion_extra_ml"] ?? 0) > 0 {
+            count += 1
+        }
         return count
     }
 
-    /// A day receives the Diario checkmark badge ONLY when the user completed >= 20 manual (non-automatic) entries!
+    /// A day receives the Diario checkmark badge when the user completes >= `requiredManualCountForCompletion` manual entries (20 by default, or all active habits if customized < 20).
     func isDiarioDayCompleted(for dateIso: String) -> Bool {
-        manualCompletedCount(for: dateIso) >= Self.diarioRequiredManualCount
+        manualCompletedCount(for: dateIso) >= requiredManualCountForCompletion
+    }
+
+    func hasAnyJournalActivity(for dateIso: String) -> Bool {
+        if manualCompletedCount(for: dateIso) > 0 { return true }
+        let note = (journalNotesByDate[dateIso] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !note.isEmpty
     }
 
     /// Number of distinct dates on which the user has logged at least one manual Diario entry.
     var totalManualDiarioDaysLogged: Int {
+        let validIds = allTrackableManualHabitIds
         var dates = Set<String>()
         for (iso, map) in journalCheckinsByDate {
-            if Self.manualHabitIds.contains(where: { (map[$0] ?? .unset) != .unset }) {
+            if validIds.contains(where: { (map[$0] ?? .unset) != .unset }) {
                 dates.insert(iso)
             }
         }
         for iso in journalMoodByDate.keys { dates.insert(iso) }
         for (iso, g) in hydrationGlassesByDate where g > 0 { dates.insert(iso) }
+        for (iso, n) in journalNotesByDate where !n.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { dates.insert(iso) }
         return dates.count
     }
 
     /// Calendar span (in days, inclusive) from the user's earliest manual Diario entry to `selectedDate`.
     var manualDiarioSpanDays: Int {
+        let validIds = allTrackableManualHabitIds
         var earliestIso: String? = nil
         for (iso, map) in journalCheckinsByDate {
-            if Self.manualHabitIds.contains(where: { (map[$0] ?? .unset) != .unset }) {
+            if validIds.contains(where: { (map[$0] ?? .unset) != .unset }) {
                 if earliestIso == nil || iso < earliestIso! { earliestIso = iso }
             }
         }
@@ -1499,7 +1564,7 @@ final class ImprovingStore: ObservableObject {
         }
 
         var items: [JournalHabitImpactItem] = []
-        for entry in Self.journalCatalog {
+        for entry in allCatalogAndCustomEntries {
             var yesVals: [Double] = []
             var noVals: [Double] = []
             var firstLoggedIso: String? = nil
@@ -1853,10 +1918,132 @@ final class ImprovingStore: ObservableObject {
         map[habitId] = state
         journalCheckinsByDate[selectedDateIso] = map
         persistState()
+        if dayOffset == 0 {
+            refreshSmartNotificationSchedules(promptPermission: false)
+        }
     }
 
     func setJournalMood(_ mood: Int) {
         journalMoodByDate[selectedDateIso] = mood
+        persistState()
+        if dayOffset == 0 {
+            refreshSmartNotificationSchedules(promptPermission: false)
+        }
+    }
+
+    func isHabitHidden(_ id: String) -> Bool {
+        hiddenJournalHabitIds.contains(id)
+    }
+
+    func toggleHabitHidden(_ id: String) {
+        if hiddenJournalHabitIds.contains(id) {
+            hiddenJournalHabitIds.remove(id)
+        } else {
+            hiddenJournalHabitIds.insert(id)
+        }
+        persistState()
+    }
+
+    func resetHiddenHabits() {
+        hiddenJournalHabitIds.removeAll()
+        persistState()
+    }
+
+    func addCustomJournalHabit(emoji: String, title: String, isNightHabit: Bool) {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else { return }
+        let cleanEmoji = emoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "✨" : String(emoji.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2))
+        let item = CustomJournalHabit(
+            id: "custom_\(UUID().uuidString.prefix(8))",
+            emoji: cleanEmoji,
+            title: cleanTitle,
+            isNightHabit: isNightHabit
+        )
+        customJournalHabits.append(item)
+        persistState()
+    }
+
+    func deleteCustomJournalHabit(id: String) {
+        customJournalHabits.removeAll { $0.id == id }
+        hiddenJournalHabitIds.remove(id)
+        persistState()
+    }
+
+    func journalNote(for dateIso: String? = nil) -> String {
+        journalNotesByDate[dateIso ?? selectedDateIso] ?? ""
+    }
+
+    func setJournalNote(_ note: String, for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            journalNotesByDate.removeValue(forKey: iso)
+        } else {
+            journalNotesByDate[iso] = trimmed
+        }
+        sectionCoachingCache.removeAll()
+        dataRevision += 1
+        persistState()
+        if iso == isoFormatter.string(from: Date()) {
+            refreshSmartNotificationSchedules(promptPermission: false)
+        }
+    }
+
+    // MARK: - Persisted Nutrition & Nutrient Tracking
+
+    private static func normalizedNutrientBucketKey(_ raw: String) -> String {
+        let low = raw.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        if low.contains("hidra") || low.contains("agua") { return "hidratacion" }
+        if low.contains("cafe") { return "cafeina" }
+        if low.contains("alco") { return "alcohol" }
+        if low.contains("prote") { return "proteina" }
+        if low.contains("carb") { return "carbohidratos" }
+        if low.contains("gras") { return "grasas" }
+        return "calcio"
+    }
+
+    func manualNutrientAmount(for key: String, dateIso: String? = nil) -> Double {
+        let iso = dateIso ?? selectedDateIso
+        let bucket = Self.normalizedNutrientBucketKey(key)
+        if bucket == "hidratacion" {
+            let glassesMl = Double(hydrationGlassesByDate[iso] ?? 0) * 250.0
+            let extraMl = manualNutrientsByDate[iso]?["hidratacion_extra_ml"] ?? 0.0
+            return max(0, glassesMl + extraMl)
+        }
+        return max(0, manualNutrientsByDate[iso]?[bucket] ?? 0.0)
+    }
+
+    func addNutrientAmount(key: String, amount: Double, dateIso: String? = nil) {
+        guard amount > 0 else { return }
+        let iso = dateIso ?? selectedDateIso
+        let bucket = Self.normalizedNutrientBucketKey(key)
+        if bucket == "hidratacion" {
+            if abs(amount - 250.0) < 0.1 {
+                hydrationGlassesByDate[iso] = (hydrationGlassesByDate[iso] ?? 0) + 1
+            } else {
+                var dayMap = manualNutrientsByDate[iso] ?? [:]
+                dayMap["hidratacion_extra_ml"] = (dayMap["hidratacion_extra_ml"] ?? 0.0) + amount
+                manualNutrientsByDate[iso] = dayMap
+            }
+        } else {
+            var dayMap = manualNutrientsByDate[iso] ?? [:]
+            dayMap[bucket] = (dayMap[bucket] ?? 0.0) + amount
+            manualNutrientsByDate[iso] = dayMap
+        }
+        dataRevision += 1
+        persistState()
+    }
+
+    func resetNutrientAmount(key: String, dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        let bucket = Self.normalizedNutrientBucketKey(key)
+        if bucket == "hidratacion" {
+            hydrationGlassesByDate.removeValue(forKey: iso)
+            manualNutrientsByDate[iso]?.removeValue(forKey: "hidratacion_extra_ml")
+        } else {
+            manualNutrientsByDate[iso]?.removeValue(forKey: bucket)
+        }
+        dataRevision += 1
         persistState()
     }
 
@@ -1865,11 +2052,38 @@ final class ImprovingStore: ObservableObject {
         persistState()
     }
 
+    func saveMeal(_ meal: NutritionMealItem, for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        var list = mealsByDate[iso] ?? []
+        if let idx = list.firstIndex(where: { $0.id == meal.id }) {
+            list[idx] = meal
+        } else {
+            list.insert(meal, at: 0)
+        }
+        mealsByDate[iso] = list
+        sectionCoachingCache.removeAll()
+        dataRevision += 1
+        persistState()
+    }
+
+    func deleteMeal(id: String, for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        guard var list = mealsByDate[iso] else { return }
+        list.removeAll { $0.id == id }
+        if list.isEmpty {
+            mealsByDate.removeValue(forKey: iso)
+        } else {
+            mealsByDate[iso] = list
+        }
+        sectionCoachingCache.removeAll()
+        dataRevision += 1
+        persistState()
+    }
+
     func addQuickMeal(title: String, kcal: Int, protein: Int, carbs: Int, fat: Int) {
-        var list = mealsByDate[selectedDateIso] ?? []
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
-        list.insert(
+        saveMeal(
             NutritionMealItem(
                 id: UUID().uuidString,
                 title: title,
@@ -1878,12 +2092,199 @@ final class ImprovingStore: ObservableObject {
                 proteinG: protein,
                 carbsG: carbs,
                 fatG: fat,
-                qualityScore: 88
-            ),
-            at: 0
+                qualityScore: 85
+            )
         )
-        mealsByDate[selectedDateIso] = list
+    }
+
+    // MARK: - Smart Local Notifications & Real Wake Alarm
+
+    var tonightSleepNeedBreakdown: (baseMin: Int, debtMin: Int, strainExtraMin: Int, totalMin: Int) {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let baseMin = Int((norms.sleepTargetHours * 60.0).rounded())
+        let todayIso = isoFormatter.string(from: Date())
+        let refDay = activeHistory[todayIso] ?? currentDaySummary
+        let debt = refDay?.sleepDebtMinutes ?? 0
+        let stPct = refDay?.strainPct ?? 0
+        let extra = stPct > 70 ? 25 : (stPct > 45 ? 10 : 0)
+        return (baseMin, debt, extra, baseMin + debt + extra)
+    }
+
+    var computedSleepPlan: ComputedSleepNotificationPlan {
+        LocalNotificationManager.computeSleepNotificationPlan(
+            wakeHour: notificationSettings.smartAlarmHour,
+            wakeMinute: notificationSettings.smartAlarmMinute,
+            sleepNeedMinutes: tonightSleepNeedBreakdown.totalMin,
+            leadMinutes: notificationSettings.bedtimeLeadMinutes
+        )
+    }
+
+    func setSmartAlarmEnabled(_ enabled: Bool, promptPermission: Bool = true) {
+        smartAlarmEnabled = enabled
         persistState()
+        refreshSmartNotificationSchedules(promptPermission: promptPermission && enabled)
+    }
+
+    func updateNotificationSettings(_ updated: SmartNotificationSettings, promptPermission: Bool = true) {
+        notificationSettings = updated
+        persistState()
+        refreshSmartNotificationSchedules(promptPermission: promptPermission)
+    }
+
+    func refreshSmartNotificationSchedules(promptPermission: Bool = false) {
+        let todayIso = isoFormatter.string(from: Date())
+        let alreadyLogged = hasAnyJournalActivity(for: todayIso)
+        let need = tonightSleepNeedBreakdown
+        let todaySummary = activeHistory[todayIso] ?? currentDaySummary
+        let stPct = todaySummary?.strainPct ?? 0
+        let hasSt = todaySummary?.strainPct != nil
+        let cfg = notificationSettings
+        let alarmOn = smartAlarmEnabled
+        let uName = userProfile.displayFirstName
+
+        Task { @MainActor [weak self] in
+            let status = await LocalNotificationManager.shared.syncAllSchedules(
+                settings: cfg,
+                smartAlarmEnabled: alarmOn,
+                todayJournalAlreadyLogged: alreadyLogged,
+                sleepNeedMinutes: need.totalMin,
+                sleepDebtMinutes: need.debtMin,
+                strainPercent: stPct,
+                hasStrainData: hasSt,
+                userName: uName,
+                promptPermissionIfNeeded: promptPermission
+            )
+            self?.notificationStatusText = status
+        }
+    }
+
+    func triggerTestLocalNotification() {
+        let uName = userProfile.displayFirstName
+        Task { @MainActor [weak self] in
+            let status = await LocalNotificationManager.shared.sendTestNotification(userName: uName)
+            self?.notificationStatusText = status
+        }
+    }
+
+    // MARK: - Individual Workout Selection, Editing & Deletion
+
+    func selectWorkout(_ workout: EffortEventItem) {
+        var enriched = workout
+        if enriched.dateIso == nil {
+            enriched.dateIso = selectedDateIso
+        }
+        selectedWorkoutItem = enriched
+    }
+
+    func updateWorkout(_ updated: EffortEventItem, originalDateIso: String? = nil) {
+        let targetIso = updated.dateIso ?? originalDateIso ?? selectedDateIso
+        var d = activeHistory[targetIso] ?? RealBiometricDaySummary(dateIso: targetIso)
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let rhrRef = d.restingHrBpm ?? norms.restingHrExpected
+        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+            durationMin: max(updated.durationMin, 1),
+            kcal: max(updated.kcal, 0),
+            avgHrBpm: max(updated.avgHrBpm, 0),
+            rhrBpm: rhrRef,
+            maxHrBpm: Double(norms.maxHrBpm),
+            banisterB: userProfile.sex.banisterB
+        )
+
+        var recalc = updated
+        recalc.dateIso = targetIso
+        recalc.strainScore = ws.strain21
+        recalc.strainPct = ws.strainPct
+
+        if let idx = d.workouts.firstIndex(where: { $0.id == recalc.id }) {
+            d.workouts[idx] = recalc
+        } else {
+            d.workouts.insert(recalc, at: 0)
+        }
+        d.strengthMinutes = d.workouts.filter { $0.categoryLabel == "Fuerza" }.reduce(0) { $0 + $1.durationMin }
+        if let st = WhoopPhysiologyEngine.computeBevelStrain(
+            profile: userProfile,
+            rhrBpm: rhrRef,
+            hrZoneMinutes: d.hrZoneMinutes,
+            workouts: d.workouts,
+            activeKcal: d.activeKcal.map { Double($0) }
+        ) {
+            d.strain21 = st.strain21
+            d.strainPct = st.strainPct
+        }
+
+        if hasImportedOrPairedRealData {
+            realHistory[targetIso] = d
+        } else {
+            simulatedHistory[targetIso] = d
+        }
+        selectedWorkoutItem = recalc
+        sectionCoachingCache.removeAll()
+        dataRevision += 1
+        persistState()
+    }
+
+    func deleteWorkout(id: String, dateIso: String? = nil) {
+        let targetIso = dateIso ?? selectedWorkoutItem?.dateIso ?? selectedDateIso
+        guard var d = activeHistory[targetIso] else { return }
+        d.workouts.removeAll { $0.id == id }
+        d.strengthMinutes = d.workouts.filter { $0.categoryLabel == "Fuerza" }.reduce(0) { $0 + $1.durationMin }
+
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let rhrRef = d.restingHrBpm ?? norms.restingHrExpected
+        if let st = WhoopPhysiologyEngine.computeBevelStrain(
+            profile: userProfile,
+            rhrBpm: rhrRef,
+            hrZoneMinutes: d.hrZoneMinutes,
+            workouts: d.workouts,
+            activeKcal: d.activeKcal.map { Double($0) }
+        ) {
+            d.strain21 = st.strain21
+            d.strainPct = st.strainPct
+        } else if d.workouts.isEmpty && (d.activeKcal ?? 0) == 0 {
+            d.strain21 = nil
+            d.strainPct = nil
+        }
+
+        if hasImportedOrPairedRealData {
+            realHistory[targetIso] = d
+        } else {
+            simulatedHistory[targetIso] = d
+        }
+        if selectedWorkoutItem?.id == id {
+            selectedWorkoutItem = nil
+        }
+        sectionCoachingCache.removeAll()
+        dataRevision += 1
+        persistState()
+    }
+
+    func workoutIntradaySamples(for workout: EffortEventItem) -> [TimedBiometricPoint] {
+        let iso = workout.dateIso ?? selectedDateIso
+        guard let day = activeHistory[iso], !day.stressSamples5m.isEmpty else { return [] }
+        // Parse `HH:mm - HH:mm` from `timeRange` when available
+        let parts = workout.timeRange.components(separatedBy: "-")
+        if parts.count == 2 {
+            let parseHHMM: (String) -> Int? = { raw in
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                let tokens = trimmed.split(separator: ":")
+                guard tokens.count == 2, let h = Int(tokens[0]), let m = Int(tokens[1]) else { return nil }
+                return h * 60 + m
+            }
+            if let sMin = parseHHMM(parts[0]), let eMin = parseHHMM(parts[1]), eMin >= sMin {
+                let window = max(0, sMin - 5)...min(1439, eMin + 5)
+                let slice = day.stressSamples5m.filter { window.contains($0.minuteOfDay) }
+                if slice.count >= 2 { return slice }
+            }
+        }
+        if let sEp = workout.startEpochSec, workout.durationMin > 0 {
+            let eEp = sEp + Int64(workout.durationMin * 60)
+            let slice = day.stressSamples5m.filter { pt in
+                guard let ep = pt.epochSec else { return false }
+                return ep >= (sEp - 300) && ep <= (eEp + 300)
+            }
+            if slice.count >= 2 { return slice }
+        }
+        return []
     }
 
     func addEffortEvent(title: String, durationMin: Int, kcal: Int) {
@@ -1996,6 +2397,7 @@ final class ImprovingStore: ObservableObject {
         )
         self.dataRevision += 1
         self.persistState()
+        self.refreshSmartNotificationSchedules(promptPermission: false)
     }
 
     // MARK: - Zero-Entitlement Automatic Sync Bridge (Apple Shortcuts x-callback-url + Files Watcher + Top Floating Bubble)
@@ -2907,8 +3309,25 @@ final class ImprovingStore: ObservableObject {
         if let steps = stepsCount { highlights.append("\(steps) pasos") }
 
         let dayJournal = journalCheckinsByDate[selectedDateIso] ?? [:]
-        let yesHabits = Self.journalCatalog.filter { !$0.isAuto && dayJournal[$0.id] == .yes }.map(\.title)
-        let noHabits = Self.journalCatalog.filter { !$0.isAuto && dayJournal[$0.id] == .no }.map(\.title)
+        let allManualSpecs = allCatalogAndCustomEntries.filter { !$0.isAuto }
+        let yesHabits = allManualSpecs.filter { dayJournal[$0.id] == .yes }.map(\.title)
+        let noHabits = allManualSpecs.filter { dayJournal[$0.id] == .no }.map(\.title)
+        let noteToday = journalNote(for: selectedDateIso)
+        if !noteToday.isEmpty {
+            highlights.append("nota del diario: «\(noteToday)»")
+        }
+        if totalCaloriesToday > 0 {
+            highlights.append("nutrición hoy: \(totalCaloriesToday) kcal (\(totalProteinToday)g P, \(totalCarbsToday)g C, \(totalFatToday)g G)")
+        }
+
+        let recentNotes: [String: String] = {
+            var dict: [String: String] = [:]
+            for item in trailingCalendarSummaries(days: 7) {
+                let n = (journalNotesByDate[item.iso] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !n.isEmpty { dict[item.iso] = n }
+            }
+            return dict
+        }()
 
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
         let perfil: [String: Any] = [
@@ -2952,7 +3371,21 @@ final class ImprovingStore: ObservableObject {
 
         let diarioHoy: [String: Any] = [
             "marcados_si": yesHabits,
-            "marcados_no": noHabits
+            "marcados_no": noHabits,
+            "nota_del_dia": noteToday.isEmpty ? "SIN_NOTA" : noteToday,
+            "notas_recientes_7d": recentNotes
+        ]
+
+        let nutricionHoy: [String: Any] = [
+            "kcal_ingeridas": totalCaloriesToday,
+            "proteina_g": totalProteinToday,
+            "carbos_g": totalCarbsToday,
+            "grasas_g": totalFatToday,
+            "calidad_media": foodQualityScore.map { $0 as Any } ?? "SIN_COMIDAS",
+            "hidratacion_ml": Int(totalHydrationTodayMl.rounded()),
+            "cafeina_mg": Int(totalCaffeineTodayMg.rounded()),
+            "alcohol_bebidas": totalAlcoholTodayDrinks,
+            "comidas_registradas": mealsToday.map { "\($0.timeLabel) \($0.title) (\($0.kcal) kcal, P:\($0.proteinG)g C:\($0.carbsG)g G:\($0.fatG)g)" }
         ]
 
         let nowFmt = DateFormatter()
@@ -2963,7 +3396,8 @@ final class ImprovingStore: ObservableObject {
             "origen_datos": hasImportedOrPairedRealData ? "Apple Health / Sensores reales" : "Modo vista previa",
             "perfil": perfil,
             "metricas_hoy": metricas,
-            "diario_hoy": diarioHoy
+            "diario_hoy": diarioHoy,
+            "nutricion_hoy": nutricionHoy
         ]
 
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]),
@@ -3068,7 +3502,12 @@ final class ImprovingStore: ObservableObject {
             shortcutSyncName: shortcutSyncName,
             autoRunShortcutOnOpen: autoRunShortcutOnOpen,
             workoutRoutines: workoutRoutines,
-            strengthLogs: strengthLogs
+            strengthLogs: strengthLogs,
+            manualNutrientsByDate: manualNutrientsByDate,
+            hiddenJournalHabitIds: Array(hiddenJournalHabitIds),
+            customJournalHabits: customJournalHabits,
+            journalNotesByDate: journalNotesByDate,
+            notificationSettings: notificationSettings
         )
         if let data = try? JSONEncoder().encode(snap) {
             try? data.write(to: persistenceURL, options: .atomic)
@@ -3118,6 +3557,11 @@ final class ImprovingStore: ObservableObject {
         if let autoRun = snap.autoRunShortcutOnOpen { autoRunShortcutOnOpen = autoRun }
         if let routines = snap.workoutRoutines { workoutRoutines = routines }
         if let logs = snap.strengthLogs { strengthLogs = logs }
+        if let manualNut = snap.manualNutrientsByDate { manualNutrientsByDate = manualNut }
+        if let hiddenIds = snap.hiddenJournalHabitIds { hiddenJournalHabitIds = Set(hiddenIds) }
+        if let customHabits = snap.customJournalHabits { customJournalHabits = customHabits }
+        if let notes = snap.journalNotesByDate { journalNotesByDate = notes }
+        if let notifCfg = snap.notificationSettings { notificationSettings = notifCfg }
 
         // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
         var sanitizedCorruptStrain = false

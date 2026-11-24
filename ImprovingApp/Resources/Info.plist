@@ -72,6 +72,10 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Improving necesita permiso de lectura de Apple Salud para calcular tu recuperación, sueño y esfuerzo.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Improving usa la fototeca únicamente cuando eliges una foto para tu avatar de perfil.</string>
+	<string>Improving usa la fototeca cuando eliges una foto para tu perfil o analizas una comida con IA.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Improving guarda en tu carrete las tarjetas resumen que decidas exportar.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Improving usa la cámara únicamente cuando haces una foto a tu plato para calcular calorías y macros con IA.</string>
 </dict>
 </plist>

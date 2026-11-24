@@ -666,6 +666,7 @@ struct AtmosphericHeroHeader<Content: View>: View {
     var onNextDay: (() -> Void)? = nil
     var canGoNextDay: Bool = false
     var rightPrimaryIcon: String = "square.and.arrow.up"
+    var onRightPrimary: (() -> Void)? = nil
     var rightSecondaryIcon: String = "info.circle"
     var onRightSecondary: (() -> Void)? = nil
     @ViewBuilder let content: () -> Content
@@ -711,9 +712,13 @@ struct AtmosphericHeroHeader<Content: View>: View {
                     Spacer()
 
                     HStack(spacing: 14) {
-                        Image(systemName: rightPrimaryIcon)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(BevelColors.textPrimary)
+                        Button {
+                            onRightPrimary?()
+                        } label: {
+                            Image(systemName: rightPrimaryIcon)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
                         Button {
                             onRightSecondary?()
                         } label: {
