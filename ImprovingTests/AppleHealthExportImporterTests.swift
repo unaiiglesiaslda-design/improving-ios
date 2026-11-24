@@ -864,7 +864,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
         // 3. Multi-period rolling-7d Trend Analysis rows (3d / 7d / 14d / 30d / 90d)
         let trends = WhoopPhysiologyEngine.computeMultiPeriodTrendRows(history: hist, anchorDate: today) { $0.vo2MaxMlKgMin }
-        XCTAssertEqual(trends.map(\.label), ["3 días", "7 días", "14 días", "30 días", "90 días"])
+        XCTAssertEqual(trends.map(\.label), ["3 día(s)", "7 día(s)", "14 día(s)", "30 día(s)", "90 día(s)"])
         XCTAssertGreaterThan(trends[1].delta ?? -99, 0.0)
 
         // 4. Routines + Strength Logger + 20-Muscle Freshness Decay

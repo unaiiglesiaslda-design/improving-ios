@@ -1621,7 +1621,7 @@ enum AppleHealthExportImporter {
             let rawDt = Double(deduped[idx + 1].0 - ep)
             guard rawDt > 0 else { continue }
             let inWorkout = workoutSpans.contains { $0.contains(ep) }
-            let maxCap = inWorkout ? 45.0 : 90.0
+            let maxCap = inWorkout ? 300.0 : 90.0
             let dt = min(rawDt, maxCap)
             let pctHrr = (deduped[idx].1 - rhr) / hrr
             if pctHrr >= 0.90 { secs[5] += dt }
@@ -1631,7 +1631,7 @@ enum AppleHealthExportImporter {
             else if pctHrr >= 0.50 { secs[1] += dt }
             else if inWorkout || pctHrr >= 0.34 { secs[0] += dt }
         }
-        return secs.map { Int($0 / 60.0) }
+        return secs.map { Int(($0 / 60.0).rounded()) }
     }
 
     private static func median(_ values: [Double]) -> Double? {

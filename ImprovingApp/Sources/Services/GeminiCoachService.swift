@@ -30,6 +30,8 @@ actor GeminiCoachService {
 
     nonisolated static func sanitizeApiKey(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if s.lowercased().hasPrefix("bearer ") {
             s = String(s.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
