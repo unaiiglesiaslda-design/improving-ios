@@ -99,6 +99,10 @@ final class ImprovingStore: ObservableObject {
     private var backgroundRecheckTask: Task<Void, Never>? = nil
     private var inboxDirectorySource: DispatchSourceFileSystemObject? = nil
     private var autoSyncSubdirSource: DispatchSourceFileSystemObject? = nil
+    private var healthSyncFileSource: DispatchSourceFileSystemObject? = nil
+    private var shortcutsLatestFileSource: DispatchSourceFileSystemObject? = nil
+    private var pendingInboxRescan: (force: Bool, showBanner: Bool)? = nil
+    private var lastActiveCalendarDayIso: String = ""
 
     @Published var importStatus: ExportImportStatus = ExportImportStatus()
     @Published var geminiApiKey: String = ""
@@ -161,6 +165,8 @@ final class ImprovingStore: ObservableObject {
         backgroundRecheckTask?.cancel()
         inboxDirectorySource?.cancel()
         autoSyncSubdirSource?.cancel()
+        healthSyncFileSource?.cancel()
+        shortcutsLatestFileSource?.cancel()
         for task in coachingTasks.values { task.cancel() }
     }
 
@@ -1924,6 +1930,14 @@ final class ImprovingStore: ObservableObject {
     /// Called whenever the app becomes `.active` (reopen / reload / returning from Shortcuts).
     /// Enforces a 90s anti-loop cooldown so returning from `x-callback-url` NEVER triggers an infinite loop!
     func handleAppBecameActive() {
+        // Refresh calendar day rollover so overnight suspended apps immediately show Today!
+        let todayIso = isoFormatter.string(from: Date())
+        if !lastActiveCalendarDayIso.isEmpty && lastActiveCalendarDayIso != todayIso {
+            dataRevision += 1
+        }
+        lastActiveCalendarDayIso = todayIso
+        attachDirectSyncFileWatchers()
+
         // 1. Returned manually from Shortcuts without x-callback firing yet -> read fresh file immediately
         if awaitingShortcutCallback {
             awaitingShortcutCallback = false
@@ -1932,21 +1946,24 @@ final class ImprovingStore: ObservableObject {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 350_000_000)
                 self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+                self?.scheduleSilentAutomationRechecks()
             }
             return
         }
 
-        // 2. Anti-loop cooldown (90s): if we just ran/returned from the shortcut, only check folder silently
+        // 2. Anti-loop cooldown (90s): if we just ran/returned from the shortcut, check folder immediately
+        //    AND keep lightweight rechecks running so late background writes are NEVER missed!
         if let last = lastShortcutTriggerAt, Date().timeIntervalSince(last) < 90.0 {
             scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+            scheduleSilentAutomationRechecks()
             return
         }
 
         // 3. Reopening / reloading app:
         //    - If `autoRunShortcutOnOpen == true`: jump to Shortcuts via x-callback-url
         //    - If `autoRunShortcutOnOpen == false` (silent 100% background Personal Automation mode):
-        //      NEVER leave Improving! Scan immediately AND re-check at +1.8s & +4.2s to catch background
-        //      iOS Personal Automation writes ("Al abrir Improving -> Ejecutar inmediatamente") with the top bubble!
+        //      NEVER leave Improving! Scan immediately AND re-check across the full Shortcuts runtime window (1.2s..16.5s)
+        //      to catch background iOS Personal Automation writes ("Al abrir Improving -> Ejecutar inmediatamente")!
         if autoRunShortcutOnOpen && !shortcutSyncName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 320_000_000)
@@ -1962,9 +1979,19 @@ final class ImprovingStore: ObservableObject {
     private func scheduleSilentAutomationRechecks() {
         backgroundRecheckTask?.cancel()
         backgroundRecheckTask = Task { @MainActor [weak self] in
-            for delayNs: UInt64 in [1_800_000_000, 2_400_000_000] {
+            // Shortcuts with 10+ HealthKit queries take 2-14s in background -> lightweight stat() checks catch every late write!
+            let deltasNs: [UInt64] = [
+                1_200_000_000,
+                1_500_000_000,
+                2_200_000_000,
+                3_000_000_000,
+                4_000_000_000,
+                5_000_000_000
+            ]
+            for delayNs in deltasNs {
                 try? await Task.sleep(nanoseconds: delayNs)
                 guard !Task.isCancelled, let self else { return }
+                self.attachDirectSyncFileWatchers()
                 self.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
             }
         }
@@ -2018,10 +2045,11 @@ final class ImprovingStore: ObservableObject {
         #endif
     }
 
-    /// Live filesystem watchers on BOTH `En mi iPhone / Improving` and `AutoSync`: detects `health_sync.json` writes
-    /// even from background iOS Personal Automations while Improving stays in the foreground!
+    /// Live filesystem watchers on BOTH `En mi iPhone / Improving` and `AutoSync` directories PLUS direct
+    /// file-level vnode watchers on `health_sync.json` & `shortcuts_latest.json` so in-place APFS overwrites
+    /// from Apple Shortcuts trigger an immediate reload!
     private func startInboxDirectoryWatcher() {
-        func makeWatcher(for dirURL: URL) -> DispatchSourceFileSystemObject? {
+        func makeDirWatcher(for dirURL: URL) -> DispatchSourceFileSystemObject? {
             let fd = open(dirURL.path, O_EVTONLY)
             guard fd >= 0 else { return nil }
             let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend, .attrib], queue: .main)
@@ -2029,6 +2057,7 @@ final class ImprovingStore: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(nanoseconds: 450_000_000)
+                    self?.attachDirectSyncFileWatchers()
                     self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
                 }
             }
@@ -2038,16 +2067,61 @@ final class ImprovingStore: ObservableObject {
             source.resume()
             return source
         }
-        inboxDirectorySource = makeWatcher(for: ShortcutsHealthSyncImporter.publicDocumentsURL)
-        autoSyncSubdirSource = makeWatcher(for: ShortcutsHealthSyncImporter.autoSyncInboxURL)
+        inboxDirectorySource = makeDirWatcher(for: ShortcutsHealthSyncImporter.publicDocumentsURL)
+        autoSyncSubdirSource = makeDirWatcher(for: ShortcutsHealthSyncImporter.autoSyncInboxURL)
+        attachDirectSyncFileWatchers()
+    }
+
+    private func attachDirectSyncFileWatchers() {
+        func makeFileWatcher(for fileURL: URL) -> DispatchSourceFileSystemObject? {
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+            let fd = open(fileURL.path, O_EVTONLY)
+            guard fd >= 0 else { return nil }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                eventMask: [.write, .extend, .attrib, .rename, .delete],
+                queue: .main
+            )
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 450_000_000)
+                    self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+                    self?.attachDirectSyncFileWatchers()
+                }
+            }
+            source.setCancelHandler {
+                close(fd)
+            }
+            source.resume()
+            return source
+        }
+
+        let healthSyncURL = ShortcutsHealthSyncImporter.publicDocumentsURL.appendingPathComponent("health_sync.json")
+        healthSyncFileSource?.cancel()
+        healthSyncFileSource = makeFileWatcher(for: healthSyncURL)
+
+        let latestEnvURL = ShortcutsHealthSyncImporter.latestShortcutsEnvelopeURL
+        shortcutsLatestFileSource?.cancel()
+        shortcutsLatestFileSource = makeFileWatcher(for: latestEnvURL)
     }
 
     func scanAutoSyncInboxIfNeeded(force: Bool = false, showBanner: Bool = false) {
-        guard !isAutoSyncing else { return }
+        // Never silently drop a fresh sync event while another scan is still running: queue it!
+        if isAutoSyncing {
+            let prev = pendingInboxRescan
+            pendingInboxRescan = (force: (prev?.force ?? false) || force, showBanner: (prev?.showBanner ?? false) || showBanner)
+            return
+        }
         let files = ShortcutsHealthSyncImporter.discoverInboxFiles()
         let pending: [(URL, String)] = files.compactMap { url in
             let sig = ShortcutsHealthSyncImporter.fileSignature(for: url)
-            if !force && processedAutoSyncSignatures.contains(sig) { return nil }
+            let alreadySeen = processedAutoSyncSignatures.contains(sig)
+            if !force && alreadySeen { return nil }
+            // On forced refresh (pull-to-refresh / shortcut callback), avoid re-parsing multi-MB exportar.zip archives whose signature didn't change!
+            if force && alreadySeen && !ShortcutsHealthSyncImporter.isLightweightAutoSyncFile(url: url) {
+                return nil
+            }
             return (url, sig)
         }
         guard !pending.isEmpty else {
@@ -2070,21 +2144,20 @@ final class ImprovingStore: ObservableObject {
         let priorSnapshot = realHistory
         let pendingURLs = pending.map(\.0)
         let pendingSigs = pending.map(\.1)
+        let newestFileName = pendingURLs.last?.lastPathComponent ?? "Atajos"
 
         Task.detached(priority: .userInitiated) {
             let result = WhoopExportImporter.importURLs(pendingURLs, profile: profileSnapshot, priorHistory: priorSnapshot)
             await MainActor.run {
                 self.isAutoSyncing = false
-                for s in pendingSigs { self.processedAutoSyncSignatures.insert(s) }
                 if !result.days.isEmpty {
+                    // Only mark signatures as processed AFTER a valid parse so partial mid-write reads are NEVER blacklisted!
+                    for s in pendingSigs { self.processedAutoSyncSignatures.insert(s) }
                     let shouldJump = !self.hasImportedOrPairedRealData
                     self.applyImportedResult(result, navigateToLatest: shouldJump)
                     let hhmm = Self.currentHHMM()
-                    let hrvCount = result.days.values.filter { $0.hrvMs != nil }.count
-                    let latestDay = result.latestDateIso.flatMap { result.days[$0] }
-                    let kcalTag = latestDay?.activeKcal.map { " · \($0) kcal" } ?? ""
-                    let strainTag = latestDay?.strainPct.map { " · Esf \($0)%" } ?? ""
-                    self.autoSyncStatusText = "✓ Sync \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)\(kcalTag)\(strainTag)"
+                    let latestReading = Self.formatLatestReadingTag(from: result.days)
+                    self.autoSyncStatusText = "✓ Sync \(hhmm) (\(newestFileName)) · \(result.days.count)d\(latestReading)"
                     self.persistState()
                     if showBanner || self.syncBannerState != .hidden {
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -2092,14 +2165,44 @@ final class ImprovingStore: ObservableObject {
                     }
                 } else {
                     if force {
-                        self.autoSyncStatusText = result.errorMessage ?? "Archivo detectado sin muestras válidas"
+                        self.autoSyncStatusText = result.errorMessage ?? "Archivo detectado sin muestras válidas (\(newestFileName))"
                     }
                     if showBanner || self.syncBannerState != .hidden {
                         self.presentSyncBanner(.hidden)
                     }
+                    // Retry once after 1.1s in case Apple Shortcuts was still flushing `health_sync.json`!
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 1_100_000_000)
+                        self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: showBanner)
+                    }
+                }
+
+                // Drain any queued rescan that arrived while this sync was running!
+                if let queued = self.pendingInboxRescan {
+                    self.pendingInboxRescan = nil
+                    self.scanAutoSyncInboxIfNeeded(force: queued.force, showBanner: queued.showBanner)
                 }
             }
         }
+    }
+
+    static func formatLatestReadingTag(from days: [String: RealBiometricDaySummary]) -> String {
+        guard let latestIso = days.keys.sorted().last, let d = days[latestIso] else { return "" }
+        let shortDay: String = {
+            let inFmt = DateFormatter()
+            inFmt.locale = Locale(identifier: "en_US_POSIX")
+            inFmt.dateFormat = "yyyy-MM-dd"
+            guard let dt = inFmt.date(from: latestIso) else { return latestIso }
+            let outFmt = DateFormatter()
+            outFmt.locale = Locale(identifier: "es_ES")
+            outFmt.dateFormat = "d MMM"
+            return outFmt.string(from: dt).replacingOccurrences(of: ".", with: "")
+        }()
+        if let lastMin = d.stressSamples5m.last?.minuteOfDay {
+            let timeStr = String(format: "%02d:%02d", (lastMin / 60) % 24, lastMin % 60)
+            return " · Últ. FC \(shortDay) \(timeStr)"
+        }
+        return " · Hasta \(shortDay)"
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -2137,7 +2240,9 @@ final class ImprovingStore: ObservableObject {
             presentSyncBanner(.syncing("Sincronizando…"))
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 280_000_000)
+                self?.attachDirectSyncFileWatchers()
                 self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
+                self?.scheduleSilentAutomationRechecks()
             }
             return
         }
@@ -2145,7 +2250,16 @@ final class ImprovingStore: ObservableObject {
         if sourceParam == "clipboard" {
             presentSyncBanner(.syncing("Sincronizando…"))
             let paste = UIPasteboard.general.string ?? ""
-            ingestRawShortcutsPayload(paste, sourceLabel: "Atajos (Portapapeles)")
+            if !paste.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ingestRawShortcutsPayload(paste, sourceLabel: "Atajos (Portapapeles)")
+            } else {
+                // Retry once after 350ms in case iOS foreground pasteboard permission sheet just finished
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    let retryPaste = UIPasteboard.general.string ?? ""
+                    self?.ingestRawShortcutsPayload(retryPaste, sourceLabel: "Atajos (Portapapeles)")
+                }
+            }
             return
         }
 
@@ -2191,11 +2305,8 @@ final class ImprovingStore: ObservableObject {
                     let shouldJump = !self.hasImportedOrPairedRealData
                     self.applyImportedResult(result, navigateToLatest: shouldJump)
                     let hhmm = Self.currentHHMM()
-                    let hrvCount = result.days.values.filter { $0.hrvMs != nil }.count
-                    let latestDay = result.latestDateIso.flatMap { result.days[$0] }
-                    let kcalTag = latestDay?.activeKcal.map { " · \($0) kcal" } ?? ""
-                    let strainTag = latestDay?.strainPct.map { " · Esf \($0)%" } ?? ""
-                    self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d (\(hrvCount) VFC)\(kcalTag)\(strainTag)"
+                    let latestReading = Self.formatLatestReadingTag(from: result.days)
+                    self.autoSyncStatusText = "✓ \(sourceLabel) \(hhmm) · \(result.days.count)d\(latestReading)"
                     self.persistState()
                     UINotificationFeedbackGenerator().notificationOccurred(.success)
                     self.presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 2.1)

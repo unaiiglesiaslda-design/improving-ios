@@ -58,6 +58,8 @@ def plain_token_string(text: str) -> dict:
 def find_health_samples_action(action_uuid: str, sample_type_label: str, days_back: int, group_by: str = None) -> dict:
     params = {
         "UUID": action_uuid,
+        "WFContentItemSortProperty": "Start Date",
+        "WFContentItemSortOrder": "Latest First",
         "WFContentItemFilter": {
             "Value": {
                 "WFActionParameterFilterPrefix": 1,
@@ -122,7 +124,8 @@ def build_common_health_actions(variant: str):
     """Builds HealthKit Find Health Samples blocks (Vitals + Full 30-90d Fitness Metrics + Workouts) + Dictionary."""
     metrics = [
         # (key_prefix, ActionKit English picker label, days_back, include_end_date, group_by)
-        ("hr", "Heart Rate", 3, False, None),
+        # Heart Rate uses 2 days sorted Latest First so right-now readings are ALWAYS first and never truncated!
+        ("hr", "Heart Rate", 2, False, None),
         ("hrv", "Heart Rate Variability", 14, False, None),
         ("rhr", "Resting Heart Rate", 14, False, None),
         ("sleep", "Sleep", 4, True, None),
@@ -138,6 +141,18 @@ def build_common_health_actions(variant: str):
 
     actions = []
     dict_items = []
+
+    now_id = make_uuid(f"{variant}.generated_at")
+    actions.append(
+        {
+            "WFWorkflowActionIdentifier": "is.workflow.actions.date",
+            "WFWorkflowActionParameters": {
+                "UUID": now_id,
+                "WFDateActionMode": "Current Date",
+            },
+        }
+    )
+    dict_items.append(dict_text_item("generated_at", now_id, "Date"))
 
     for prefix, label, days, include_end, group_by in metrics:
         find_id = make_uuid(f"{variant}.{prefix}.find")

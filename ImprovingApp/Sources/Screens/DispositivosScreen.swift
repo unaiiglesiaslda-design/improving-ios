@@ -734,12 +734,12 @@ private struct ShortcutsAutomationGuideSheet: View {
 
                 guideCard(
                     step: "1",
-                    title: "Crea el Atajo (sin bucles, 1 minuto)",
+                    title: "Configuración clave para datos AL INSTANTE",
                     lines: [
-                        "Abre la app Atajos de Apple y pulsa + (Nuevo atajo) → llámalo «Sync Improving».",
-                        "Añade una acción «Buscar muestras de Salud» por cada métrica: Frecuencia cardíaca (3 d), VFC (14 d), FC en reposo (14 d), Sueño (4 d), Frecuencia respiratoria, Oxígeno en sangre, Temperatura de la muñeca, Pasos (30 d), Energía activa (30 d), VO₂ máx. (90 d), Distancia a pie/carrera (30 d), Distancia en bici (30 d), Pisos subidos (30 d) y Entrenamientos (30 d).",
-                        "Al final añade la acción nativa de Improving: «Sincronizar Salud en Improving» (búscala escribiendo Improving).",
-                        "En cada campo (Valores FC, Fechas FC, Valores VFC, Fechas VFC, Fases de Sueño, Inicios/Fines de Sueño…), selecciona la variable de su «Buscar muestras de Salud» y toca la variable para elegir Valor, Fecha de inicio o Fecha de finalización."
+                        "En CADA acción «Buscar muestras de Salud» activa: Ordenar por → Fecha de inicio → «Lo más reciente primero». Si lo dejas en orden antiguo, cuando hay miles de muestras se cortan las lecturas de hoy.",
+                        "Usa 2 días en Frecuencia cardíaca (suficiente para hoy + anoche y 3× más rápido) y activa «Agrupar por: Día» en Pasos, Energía activa, Distancia y Pisos subidos.",
+                        "Si usas «Guardar archivo» en En mi iPhone / Improving / health_sync.json, activa «Sobrescribir si el archivo existe» y desactiva «Preguntar dónde guardar».",
+                        "Añade también: VFC (14 d), FC en reposo (14 d), Sueño (4 d), FR, SpO₂, VO₂ máx. (90 d) y Entrenamientos (30 d)."
                     ]
                 )
 

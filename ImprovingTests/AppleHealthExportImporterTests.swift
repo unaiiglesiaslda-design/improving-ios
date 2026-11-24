@@ -903,4 +903,39 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(GeminiCoachService.supportedModels.first, "gemini-2.5-flash")
         XCTAssertTrue(GeminiCoachService.supportedModels.contains("gemini-2.5-flash-lite"))
     }
+
+    @MainActor
+    func testShortcutsLatestFirstOrderSpanishAmPmDatesAndInPlaceFileOverwriteSignature() throws {
+        // 1. Reverse-chronological (Latest First) Shortcuts JSON with Spanish 12h "a. m." / "p. m." + 24h dates
+        let json = """
+        {
+          "generated_at": "24 nov 2026, 11:25",
+          "rhr_values": "49.5\\n50.0",
+          "rhr_dates": "24 nov 2026, 6:30\\n23 nov 2026, 6:30",
+          "hr_values": "88\\n76\\n54\\n52",
+          "hr_dates": "24 nov. 2026, 11:20 a. m.\\n24 nov 2026, 9:05 a. m.\\n23 nov 2026, 1:15 p. m.\\n23 nov 2026, 1:05 a. m."
+        }
+        """
+        let res = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(json.data(using: .utf8)))
+        XCTAssertNil(res.errorMessage)
+        let today = try XCTUnwrap(res.days["2026-11-24"])
+        let yesterday = try XCTUnwrap(res.days["2026-11-23"])
+
+        // Today's latest 5-min bucket MUST be 11:20 (minute 680) even though Shortcut sent Latest First!
+        XCTAssertEqual(today.stressSamples5m.last?.minuteOfDay, 680)
+        // Yesterday's "1:15 p. m." MUST parse as 13:15 (minute 795), NOT 01:15!
+        XCTAssertEqual(yesterday.stressSamples5m.last?.minuteOfDay, 795)
+
+        let tag = ImprovingStore.formatLatestReadingTag(from: res.days)
+        XCTAssertTrue(tag.contains("11:20"), "Expected latest reading tag to contain 11:20, got: \(tag)")
+
+        // 2. Uncached kernel stat signature MUST change immediately upon in-place overwrite of health_sync.json!
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_health_sync_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try Data("{\"hr_values\":\"60\"}".utf8).write(to: tmp, options: .atomic)
+        let sig1 = ShortcutsHealthSyncImporter.fileSignature(for: tmp)
+        try Data("{\"hr_values\":\"60\\n84\"}".utf8).write(to: tmp, options: .atomic)
+        let sig2 = ShortcutsHealthSyncImporter.fileSignature(for: tmp)
+        XCTAssertNotEqual(sig1, sig2)
+    }
 }

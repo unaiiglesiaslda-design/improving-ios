@@ -129,18 +129,29 @@ enum ShortcutsHealthSyncImporter {
         scanDir(autoSyncInboxURL, depth: 1)
 
         return found.sorted { a, b in
-            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let da = ((try? fm.attributesOfItem(atPath: a.path)[.modificationDate]) as? Date) ?? .distantPast
+            let db = ((try? fm.attributesOfItem(atPath: b.path)[.modificationDate]) as? Date) ?? .distantPast
             return da < db
         }
     }
 
+    /// Uncached kernel `stat()` signature with millisecond mtime + exact byte size so in-place
+    /// Apple Shortcuts overwrites of `health_sync.json` are ALWAYS detected immediately!
     static func fileSignature(for url: URL) -> String {
-        let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-        let mtime = Int64((vals?.contentModificationDate?.timeIntervalSince1970 ?? 0).rounded())
-        let sz = vals?.fileSize ?? 0
-        // v7 prefix forces automatic re-parse with Fitness workouts, Z0..Z5, HRR, distance, elevation & live stress
-        return "v7#\(url.lastPathComponent)#\(sz)#\(mtime)"
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let mtimeMs = Int64((((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000.0).rounded())
+        let sz = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        // v8 prefix ensures instant re-parse with millisecond precision & live freshness tracking
+        return "v8#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
+    }
+
+    static func fileModificationDate(for url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+
+    static func isLightweightAutoSyncFile(url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return ext == "json" || ext == "txt" || ext == "csv" || ext.isEmpty
     }
 
     // MARK: - Universal Entry Points (File URL, Raw Data, Raw String, or Envelope)
@@ -1084,6 +1095,9 @@ enum ShortcutsHealthSyncImporter {
             ("d MMM yyyy 'a las' H:mm", "es_ES"),
             ("d MMM yyyy 'a la' H:mm:ss", "es_ES"),
             ("d MMM yyyy 'a la' H:mm", "es_ES"),
+            ("d MMM yyyy, h:mm a", "en_US_POSIX"),
+            ("d MMM yyyy 'a las' h:mm a", "en_US_POSIX"),
+            ("d MMM yyyy 'a la' h:mm a", "en_US_POSIX"),
             ("d MMM yyyy, h:mm a", "es_ES"),
             ("d MMM yyyy 'a las' h:mm a", "es_ES"),
             ("d MMM yyyy 'a la' h:mm a", "es_ES"),
@@ -1145,15 +1159,19 @@ enum ShortcutsHealthSyncImporter {
             return (d, explicitWall ?? wallClock(for: d))
         }
 
-        // Handle Spanish/English relative words ("hoy, 8:15" / "ayer, 23:10")
+        // Handle Spanish/English relative words ("hoy, 8:15" / "ayer, 1:05 a. m." / "hoy, 1:15 p. m.")
         let low = s.lowercased()
         if low.hasPrefix("hoy") || low.hasPrefix("ayer") || low.hasPrefix("today") || low.hasPrefix("yesterday") {
             let isYesterday = low.hasPrefix("ayer") || low.hasPrefix("yesterday")
+            let isPm = low.contains("p. m") || low.contains("p.m") || low.hasSuffix(" pm") || low.contains(" pm ")
+            let isAm = low.contains("a. m") || low.contains("a.m") || low.hasSuffix(" am") || low.contains(" am ")
             let cal = Calendar.current
             let baseDay = cal.date(byAdding: .day, value: isYesterday ? -1 : 0, to: cal.startOfDay(for: Date())) ?? Date()
             if let timeMatch = s.range(of: #"\b([0-2]?\d):([0-5]\d)\b"#, options: .regularExpression) {
                 let parts = String(s[timeMatch]).split(separator: ":")
-                if parts.count == 2, let hh = Int(parts[0]), let mm = Int(parts[1]) {
+                if parts.count == 2, var hh = Int(parts[0]), let mm = Int(parts[1]) {
+                    if isPm && hh < 12 { hh += 12 }
+                    if isAm && hh == 12 { hh = 0 }
                     let dt = cal.date(bySettingHour: hh % 24, minute: mm, second: 0, of: baseDay) ?? baseDay
                     return (dt, (isoDayFmt.string(from: dt), (hh % 24) * 60 + mm))
                 }
@@ -1161,13 +1179,17 @@ enum ShortcutsHealthSyncImporter {
             return (baseDay, wallClock(for: baseDay))
         }
 
-        // Strip period after abbreviated Spanish month ("23 nov. 2026" -> "23 nov 2026")
-        let normalized = s
-            .replacingOccurrences(of: ".", with: "")
+        // Preserve Spanish 12-hour AM/PM markers ("a. m." / "p. m.") BEFORE stripping month abbreviation dots ("nov.")
+        let amPmNorm = s
+            .replacingOccurrences(of: "a. m.", with: "AM", options: .caseInsensitive)
+            .replacingOccurrences(of: "p. m.", with: "PM", options: .caseInsensitive)
+            .replacingOccurrences(of: "a.m.", with: "AM", options: .caseInsensitive)
+            .replacingOccurrences(of: "p.m.", with: "PM", options: .caseInsensitive)
+        let normalizedWithSept = amPmNorm.replacingOccurrences(of: ".", with: "")
+        let normalized = normalizedWithSept
             .replacingOccurrences(of: " sept ", with: " sep ", options: .caseInsensitive)
-        let normalizedWithSept = s.replacingOccurrences(of: ".", with: "")
         for fmt in cachedFormatters {
-            if let d = fmt.date(from: s) ?? fmt.date(from: normalizedWithSept) ?? fmt.date(from: normalized) {
+            if let d = fmt.date(from: s) ?? fmt.date(from: amPmNorm) ?? fmt.date(from: normalizedWithSept) ?? fmt.date(from: normalized) {
                 return (d, explicitWall ?? wallClock(for: d))
             }
         }
