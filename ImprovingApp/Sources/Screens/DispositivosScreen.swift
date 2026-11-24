@@ -738,22 +738,21 @@ private struct ShortcutsAutomationGuideSheet: View {
 
                 guideCard(
                     step: "1",
-                    title: "Un único atajo maestro: «Sync Improving»",
+                    title: "Un único atajo limpio: «Sync Improving»",
                     lines: [
-                        "Elimina cualquier atajo anterior e importa únicamente el atajo unificado «Sync Improving».",
-                        "Recopila en 1 toque las 18 métricas nativas de Apple Salud: FC en vivo (3 d, lo más reciente primero), VFC (30 d), FC en reposo (30 d), Sueño por fases (14 d), FR, SpO₂, Temperatura, Pasos (60 d), Calorías activas (60 d), VO₂ máx. (180 d), Distancia a pie/bici/natación (60 d), Pisos/desnivel (60 d), Peso, Grasa corporal, Masa magra y Glucosa.",
-                        "Los entrenamientos de cardio/esfuerzo y la Recuperación de FC (HRR) se detectan automáticamente desde tus lecturas reales de FC sin necesitar acciones incompatibles.",
-                        "Consejo: en Ajustes del iPhone → Improving → Pegar desde otras apps → elige «Permitir» para que se actualice al instante sin preguntar."
+                        "Elimina cualquier atajo anterior e importa únicamente el nuevo «Sync Improving».",
+                        "Envía los 13 bloques clave de Apple Salud directamente por URL codificada sin usar el portapapeles, así no vuelve a salir el aviso «Permitir pegar desde Atajos».",
+                        "Si habías creado alguna Automatización «Al abrir Improving» en Atajos, bórrala para evitar que iOS reabra la app al cerrarla."
                     ]
                 )
 
                 guideCard(
                     step: "2",
-                    title: "Hazlo 100 % automático en segundo plano",
+                    title: "Sincronización fluida bajo tu control",
                     lines: [
-                        "Ve a la pestaña Automatización en Atajos → pulsa + → «Momento del día» (por ejemplo 08:00, 12:00, 16:00 y 20:00) o «App» → «Al abrir Improving».",
-                        "Activa «Ejecutar inmediatamente» y desactiva «Notificar al ejecutar».",
-                        "Elige tu atajo «Sync Improving». Se ejecutará en segundo plano sin abrir pantallas y actualizará Improving al instante."
+                        "Para actualizar al momento, pulsa «Ejecutar Atajo» aquí o toca «Sync Improving» desde tu pantalla de inicio.",
+                        "También puedes deslizar hacia abajo a fondo en Hoy cuando quieras refrescar sin vibraciones ni recargas molestas.",
+                        "En Ajustes → Privacidad y seguridad → Salud → Atajos, asegúrate de tener todo activado."
                     ]
                 )
 

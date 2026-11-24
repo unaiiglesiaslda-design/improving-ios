@@ -2070,17 +2070,12 @@ final class ImprovingStore: ObservableObject {
         }
         lastActiveCalendarDayIso = todayIso
 
-        // Only act when returning from an explicit user-initiated shortcut run
+        // Only clear pending shortcut state when returning without x-callback; NEVER read UIPasteboard here
+        // (eliminates recurring iOS "Permitir pegar desde Atajos" popups and reopen loops).
         if awaitingShortcutCallback {
             awaitingShortcutCallback = false
             shortcutTimeoutTask?.cancel()
-            if let paste = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-               paste.hasPrefix("{"),
-               (paste.contains("hr_values") || paste.contains("generated_at") || paste.contains("steps_values") || paste.contains("sleep_starts")) {
-                ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
-            } else {
-                scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
-            }
+            scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
         }
     }
 
@@ -2323,46 +2318,34 @@ final class ImprovingStore: ObservableObject {
                 presentSyncBanner(.notice("Revisa nombre del atajo"), autoDismissAfter: 2.6)
                 return
             }
-            // from == "shortcut_ok": check clipboard first (unified `Sync Improving` shortcut!) AND scan inbox folder!
-            presentSyncBanner(.syncing("Sincronizando…"))
-            if let paste = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-               paste.hasPrefix("{"),
-               (paste.contains("hr_values") || paste.contains("generated_at") || paste.contains("steps_values") || paste.contains("sleep_starts")) {
-                ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
-                return
-            }
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 280_000_000)
-                self?.scanAutoSyncInboxIfNeeded(force: true, showBanner: true)
-            }
+            // from == "shortcut_ok": scan inbox only (direct URL payload arrives via ?data= without touching Pasteboard!)
+            scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
             return
         }
 
         if sourceParam == "clipboard" {
             presentSyncBanner(.syncing("Sincronizando…"))
             let paste = UIPasteboard.general.string ?? ""
-            if !paste.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
-            } else {
-                // Retry once after 350ms in case iOS foreground pasteboard permission sheet just finished
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 350_000_000)
-                    let retryPaste = UIPasteboard.general.string ?? ""
-                    self?.ingestRawShortcutsPayload(retryPaste, sourceLabel: "Sync Improving")
-                }
-            }
+            ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
             return
         }
 
         if let raw = rawParam, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             presentSyncBanner(.syncing("Sincronizando…"))
             let decoded: String = {
+                if raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
+                    return raw
+                }
+                let plusFixed = raw.replacingOccurrences(of: "+", with: " ")
+                if let pct = plusFixed.removingPercentEncoding, pct.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
+                    return pct
+                }
                 if let b64 = Data(base64Encoded: raw), let str = String(data: b64, encoding: .utf8), !str.isEmpty {
                     return str
                 }
                 return raw
             }()
-            ingestRawShortcutsPayload(decoded, sourceLabel: "Atajos (URL)")
+            ingestRawShortcutsPayload(decoded, sourceLabel: "Sync Improving")
             return
         }
 

@@ -1056,6 +1056,24 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(healedPeak, 82.0)
     }
 
+    @MainActor
+    func testDirectUrlEncodedDataPayloadSyncsWithoutPasteboard() throws {
+        let store = ImprovingStore()
+        let json = #"{"rhr_values":"48.0","rhr_dates":"24 nov 2026, 06:00","hr_values":"74","hr_dates":"24 nov 2026, 18:10"}"#
+        var comps = URLComponents()
+        comps.scheme = "improving"
+        comps.host = "sync"
+        comps.queryItems = [URLQueryItem(name: "data", value: json)]
+        let url = try XCTUnwrap(comps.url)
+        store.handleIncomingURL(url)
+        let exp = expectation(description: "Direct URL payload processed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
+        XCTAssertEqual(store.realHistory["2026-11-24"]?.restingHrBpm ?? 0, 48.0, accuracy: 0.1)
+    }
+
     func testMasterShortcutsPayloadParsesAll18MetricsAndAutoDetectsRealHrExerciseBoutWithHrr() throws {
         // Simulates the EXACT JSON emitted by the single unified `Sync Improving` shortcut (no invalid Workouts action!):
         // Includes all 18 native Apple Shortcuts metrics + a real 30-min elevated-HR session (18:00-18:30) and 1-min cool-down (18:31).

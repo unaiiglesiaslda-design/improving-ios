@@ -205,25 +205,41 @@ def wrap_workflow(name: str, actions: list, glyph: int = 61440, color: int = 431
 def build_master_shortcut() -> dict:
     actions, dict_id = build_all_health_actions("final")
 
-    clip_id = make_uuid("final.clipboard")
+    enc_id = make_uuid("final.urlencode")
     url_id = make_uuid("final.url")
     open_id = make_uuid("final.openurl")
 
+    # URL-encode the Dictionary JSON directly into `improving://sync?data=<encoded>`
+    # -> ZERO clipboard (`setclipboard`) usage = ZERO iOS "Permitir pegar desde Atajos" popups!
     actions.append(
         {
-            "WFWorkflowActionIdentifier": "is.workflow.actions.setclipboard",
+            "WFWorkflowActionIdentifier": "is.workflow.actions.urlencode",
             "WFWorkflowActionParameters": {
-                "UUID": clip_id,
-                "WFInput": token_attachment(dict_id, "Dictionary"),
+                "UUID": enc_id,
+                "WFEncodeMode": "Encode",
+                "WFInput": token_string_from_output(dict_id, "Dictionary"),
             },
         }
     )
+    prefix = "improving://sync?data="
     actions.append(
         {
             "WFWorkflowActionIdentifier": "is.workflow.actions.url",
             "WFWorkflowActionParameters": {
                 "UUID": url_id,
-                "WFURLActionURL": "improving://sync?source=clipboard",
+                "WFURLActionURL": {
+                    "Value": {
+                        "attachmentsByRange": {
+                            f"{{{len(prefix)}, 1}}": {
+                                "OutputName": "URL Encoded Text",
+                                "OutputUUID": enc_id,
+                                "Type": "ActionOutput",
+                            }
+                        },
+                        "string": f"{prefix}\ufffc",
+                    },
+                    "WFSerializationType": "WFTextTokenString",
+                },
             },
         }
     )
