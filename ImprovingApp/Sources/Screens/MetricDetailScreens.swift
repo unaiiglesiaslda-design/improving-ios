@@ -27,6 +27,11 @@ struct TrendMetricDetailScreen: View {
         trend.id == "s_dur" || trend.id == "s_rem" || trend.id == "s_deep"
     }
 
+    private static let integerTrendIds: Set<String> = [
+        "t_steps", "t_kcal", "t_strain", "r_rec", "s_score", "s_eff",
+        "t_dur", "t_day_hr", "st_score", "st_sleep", "s_lat", "s_dip"
+    ]
+
     private func formatValue(_ val: Double) -> String {
         if isDurationMinutesTrend {
             let m = Int(val.rounded())
@@ -35,7 +40,7 @@ struct TrendMetricDetailScreen: View {
         if trend.id == "t_perf" {
             return String(format: "%+.0f %@", val, trend.unitText).trimmingCharacters(in: .whitespaces)
         }
-        if trend.id == "t_steps" || trend.id == "t_kcal" || trend.id == "t_strain" || trend.id == "r_rec" || trend.id == "s_score" || trend.id == "s_eff" || trend.id == "t_dur" || trend.id == "t_day_hr" || trend.id == "st_score" || trend.id == "st_sleep" || trend.id == "s_lat" || trend.id == "s_dip" {
+        if Self.integerTrendIds.contains(trend.id) {
             let core = "\(Int(val.rounded()))"
             return trend.unitText.isEmpty ? core : "\(core) \(trend.unitText)"
         }
