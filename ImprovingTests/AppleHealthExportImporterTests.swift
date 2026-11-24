@@ -938,4 +938,87 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let sig2 = ShortcutsHealthSyncImporter.fileSignature(for: tmp)
         XCTAssertNotEqual(sig1, sig2)
     }
+
+    @MainActor
+    func testLowPowerModeSleepRechargesBodyBatteryAndKeepsRecoveryRealistic() throws {
+        // Prior day ended at 28.0% energy at 23:45 (typical evening battery before bed)
+        var prior: [String: RealBiometricDaySummary] = [:]
+        prior["2026-11-23"] = RealBiometricDaySummary(
+            dateIso: "2026-11-23",
+            restingHrBpm: 50.0,
+            hrvMs: 68.0,
+            energyBankPercent: 28,
+            energySamples5m: [TimedBiometricPoint(minuteOfDay: 1425, value: 28.0, epochSec: nil)]
+        )
+
+        // Scenario 1: Apple Watch Low Power Mode overnight -> 8h sleep (94%+ score), ZERO HR readings during sleep,
+        // ZERO overnight HRV & RHR; daytime HR only resumes after waking up (09:00 & 11:30)!
+        let envZeroOvernightHr = ShortcutsSyncEnvelope(
+            source: "Atajos de Apple",
+            hrValues: ["72 lat/min", "78 lat/min"],
+            hrDates: ["24/11/2026, 9:00", "24/11/2026, 11:30"],
+            sleepValues: ["Dormido (Profundo)", "Dormido (REM)", "Dormido (Esencial)"],
+            sleepStarts: ["24/11/2026, 0:30", "24/11/2026, 2:00", "24/11/2026, 3:45"],
+            sleepEnds: ["24/11/2026, 2:00", "24/11/2026, 3:45", "24/11/2026, 8:30"]
+        )
+        let res1 = ShortcutsHealthSyncImporter.parseEnvelope(envZeroOvernightHr, priorHistory: prior)
+        XCTAssertNil(res1.errorMessage)
+        let day1 = try XCTUnwrap(res1.days["2026-11-24"])
+        XCTAssertGreaterThanOrEqual(day1.sleepPct ?? 0, 90)
+        // Must NEVER fabricate raw HRV or RHR sensors when Watch Low Power Mode skipped them!
+        XCTAssertNil(day1.hrvMs)
+        XCTAssertNil(day1.restingHrBpm)
+        // Recovery % still functions realistically from real sleep quality!
+        let lpmRec = try XCTUnwrap(day1.recoveryPct)
+        XCTAssertTrue((65...92).contains(lpmRec), "Expected realistic Low Power Mode recovery (65..92), got \(lpmRec)")
+        // Energy starts continuously at prior day's 28.0% and recharges >= +50% across the 8h sleep (NOT +4%!)
+        let startE1 = try XCTUnwrap(day1.energySamples5m.first?.value)
+        let peakE1 = try XCTUnwrap(day1.energySamples5m.map(\.value).max())
+        XCTAssertEqual(startE1, 28.0, accuracy: 0.2)
+        XCTAssertGreaterThanOrEqual(peakE1, 82.0, "Expected peak energy >= 82% after 8h 94% sleep, got \(peakE1)")
+        XCTAssertGreaterThanOrEqual(peakE1 - startE1, 52.0, "Expected overnight charge >= +52%, got \(peakE1 - startE1)")
+
+        // Scenario 2: 1 sparse HR sample before sleep (00:30) and 1 near wake-up (07:50) -> old min(dt, 45) capped this at +4%!
+        let envSparseHr = ShortcutsSyncEnvelope(
+            source: "Atajos de Apple",
+            hrValues: ["54 lat/min", "52 lat/min", "74 lat/min"],
+            hrDates: ["24/11/2026, 0:30", "24/11/2026, 7:50", "24/11/2026, 11:00"],
+            sleepValues: ["Dormido"],
+            sleepStarts: ["24/11/2026, 0:30"],
+            sleepEnds: ["24/11/2026, 8:30"]
+        )
+        let res2 = ShortcutsHealthSyncImporter.parseEnvelope(envSparseHr, priorHistory: prior)
+        let day2 = try XCTUnwrap(res2.days["2026-11-24"])
+        let startE2 = try XCTUnwrap(day2.energySamples5m.first?.value)
+        let peakE2 = try XCTUnwrap(day2.energySamples5m.map(\.value).max())
+        XCTAssertEqual(startE2, 28.0, accuracy: 0.2)
+        XCTAssertGreaterThanOrEqual(peakE2 - startE2, 52.0, "Sparse HR during 8h sleep must recharge >= +52%, not +4%!")
+
+        // Scenario 3: Woke up from Low Power Mode sleep before ANY daytime HR sample was logged yet
+        let envSleepOnly = ShortcutsSyncEnvelope(
+            source: "Atajos de Apple",
+            sleepValues: ["Dormido"],
+            sleepStarts: ["24/11/2026, 0:30"],
+            sleepEnds: ["24/11/2026, 8:30"]
+        )
+        let res3 = ShortcutsHealthSyncImporter.parseEnvelope(envSleepOnly, priorHistory: prior)
+        let day3 = try XCTUnwrap(res3.days["2026-11-24"])
+        XCTAssertGreaterThanOrEqual(day3.energyBankPercent ?? 0, 82)
+        XCTAssertNotNil(day3.recoveryPct)
+
+        // Scenario 4: Retroactive store recompute heals an already-persisted +4% day to full physiological recharge
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        var buggyToday = day1
+        buggyToday.energySamples5m = [
+            TimedBiometricPoint(minuteOfDay: 30, value: 28.0, epochSec: nil),
+            TimedBiometricPoint(minuteOfDay: 470, value: 32.0, epochSec: nil)
+        ]
+        buggyToday.energyBankPercent = 32
+        store.realHistory = ["2026-11-23": prior["2026-11-23"]!, "2026-11-24": buggyToday]
+        store.recomputeMetricsForCurrentProfile()
+        let healed = try XCTUnwrap(store.realHistory["2026-11-24"])
+        let healedPeak = try XCTUnwrap(healed.energySamples5m.map(\.value).max())
+        XCTAssertGreaterThanOrEqual(healedPeak, 82.0)
+    }
 }

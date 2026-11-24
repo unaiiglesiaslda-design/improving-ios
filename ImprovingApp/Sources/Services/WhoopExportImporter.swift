@@ -169,13 +169,17 @@ enum WhoopExportImporter {
                     for p in imp.stressSamples5m { byMin[p.minuteOfDay] = p }
                     return byMin.keys.sorted().compactMap { byMin[$0] }
                 }()
+                // Energy is a cumulative curve: prefer the freshly recomputed timeline rather than
+                // interleaving stale pre-upgrade energy points that would create sawtooth jumps!
                 let mergedEnergy5m: [TimedBiometricPoint] = {
                     if imp.energySamples5m.isEmpty { return cur.energySamples5m }
                     if cur.energySamples5m.isEmpty { return imp.energySamples5m }
-                    var byMin: [Int: TimedBiometricPoint] = [:]
-                    for p in cur.energySamples5m { byMin[p.minuteOfDay] = p }
-                    for p in imp.energySamples5m { byMin[p.minuteOfDay] = p }
-                    return byMin.keys.sorted().compactMap { byMin[$0] }
+                    let impLast = imp.energySamples5m.last?.minuteOfDay ?? -1
+                    let curLast = cur.energySamples5m.last?.minuteOfDay ?? -1
+                    if impLast >= curLast || imp.energySamples5m.count >= cur.energySamples5m.count {
+                        return imp.energySamples5m
+                    }
+                    return cur.energySamples5m
                 }()
                 let mergedStressAvg: Int? = mergedStress5m.isEmpty
                     ? (imp.stressScore ?? cur.stressScore)

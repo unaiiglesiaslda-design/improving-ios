@@ -696,7 +696,9 @@ enum WhoopPhysiologyEngine {
 
     /// Computes Bevel-aligned Recovery (1...99%) strictly from sensors that were ACTUALLY measured on this day,
     /// incorporating personal 60-day rolling baselines AND optional age/sex/body cohort calibration when `profile` is provided.
-    /// Returns `nil` if NEITHER HRV nor RHR was recorded.
+    /// In Apple Watch Low Power Mode overnight (when both HRV & RHR are skipped, but a real `sleepPct` was recorded),
+    /// gracefully evaluates recovery from real sleep quality + any measured secondary vitals without fabricating HRV/RHR.
+    /// Returns `nil` if NEITHER HRV, RHR, nor `sleepPct` was recorded.
     static func computeBevelRecoveryPercent(
         hrvMs: Double?,
         rhrBpm: Double?,
@@ -706,11 +708,32 @@ enum WhoopPhysiologyEngine {
         lnHrvBaseline: PersonalBaselineStats,
         rhrBaseline: PersonalBaselineStats,
         respBaseline: PersonalBaselineStats,
-        profile: UserPhysiologyProfile? = nil
+        profile: UserPhysiologyProfile? = nil,
+        sleepPct: Int? = nil
     ) -> Int? {
-        guard hrvMs != nil || rhrBpm != nil else { return nil }
+        guard hrvMs != nil || rhrBpm != nil || sleepPct != nil else { return nil }
 
         let profileNorms = profile.map { computePersonalizedNorms(profile: $0) }
+        let spo2Floor = profileNorms?.spo2LowPct ?? 95.0
+
+        // Low Power Mode overnight fallback: watchOS skipped background HRV & RHR,
+        // but recorded a real sleep session (`sleepPct`). Compute grounded recovery from
+        // real sleep + any measured Resp/SpO2/Temp without fabricating HRV or RHR!
+        if hrvMs == nil && rhrBpm == nil, let slp = sleepPct {
+            var score = 20.0 + Double(min(max(slp, 10), 100)) * 0.70
+            if let resp = respRpm, resp > 5.0 {
+                let zResp = (respBaseline.mean - resp) / max(respBaseline.sigma, 0.5)
+                score += min(max(zResp, -2.5), 1.0) * 4.0
+            }
+            if let spo2 = spo2Pct, spo2 < spo2Floor {
+                score -= (spo2Floor - spo2) * 3.2
+            }
+            if let tempD = wristTempDeltaC, abs(tempD) > 0.55 {
+                score -= (abs(tempD) - 0.55) * 14.0
+            }
+            return min(max(Int(score.rounded()), 15), 92)
+        }
+
         // Blend 85% personal rolling baseline + 15% age/sex/body expected physiology so autonomic reserve
         // reflects that e.g. 45 ms HRV has a different physiological meaning at 20 vs 62 years old!
         let cohortWeight: Double = {
@@ -751,6 +774,14 @@ enum WhoopPhysiologyEngine {
             totalWeight += 0.33
         }
 
+        // When HRV was skipped (e.g. Apple Watch Low Power Mode) and only daytime RHR exists,
+        // lightly stabilize Recovery with real sleep quality so a single RHR sample doesn't swing wildly.
+        if hrvMs == nil, let slp = sleepPct {
+            let sleepZ = min(max((Double(slp) - 65.0) / 18.0, -2.2), 2.0)
+            weightedZ += 0.22 * sleepZ
+            totalWeight += 0.22
+        }
+
         if let resp = respRpm, resp > 5.0 {
             let zResp = (respBaseline.mean - resp) / max(respBaseline.sigma, 0.5)
             // Only penalize elevated respiratory rate or slight bonus
@@ -767,7 +798,6 @@ enum WhoopPhysiologyEngine {
         var score = 100.0 / (1.0 + exp(-1.18 * (normalizedZ + 0.42)))
 
         // Secondary clinical stress penalties ONLY when genuinely measured and abnormal
-        let spo2Floor = profileNorms?.spo2LowPct ?? 95.0
         if let spo2 = spo2Pct, spo2 < spo2Floor {
             score -= (spo2Floor - spo2) * 3.2
         }

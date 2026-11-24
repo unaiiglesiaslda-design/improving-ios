@@ -1617,7 +1617,8 @@ final class ImprovingStore: ObservableObject {
                     lnHrvBaseline: lnHrvBase,
                     rhrBaseline: rhrBase,
                     respBaseline: respBase,
-                    profile: profile
+                    profile: profile,
+                    sleepPct: day.sleepPct
                 ) {
                     day.recoveryPct = newRec
                 }
@@ -1676,11 +1677,84 @@ final class ImprovingStore: ObservableObject {
 
                 updated[iso] = day
             }
+            recomputeContinuousEnergy(in: &updated)
             realHistory = updated
         }
 
         sectionCoachingCache.removeAll()
         dataRevision += 1
+    }
+
+    /// Re-integrates the continuous cross-day Body Battery timeline across all stored days
+    /// (preserves exact midnight handoff, handles Apple Watch Low Power Mode sleep gaps, and eliminates stale curve seams).
+    private func recomputeContinuousEnergy(in history: inout [String: RealBiometricDaySummary]) {
+        let sortedIsos = history.keys.sorted()
+        var prevDayDate: Date? = nil
+        var prevDayEndEnergy: Double? = nil
+        var prevDayEndEpoch: Int64? = nil
+        let cal = Calendar.current
+
+        for iso in sortedIsos {
+            guard var day = history[iso] else { continue }
+            let curDate = isoFormatter.date(from: iso)
+            let dayStartEp: Int64? = curDate.map { Int64(cal.startOfDay(for: $0).timeIntervalSince1970) }
+            let hasRealSleep = (day.sleepSession != nil) || ((day.asleepMinutes ?? 0) > 0)
+
+            guard !day.stressSamples5m.isEmpty || hasRealSleep else {
+                if let lastE = day.energySamples5m.last?.value ?? day.energyBankPercent.map({ Double($0) }) {
+                    prevDayEndEnergy = lastE
+                    prevDayEndEpoch = day.energySamples5m.last?.epochSec
+                    prevDayDate = curDate
+                }
+                continue
+            }
+
+            let isContinuous: Bool = {
+                guard let prevE = prevDayEndEnergy, let pDate = prevDayDate, let cDate = curDate, prevE.isFinite else { return false }
+                let gapDays = cal.dateComponents([.day], from: pDate, to: cDate).day ?? 99
+                guard gapDays == 1 else { return false }
+                if let pEp = prevDayEndEpoch, let firstEp = day.stressSamples5m.first?.epochSec {
+                    return (firstEp - pEp) <= 24 * 3600
+                }
+                return true
+            }()
+
+            let initialEnergy: Double = {
+                if isContinuous, let carried = prevDayEndEnergy {
+                    return carried
+                }
+                if hasRealSleep {
+                    return Double(max(min((day.recoveryPct ?? day.sleepPct ?? 65) - 34, 48), 22))
+                }
+                return Double(max(min((day.recoveryPct ?? 65) - 24, 65), 22))
+            }()
+
+            let workoutSpans: [ClosedRange<Int64>] = day.workouts.compactMap { w in
+                guard let s = w.startEpochSec, w.durationMin > 0 else { return nil }
+                return s...(s + Int64(w.durationMin * 60))
+            }
+
+            let energy5m = AppleHealthExportImporter.buildContinuousFiveMinuteEnergySamples(
+                stressSamples: day.stressSamples5m,
+                startingEnergy: initialEnergy,
+                recoveryPct: day.recoveryPct,
+                sleepPct: day.sleepPct,
+                sleepStartEpoch: day.sleepSession?.startEpochSec,
+                sleepEndEpoch: day.sleepSession?.endEpochSec,
+                workoutSpans: workoutSpans,
+                asleepMinutes: day.asleepMinutes,
+                dayStartEpoch: dayStartEp
+            )
+
+            if let lastE = energy5m.last {
+                day.energySamples5m = energy5m
+                day.energyBankPercent = Int(lastE.value.rounded())
+                prevDayEndEnergy = lastE.value
+                prevDayEndEpoch = lastE.epochSec
+                prevDayDate = curDate
+                history[iso] = day
+            }
+        }
     }
 
     func shiftDay(_ delta: Int) {
@@ -1830,7 +1904,9 @@ final class ImprovingStore: ObservableObject {
     private func applyImportedResult(_ result: ExportParseResult, navigateToLatest: Bool) {
         self.hasImportedOrPairedRealData = true
         self.clearPreviewSeededArtifactsOnRealData()
-        self.realHistory = WhoopExportImporter.mergeDays(existing: self.realHistory, imported: result.days)
+        var merged = WhoopExportImporter.mergeDays(existing: self.realHistory, imported: result.days)
+        self.recomputeContinuousEnergy(in: &merged)
+        self.realHistory = merged
         for (iso, map) in result.journalByDate {
             var dayJournal = self.journalCheckinsByDate[iso] ?? [:]
             for (k, v) in map { dayJournal[k] = v }
@@ -2614,7 +2690,7 @@ final class ImprovingStore: ObservableObject {
                 hasReal = true
             }
 
-            // 7. Bevel Adaptive Recovery % (strictly from real measured sensors)
+            // 7. Bevel Adaptive Recovery % (strictly from real measured sensors + Low Power Mode sleep resilience)
             d.recoveryPct = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
                 hrvMs: d.hrvMs,
                 rhrBpm: d.restingHrBpm,
@@ -2624,7 +2700,8 @@ final class ImprovingStore: ObservableObject {
                 lnHrvBaseline: lnHrvBaseline,
                 rhrBaseline: rhrBaseline,
                 respBaseline: respBaseline,
-                profile: userProfile
+                profile: userProfile,
+                sleepPct: d.sleepPct
             )
 
             // 8. Bevel Calibrated Strain
@@ -2640,7 +2717,8 @@ final class ImprovingStore: ObservableObject {
                 hasReal = true
             }
 
-            // 9. 5-Minute Stress + CONTINUOUS Cross-Day Energy Bank (ZERO midnight jump!)
+            // 9. 5-Minute Stress + CONTINUOUS Cross-Day Energy Bank (ZERO midnight jump + Low Power Mode sleep resilience!)
+            var stress5m: [TimedBiometricPoint] = []
             if !snap.intradayHrSamples.isEmpty {
                 let hrTuples: [(Int64, Int, Double)] = snap.intradayHrSamples.map { s in
                     let ep = Int64(s.date.timeIntervalSince1970)
@@ -2652,7 +2730,7 @@ final class ImprovingStore: ObservableObject {
                     let ratio = exp(lnHrvBaseline.mean) / h
                     return min(max(ratio, 0.72), 1.40)
                 }()
-                let stress5m = AppleHealthExportImporter.buildFiveMinuteStressSamples(
+                stress5m = AppleHealthExportImporter.buildFiveMinuteStressSamples(
                     hrSamples: hrTuples,
                     rhrRef: rhrRef,
                     maxHr: maxHr,
@@ -2663,38 +2741,44 @@ final class ImprovingStore: ObservableObject {
                 if !stress5m.isEmpty {
                     d.stressSamples5m = stress5m
                     d.stressScore = Int((stress5m.map(\.value).reduce(0, +) / Double(stress5m.count)).rounded())
+                    hasReal = true
+                }
+            }
 
-                    let isConsecutiveDay: Bool = {
-                        guard let prevIso = prevDayIso,
-                              let prevDt = isoFormatter.date(from: prevIso),
-                              let diff = cal.dateComponents([.day], from: prevDt, to: snap.day).day else { return false }
-                        return diff == 1
-                    }()
-                    let startingEnergy: Double = {
-                        if isConsecutiveDay, let carried = prevDayEndEnergy {
-                            return carried
-                        }
-                        if sleepStartEp != nil {
-                            return 32.0
-                        }
-                        return Double(d.recoveryPct ?? d.sleepPct ?? 58)
-                    }()
-
-                    let energy5m = AppleHealthExportImporter.buildContinuousFiveMinuteEnergySamples(
-                        stressSamples: stress5m,
-                        startingEnergy: startingEnergy,
-                        recoveryPct: d.recoveryPct,
-                        sleepPct: d.sleepPct,
-                        sleepStartEpoch: sleepStartEp,
-                        sleepEndEpoch: sleepEndEp,
-                        workoutSpans: workoutSpans
-                    )
-                    if let lastPt = energy5m.last {
-                        d.energySamples5m = energy5m
-                        d.energyBankPercent = Int(lastPt.value.rounded())
-                        prevDayEndEnergy = lastPt.value
-                        prevDayIso = iso
+            let hasRecordedSleepToday = (sleepStartEp != nil && sleepEndEp != nil) || ((d.asleepMinutes ?? 0) > 0)
+            if !stress5m.isEmpty || hasRecordedSleepToday {
+                let isConsecutiveDay: Bool = {
+                    guard let prevIso = prevDayIso,
+                          let prevDt = isoFormatter.date(from: prevIso),
+                          let diff = cal.dateComponents([.day], from: prevDt, to: snap.day).day else { return false }
+                    return diff == 1
+                }()
+                let startingEnergy: Double = {
+                    if isConsecutiveDay, let carried = prevDayEndEnergy {
+                        return carried
                     }
+                    if hasRecordedSleepToday {
+                        return Double(max(min((d.recoveryPct ?? d.sleepPct ?? 65) - 34, 48), 22))
+                    }
+                    return Double(d.recoveryPct ?? d.sleepPct ?? 58)
+                }()
+
+                let energy5m = AppleHealthExportImporter.buildContinuousFiveMinuteEnergySamples(
+                    stressSamples: stress5m,
+                    startingEnergy: startingEnergy,
+                    recoveryPct: d.recoveryPct,
+                    sleepPct: d.sleepPct,
+                    sleepStartEpoch: sleepStartEp,
+                    sleepEndEpoch: sleepEndEp,
+                    workoutSpans: workoutSpans,
+                    asleepMinutes: d.asleepMinutes,
+                    dayStartEpoch: Int64(cal.startOfDay(for: snap.day).timeIntervalSince1970)
+                )
+                if let lastPt = energy5m.last {
+                    d.energySamples5m = energy5m
+                    d.energyBankPercent = Int(lastPt.value.rounded())
+                    prevDayEndEnergy = lastPt.value
+                    prevDayIso = iso
                     hasReal = true
                 }
             }
@@ -3031,6 +3115,24 @@ final class ImprovingStore: ObservableObject {
         }
         if sanitizedCorruptStrain {
             processedAutoSyncSignatures.removeAll()
+        }
+
+        // Self-healing migration for nights affected by Apple Watch Low Power Mode (under-charged Body Battery
+        // or missing Recovery % despite real recorded sleep): recompute immediately on launch!
+        let needsLowPowerEnergyHeal = realHistory.values.contains { day in
+            guard let asleep = day.asleepMinutes, asleep >= 180 else { return false }
+            if day.recoveryPct == nil || day.energySamples5m.isEmpty { return true }
+            if (day.sleepPct ?? 0) >= 65 && day.energySamples5m.count >= 2 {
+                let gain = zip(day.energySamples5m, day.energySamples5m.dropFirst()).reduce(0.0) { acc, pair in
+                    acc + max(pair.1.value - pair.0.value, 0.0)
+                }
+                if gain < 15.0 { return true }
+            }
+            return false
+        }
+        if needsLowPowerEnergyHeal {
+            recomputeMetricsForCurrentProfile()
+            persistState()
         }
     }
 }

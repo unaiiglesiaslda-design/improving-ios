@@ -141,8 +141,8 @@ enum ShortcutsHealthSyncImporter {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let mtimeMs = Int64((((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000.0).rounded())
         let sz = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        // v8 prefix ensures instant re-parse with millisecond precision & live freshness tracking
-        return "v8#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
+        // v9 prefix ensures instant re-parse with Low Power Mode sleep recharge & recovery resilience
+        return "v9#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
     }
 
     static func fileModificationDate(for url: URL) -> Date? {

@@ -611,7 +611,8 @@ enum AppleHealthExportImporter {
                 lnHrvBaseline: lnHrvBase,
                 rhrBaseline: rhrBase,
                 respBaseline: respBase,
-                profile: profile
+                profile: profile,
+                sleepPct: sleepPct
             )
 
             // Update causal history AFTER scoring day i
@@ -736,6 +737,9 @@ enum AppleHealthExportImporter {
                     return carried
                 }
                 // Only on the very first day (or after a multi-day gap without wearing the watch)
+                if sleepSession != nil || (asleepOrNil ?? 0) > 0 {
+                    return Double(max(min((recPct ?? sleepPct ?? 65) - 34, 48), 22))
+                }
                 return Double(max(min((recPct ?? 65) - 24, 65), 22))
             }()
 
@@ -746,7 +750,9 @@ enum AppleHealthExportImporter {
                 sleepPct: sleepPct,
                 sleepStartEpoch: sleepSession?.startEpochSec,
                 sleepEndEpoch: sleepSession?.endEpochSec,
-                workoutSpans: raw.workoutSpans
+                workoutSpans: raw.workoutSpans,
+                asleepMinutes: asleepOrNil,
+                dayStartEpoch: dayStartEp
             )
 
             if let lastE = energy5m.last {
@@ -869,9 +875,10 @@ enum AppleHealthExportImporter {
         }
     }
 
-    /// Continuous physiological Body Battery model:
-    /// Starts at EXACT `startingEnergy` carried from previous day's 23:55 value (zero jumps!).
-    /// Charges ONLY during real recorded sleep or calm rest (stress < 16); drains during elevated awake stress/workouts.
+    /// Continuous physiological Body Battery model (resilient to Apple Watch Low Power Mode / sparse HR gaps!):
+    /// Starts at EXACT `startingEnergy` carried from previous day's ending value (zero midnight jumps!).
+    /// Integrates the FULL real recorded sleep window (even when watchOS Low Power Mode turns off background HR
+    /// during sleep, leaving 0–1 HR readings overnight!) and drains proportionally during awake stress/workouts.
     static func buildContinuousFiveMinuteEnergySamples(
         stressSamples: [TimedBiometricPoint],
         startingEnergy: Double,
@@ -879,57 +886,240 @@ enum AppleHealthExportImporter {
         sleepPct: Int?,
         sleepStartEpoch: Int64?,
         sleepEndEpoch: Int64?,
-        workoutSpans: [ClosedRange<Int64>] = []
+        workoutSpans: [ClosedRange<Int64>] = [],
+        asleepMinutes: Int? = nil,
+        dayStartEpoch: Int64? = nil
     ) -> [TimedBiometricPoint] {
-        guard !stressSamples.isEmpty else { return [] }
+        let hasRecordedSleepSpan: Bool = {
+            if let s = sleepStartEpoch, let e = sleepEndEpoch, e > s { return true }
+            return false
+        }()
+        let hasRecordedSleep = hasRecordedSleepSpan || ((asleepMinutes ?? 0) > 0)
+        guard !stressSamples.isEmpty || hasRecordedSleep else { return [] }
 
-        let recFactor = Double(recoveryPct ?? sleepPct ?? 65) / 100.0
-        // Sleep recharge rate per 5 min: ~0.40% (poor recovery) up to ~0.92% (excellent recovery)
-        let sleepChargePer5m = 0.32 + recFactor * 0.62
-        let maxSleepCeiling = min(99.0, 62.0 + recFactor * 38.0)
+        // Combine sleep quality & recovery so a 94% sleep session always produces realistic restorative recharge
+        let qualityFactor: Double = {
+            switch (recoveryPct, sleepPct) {
+            case let (r?, s?):
+                return (0.50 * Double(r) + 0.50 * Double(s)) / 100.0
+            case let (_, s?):
+                return Double(s) / 100.0
+            case let (r?, _):
+                return Double(r) / 100.0
+            default:
+                return 0.65
+            }
+        }()
+        let clampedQuality = min(max(qualityFactor, 0.15), 1.0)
+        // Calibrated Garmin Body Battery / Bevel Energy Bank sleep recharge:
+        // 8h (96 x 5m steps) at 90% quality -> up to +70% recharge capacity, ceiling ~95%
+        // 5h (60 x 5m steps) at 45% quality -> ~+32% recharge capacity, ceiling ~76%
+        let baseSleepChargePer5m = 0.34 + clampedQuality * 0.44
+        let maxSleepCeiling = min(99.0, 58.0 + clampedQuality * 41.0)
+
+        // Resolve local midnight epoch for today so we can clip sleep sessions that started before 00:00
+        let resolvedDayStartEp: Int64? = {
+            if let d = dayStartEpoch { return d }
+            if let first = stressSamples.first, let ep = first.epochSec {
+                return ep - Int64(first.minuteOfDay * 60)
+            }
+            if let e = sleepEndEpoch {
+                let wakeDate = Date(timeIntervalSince1970: TimeInterval(e))
+                return Int64(Calendar.current.startOfDay(for: wakeDate).timeIntervalSince1970)
+            }
+            return nil
+        }()
+
+        // Determine today's effective sleep window in [minuteOfDay] & [epochSec]
+        var todaySleepStartMin: Int? = nil
+        var todaySleepEndMin: Int? = nil
+        var todaySleepStartEp: Int64? = nil
+        var todaySleepEndEp: Int64? = nil
+
+        if let s = sleepStartEpoch, let e = sleepEndEpoch, e > s {
+            if let dStart = resolvedDayStartEp {
+                let dEnd = dStart + 86_400
+                let clipStart = max(s, dStart)
+                let clipEnd = min(e, dEnd - 60)
+                if clipEnd > clipStart {
+                    let sMin = min(max(Int((clipStart - dStart) / 60), 0), 1434)
+                    let eMin = min(max(Int((clipEnd - dStart) / 60), sMin + 5), 1439)
+                    todaySleepStartMin = sMin
+                    todaySleepEndMin = eMin
+                    todaySleepStartEp = clipStart
+                    todaySleepEndEp = clipEnd
+                }
+            } else {
+                // Fallback when no epoch anchor exists: infer minute-of-day directly
+                let sMinRaw = minuteOfDay(epochSec: s)
+                let eMinRaw = minuteOfDay(epochSec: e)
+                let sMin = sMinRaw > eMinRaw ? 0 : sMinRaw
+                let eMin = max(eMinRaw, sMin + 5)
+                todaySleepStartMin = sMin
+                todaySleepEndMin = min(eMin, 1439)
+                todaySleepStartEp = s
+                todaySleepEndEp = e
+            }
+        } else if let asleep = asleepMinutes, asleep > 0 {
+            // Summary-only sleep (e.g. WHOOP CSV or legacy record with asleepMinutes but no timestamps)
+            let firstMorningAwake = stressSamples.first(where: { $0.minuteOfDay >= 270 && $0.minuteOfDay <= 660 })?.minuteOfDay
+            let estWake = min(max((firstMorningAwake.map { max($0 - 5, 240) }) ?? 450, 180), 660)
+            let estStart = max(0, estWake - min(asleep, estWake))
+            if estWake > estStart {
+                todaySleepStartMin = estStart
+                todaySleepEndMin = estWake
+                if let dStart = resolvedDayStartEp {
+                    todaySleepStartEp = dStart + Int64(estStart * 60)
+                    todaySleepEndEp = dStart + Int64(estWake * 60)
+                }
+            }
+        }
+
+        // Scale charge rate smoothly to true asleepMinutes (accounts cleanly for both pre-midnight sleep
+        // and awake interruptions inside the sleep window!)
+        let asleepRateMultiplier: Double = {
+            guard let sMin = todaySleepStartMin, let eMin = todaySleepEndMin, eMin > sMin,
+                  let asleep = asleepMinutes, asleep > 0 else { return 1.0 }
+            let todayWindowMin = Double(eMin - sMin)
+            return min(max(Double(asleep) / max(todayWindowMin, 30.0), 0.50), 1.65)
+        }()
+        let sleepChargePer5m = baseSleepChargePer5m * asleepRateMultiplier
+
+        // Build unified chronological timeline combining real HR/stress readings + smooth 15-min knots
+        // across any HR gap inside the real recorded sleep window (Apple Watch Low Power Mode!)
+        struct EnergyKnot {
+            let minuteOfDay: Int
+            let epochSec: Int64?
+            let measuredStress: Double?
+            let isSyntheticSleep: Bool
+        }
+
+        var byMinute: [Int: EnergyKnot] = [:]
+        let sortedReal = stressSamples.sorted { $0.minuteOfDay < $1.minuteOfDay }
+        for pt in sortedReal {
+            byMinute[pt.minuteOfDay] = EnergyKnot(
+                minuteOfDay: pt.minuteOfDay,
+                epochSec: pt.epochSec,
+                measuredStress: pt.value,
+                isSyntheticSleep: false
+            )
+        }
+
+        if let sMin = todaySleepStartMin, let eMin = todaySleepEndMin, eMin > sMin {
+            func hasRealNear(_ m: Int, tolerance: Int) -> Bool {
+                sortedReal.contains { abs($0.minuteOfDay - m) <= tolerance }
+            }
+            func epochForMinute(_ m: Int) -> Int64? {
+                if let dStart = resolvedDayStartEp { return dStart + Int64(m * 60) }
+                if let sEp = todaySleepStartEp { return sEp + Int64((m - sMin) * 60) }
+                return nil
+            }
+
+            // Sleep start anchor (only if no real reading already anchors the start of sleep within 10m)
+            if !hasRealNear(sMin, tolerance: 10) {
+                byMinute[sMin] = EnergyKnot(
+                    minuteOfDay: sMin,
+                    epochSec: todaySleepStartEp ?? epochForMinute(sMin),
+                    measuredStress: nil,
+                    isSyntheticSleep: true
+                )
+            }
+
+            // Intermediate 15-min knots across Low Power Mode HR silence inside real sleep
+            var m = sMin + 15
+            while m <= eMin - 10 {
+                if !hasRealNear(m, tolerance: 10) {
+                    byMinute[m] = EnergyKnot(
+                        minuteOfDay: m,
+                        epochSec: epochForMinute(m),
+                        measuredStress: nil,
+                        isSyntheticSleep: true
+                    )
+                }
+                m += 15
+            }
+
+            // Wake-up peak anchor (guarantees full recharge completes cleanly at wake time!)
+            if !hasRealNear(eMin, tolerance: 10) {
+                byMinute[eMin] = EnergyKnot(
+                    minuteOfDay: eMin,
+                    epochSec: todaySleepEndEp ?? epochForMinute(eMin),
+                    measuredStress: nil,
+                    isSyntheticSleep: true
+                )
+            }
+        }
+
+        let timeline = byMinute.keys.sorted().compactMap { byMinute[$0] }
+        guard !timeline.isEmpty else { return [] }
 
         var cur = min(max(startingEnergy, 5.0), 99.0)
         var result: [TimedBiometricPoint] = []
-        result.reserveCapacity(stressSamples.count)
+        result.reserveCapacity(timeline.count)
 
-        for (idx, pt) in stressSamples.enumerated() {
-            let dtMin: Double = idx == 0 ? 5.0 : Double(min(max(pt.minuteOfDay - stressSamples[idx - 1].minuteOfDay, 5), 45))
-            let steps = dtMin / 5.0
-
-            let isSleeping: Bool = {
-                if let ep = pt.epochSec, let s = sleepStartEpoch, let e = sleepEndEpoch {
-                    return ep >= s && ep <= e
-                }
-                return false
-            }()
-            let isWorkout: Bool = {
-                guard let ep = pt.epochSec else { return false }
-                return workoutSpans.contains { $0.contains(ep) }
-            }()
-
+        for (idx, ev) in timeline.enumerated() {
             if idx == 0 {
-                // First sample of the day preserves exact carried-over continuity!
-                result.append(TimedBiometricPoint(minuteOfDay: pt.minuteOfDay, value: round1(cur), epochSec: pt.epochSec))
+                // First point of the day preserves EXACT carried-over continuity from yesterday (zero jump!)
+                result.append(TimedBiometricPoint(minuteOfDay: ev.minuteOfDay, value: round1(cur), epochSec: ev.epochSec))
                 continue
             }
 
-            if isSleeping {
-                let effRate = pt.value > 22 ? sleepChargePer5m * 0.55 : sleepChargePer5m
+            let prev = timeline[idx - 1]
+            let rawDtMin = max(Double(ev.minuteOfDay - prev.minuteOfDay), 5.0)
+
+            let segmentIsSleeping: Bool = {
+                if let sMin = todaySleepStartMin, let eMin = todaySleepEndMin, eMin > sMin {
+                    let midMin = Double(prev.minuteOfDay + ev.minuteOfDay) / 2.0
+                    if midMin >= Double(sMin) && midMin <= Double(eMin) {
+                        return true
+                    }
+                }
+                if let ep = ev.epochSec, let s = sleepStartEpoch, let e = sleepEndEpoch {
+                    return ep >= s && ep <= e
+                }
+                return ev.isSyntheticSleep
+            }()
+
+            let isWorkout: Bool = {
+                guard !workoutSpans.isEmpty else { return false }
+                if let ep = ev.epochSec {
+                    if workoutSpans.contains(where: { $0.contains(ep) }) { return true }
+                    if let prevEp = prev.epochSec, prevEp < ep {
+                        return workoutSpans.contains { $0.lowerBound <= ep && $0.upperBound >= prevEp }
+                    }
+                }
+                return false
+            }()
+
+            if segmentIsSleeping {
+                // NEVER cap sleeping gaps to 45 min: integrate the TRUE real sleep duration!
+                let steps = rawDtMin / 5.0
+                let effRate = (ev.measuredStress ?? 8.0) > 22.0 ? sleepChargePer5m * 0.60 : sleepChargePer5m
                 if cur < maxSleepCeiling {
                     cur = min(maxSleepCeiling, cur + effRate * steps)
                 }
             } else if isWorkout {
-                let drain = (0.55 + (pt.value / 100.0) * 1.15) * steps
+                let dtMin = min(rawDtMin, 90.0)
+                let steps = dtMin / 5.0
+                let stressVal = ev.measuredStress ?? 55.0
+                let drain = (0.55 + (stressVal / 100.0) * 1.15) * steps
                 cur = max(5.0, cur - drain)
-            } else if pt.value <= 14.0 {
-                // Deep calm awake rest gently pauses drain / micro-recovers
-                cur = min(99.0, cur + 0.08 * steps)
             } else {
-                // Awake drain proportional to measured physiological stress
-                let drain = (0.06 + (pt.value / 100.0) * 0.72) * steps
-                cur = max(5.0, cur - drain)
+                // Cap unmeasured daytime gaps (e.g. watch on charger) so energy never cliff-drops
+                let dtMin = min(rawDtMin, 60.0)
+                let steps = dtMin / 5.0
+                let stressVal = ev.measuredStress ?? 22.0
+                if stressVal <= 14.0 {
+                    // Deep calm awake rest gently pauses drain / micro-recovers
+                    cur = min(99.0, cur + 0.08 * steps)
+                } else {
+                    // Awake drain proportional to measured physiological stress
+                    let drain = (0.06 + (stressVal / 100.0) * 0.72) * steps
+                    cur = max(5.0, cur - drain)
+                }
             }
-            result.append(TimedBiometricPoint(minuteOfDay: pt.minuteOfDay, value: round1(cur), epochSec: pt.epochSec))
+
+            result.append(TimedBiometricPoint(minuteOfDay: ev.minuteOfDay, value: round1(cur), epochSec: ev.epochSec))
         }
         return result
     }

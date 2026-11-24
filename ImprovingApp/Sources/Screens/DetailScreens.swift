@@ -1228,16 +1228,26 @@ struct EnergiaScreen: View {
         let stressSamples = store.stressSamplesToday
         let batteryFillColor: Color = !avail.hasEnergyData ? BevelColors.textMuted : (store.energyPercent >= 55 ? BevelColors.greenPrimary : BevelColors.amberStart)
 
-        let peakSample = energySamples.max(by: { $0.value < $1.value })
-        let startSample = energySamples.first
-        let endSample = energySamples.last
+        // Latest point achieving the daily peak (accurately marks wake-up peak when plateaued at ceiling)
+        let peakSample: TimedBiometricPoint? = energySamples.reduce(nil) { best, pt in
+            guard let b = best else { return pt }
+            return pt.value >= b.value ? pt : b
+        }
+        // Conservation-of-energy totals across the 24h timeline:
+        // captures full overnight sleep recharge (+ naps) even if energy dipped slightly before bedtime!
         let chargedPct: Int? = {
-            guard let pk = peakSample, let st = startSample else { return nil }
-            return max(Int((pk.value - st.value).rounded()), 0)
+            guard energySamples.count >= 2 else { return nil }
+            let gain = zip(energySamples, energySamples.dropFirst()).reduce(0.0) { acc, pair in
+                acc + max(pair.1.value - pair.0.value, 0.0)
+            }
+            return max(Int(gain.rounded()), 0)
         }()
         let drainedPct: Int? = {
-            guard let pk = peakSample, let en = endSample else { return nil }
-            return max(Int((pk.value - en.value).rounded()), 0)
+            guard energySamples.count >= 2 else { return nil }
+            let loss = zip(energySamples, energySamples.dropFirst()).reduce(0.0) { acc, pair in
+                acc + max(pair.0.value - pair.1.value, 0.0)
+            }
+            return max(Int(loss.rounded()), 0)
         }()
         let peakTimeLabel: String? = peakSample.map {
             String(format: "%02d:%02d", ($0.minuteOfDay / 60) % 24, $0.minuteOfDay % 60)
