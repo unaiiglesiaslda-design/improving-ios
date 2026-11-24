@@ -1021,4 +1021,81 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let healedPeak = try XCTUnwrap(healed.energySamples5m.map(\.value).max())
         XCTAssertGreaterThanOrEqual(healedPeak, 82.0)
     }
+
+    func testMasterShortcutsPayloadParsesAll18MetricsAndAutoDetectsRealHrExerciseBoutWithHrr() throws {
+        // Simulates the EXACT JSON emitted by the single unified `Sync Improving` shortcut (no invalid Workouts action!):
+        // Includes all 18 native Apple Shortcuts metrics + a real 30-min elevated-HR session (18:00-18:30) and 1-min cool-down (18:31).
+        let json = """
+        {
+          "generated_at": "24 nov 2026, 19:00",
+          "hr_values": "132\\n160\\n156\\n150\\n146\\n142\\n138\\n136\\n130\\n72\\n50",
+          "hr_dates": "24 nov 2026, 18:31\\n24 nov 2026, 18:30\\n24 nov 2026, 18:26\\n24 nov 2026, 18:22\\n24 nov 2026, 18:18\\n24 nov 2026, 18:14\\n24 nov 2026, 18:09\\n24 nov 2026, 18:04\\n24 nov 2026, 18:00\\n24 nov 2026, 12:00\\n24 nov 2026, 04:00",
+          "hrv_values": "64,5 ms",
+          "hrv_dates": "24 nov 2026, 04:30",
+          "rhr_values": "49,0",
+          "rhr_dates": "24 nov 2026, 06:00",
+          "resp_values": "14,8",
+          "resp_dates": "24 nov 2026, 04:00",
+          "spo2_values": "98 %",
+          "spo2_dates": "24 nov 2026, 04:15",
+          "temp_values": "36,4 °C",
+          "temp_dates": "24 nov 2026, 06:15",
+          "sleep_values": "Dormido (Profundo)\\nDormido (REM)\\nDormido (Esencial)",
+          "sleep_starts": "24 nov 2026, 00:30\\n24 nov 2026, 02:00\\n24 nov 2026, 03:45",
+          "sleep_ends": "24 nov 2026, 02:00\\n24 nov 2026, 03:45\\n24 nov 2026, 08:15",
+          "steps_values": "9.420 pasos",
+          "steps_dates": "24 nov 2026, 19:00",
+          "kcal_values": "610 kcal",
+          "kcal_dates": "24 nov 2026, 19:00",
+          "vo2_values": "46,2",
+          "vo2_dates": "24 nov 2026, 18:35",
+          "distance_values": "5,4 km",
+          "distance_dates": "24 nov 2026, 19:00",
+          "cycling_distance_values": "10,0 km",
+          "cycling_distance_dates": "24 nov 2026, 19:00",
+          "swimming_distance_values": "1000 m",
+          "swimming_distance_dates": "24 nov 2026, 19:00",
+          "flights_values": "10",
+          "flights_dates": "24 nov 2026, 19:00",
+          "weight_values": "71,5 kg",
+          "weight_dates": "24 nov 2026, 08:20",
+          "body_fat_values": "13,4 %",
+          "body_fat_dates": "24 nov 2026, 08:20",
+          "lean_mass_values": "61,9 kg",
+          "lean_mass_dates": "24 nov 2026, 08:20",
+          "glucose_values": "89 mg/dL",
+          "glucose_dates": "24 nov 2026, 08:25"
+        }
+        """
+        let res = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(json.data(using: .utf8)))
+        XCTAssertNil(res.errorMessage)
+        let day = try XCTUnwrap(res.days["2026-11-24"])
+
+        // All 18 metrics populated from real values!
+        XCTAssertEqual(day.hrvMs ?? 0, 64.5, accuracy: 0.2)
+        XCTAssertEqual(day.restingHrBpm ?? 0, 49.0, accuracy: 0.2)
+        XCTAssertEqual(day.respRateRpm ?? 0, 14.8, accuracy: 0.2)
+        XCTAssertEqual(day.spo2Percent ?? 0, 98.0, accuracy: 0.2)
+        XCTAssertEqual(day.wristTempAbsoluteC ?? 0, 36.4, accuracy: 0.2)
+        XCTAssertEqual(day.stepsCount, 9420)
+        XCTAssertEqual(day.activeKcal, 610)
+        XCTAssertEqual(day.vo2MaxMlKgMin ?? 0, 46.2, accuracy: 0.1)
+        // 5.4 + 10.0 + 1.0 (1000 m swim) = 16.4 km!
+        XCTAssertEqual(day.distanceKm ?? 0, 16.4, accuracy: 0.2)
+        // 10 flights * 3.05m = 30.5 m
+        XCTAssertEqual(day.elevationM ?? 0, 30.5, accuracy: 0.5)
+        XCTAssertEqual(day.bodyWeightKg ?? 0, 71.5, accuracy: 0.1)
+        XCTAssertEqual(day.bodyFatPct ?? 0, 13.4, accuracy: 0.1)
+        XCTAssertEqual(day.leanMassKg ?? 0, 61.9, accuracy: 0.1)
+        XCTAssertEqual(day.glucoseMgDl, 89)
+        XCTAssertGreaterThanOrEqual(day.sleepPct ?? 0, 88)
+
+        // Real 30-min elevated-HR workout bout (18:00-18:30) auto-detected + 1-min post-bout HRR (160 -> 132 = 28 ppm)!
+        let autoWk = try XCTUnwrap(day.workouts.first)
+        XCTAssertEqual(autoWk.durationMin, 30)
+        XCTAssertGreaterThanOrEqual(autoWk.avgHrBpm, 140)
+        XCTAssertEqual(autoWk.hrZoneMinutes6?.count, 6)
+        let hrr = try XCTUnwrap(day.hrRecoveryBpm)
+        XCTAssertEqual(hrr, 28.0, accuracy: 2.0)
+    }
 }

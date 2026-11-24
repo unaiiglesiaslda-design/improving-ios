@@ -89,11 +89,13 @@ final class ImprovingStore: ObservableObject {
     @Published var isAutoSyncing: Bool = false
     @Published var autoSyncStatusText: String = "Listo · Esperando Atajos o carpeta Improving"
     @Published var syncBannerState: SyncBannerState = .hidden
-    @Published var shortcutSyncName: String = "Sync Improving (Automático)"
+    @Published var shortcutSyncName: String = "Sync Improving"
     @Published var autoRunShortcutOnOpen: Bool = false
     private var processedAutoSyncSignatures: Set<String> = []
     private var lastShortcutTriggerAt: Date? = nil
     private var awaitingShortcutCallback: Bool = false
+    private var lastIngestedPayloadHash: Int? = nil
+    private var lastIngestedPayloadAt: Date? = nil
     private var syncBannerDismissTask: Task<Void, Never>? = nil
     private var shortcutTimeoutTask: Task<Void, Never>? = nil
     private var backgroundRecheckTask: Task<Void, Never>? = nil
@@ -1960,7 +1962,7 @@ final class ImprovingStore: ObservableObject {
 
     func updateShortcutSyncConfig(name: String, autoRunOnOpen: Bool) {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        shortcutSyncName = cleaned.isEmpty ? "Sync Improving (Automático)" : cleaned
+        shortcutSyncName = cleaned.isEmpty ? "Sync Improving" : cleaned
         autoRunShortcutOnOpen = autoRunOnOpen
         persistState()
     }
@@ -2312,8 +2314,14 @@ final class ImprovingStore: ObservableObject {
                 presentSyncBanner(.notice("Revisa nombre del atajo"), autoDismissAfter: 2.6)
                 return
             }
-            // from == "shortcut_ok": keep floating "Sincronizando…" bubble while parsing the newly written file!
+            // from == "shortcut_ok": check clipboard first (unified `Sync Improving` shortcut!) AND scan inbox folder!
             presentSyncBanner(.syncing("Sincronizando…"))
+            if let paste = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+               paste.hasPrefix("{"),
+               (paste.contains("hr_values") || paste.contains("generated_at") || paste.contains("steps_values") || paste.contains("sleep_starts")) {
+                ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
+                return
+            }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 280_000_000)
                 self?.attachDirectSyncFileWatchers()
@@ -2327,13 +2335,13 @@ final class ImprovingStore: ObservableObject {
             presentSyncBanner(.syncing("Sincronizando…"))
             let paste = UIPasteboard.general.string ?? ""
             if !paste.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ingestRawShortcutsPayload(paste, sourceLabel: "Atajos (Portapapeles)")
+                ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
             } else {
                 // Retry once after 350ms in case iOS foreground pasteboard permission sheet just finished
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(nanoseconds: 350_000_000)
                     let retryPaste = UIPasteboard.general.string ?? ""
-                    self?.ingestRawShortcutsPayload(retryPaste, sourceLabel: "Atajos (Portapapeles)")
+                    self?.ingestRawShortcutsPayload(retryPaste, sourceLabel: "Sync Improving")
                 }
             }
             return
@@ -2362,6 +2370,15 @@ final class ImprovingStore: ObservableObject {
             presentSyncBanner(.hidden)
             return
         }
+        // Dedupe back-to-back callback + clipboard URL delivery of the exact same payload within 4s
+        let payloadHash = trimmed.hashValue
+        if let prevHash = lastIngestedPayloadHash, let prevAt = lastIngestedPayloadAt,
+           prevHash == payloadHash, Date().timeIntervalSince(prevAt) < 4.0 {
+            presentSyncBanner(.synced("Sincronizado"), autoDismissAfter: 1.8)
+            return
+        }
+        lastIngestedPayloadHash = payloadHash
+        lastIngestedPayloadAt = Date()
         isAutoSyncing = true
         autoSyncStatusText = "Procesando \(sourceLabel)..."
         presentSyncBanner(.syncing("Sincronizando…"))
@@ -3096,7 +3113,14 @@ final class ImprovingStore: ObservableObject {
         if let cached = snap.sectionCoachingCache { sectionCoachingCache = cached }
         if let sigs = snap.processedAutoSyncSignatures { processedAutoSyncSignatures = Set(sigs) }
         if let status = snap.lastAutoSyncStatus, !status.isEmpty { autoSyncStatusText = status }
-        if let sName = snap.shortcutSyncName, !sName.isEmpty { shortcutSyncName = sName }
+        if let sName = snap.shortcutSyncName, !sName.isEmpty {
+            // Migrate legacy two-shortcut names cleanly to the single unified `Sync Improving` master shortcut
+            if sName == "Sync Improving (Automático)" || sName == "Sync Improving (1 Toque)" {
+                shortcutSyncName = "Sync Improving"
+            } else {
+                shortcutSyncName = sName
+            }
+        }
         if let autoRun = snap.autoRunShortcutOnOpen { autoRunShortcutOnOpen = autoRun }
         if let routines = snap.workoutRoutines { workoutRoutines = routines }
         if let logs = snap.strengthLogs { strengthLogs = logs }

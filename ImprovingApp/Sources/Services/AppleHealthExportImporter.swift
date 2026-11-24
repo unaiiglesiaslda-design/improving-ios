@@ -622,9 +622,33 @@ enum AppleHealthExportImporter {
 
             // 6. Accurate 6-Zone HR (Z0..Z5) & Per-Workout Real HR/Zone/HRR Enrichment + Bevel Strain
             let rhrForZones = rhrBpm ?? rhrBase.mean
+
+            // When syncing via native Apple Shortcuts (which has no built-in "Find Workouts" action),
+            // detect genuine sustained elevated-HR exercise bouts strictly from real intraday HR samples!
+            let effectiveWorkoutsRaw: [EffortEventItem]
+            let effectiveWorkoutSpans: [ClosedRange<Int64>]
+            if raw.workouts.isEmpty {
+                let detected = detectElevatedHrWorkoutsFromRealSamples(
+                    dateIso: dateIso,
+                    hrSamples: raw.hrSamples,
+                    rhrRef: rhrForZones,
+                    maxHr: maxHr,
+                    profile: profile,
+                    sleepStartEpoch: sleepSession?.startEpochSec,
+                    sleepEndEpoch: sleepSession?.endEpochSec,
+                    dailyActiveKcal: raw.hasActiveKcal ? raw.activeKcalSum : nil,
+                    dailyDistanceKm: raw.hasDistanceKm ? raw.distanceKmSum : nil
+                )
+                effectiveWorkoutsRaw = detected.workouts
+                effectiveWorkoutSpans = detected.spans
+            } else {
+                effectiveWorkoutsRaw = raw.workouts
+                effectiveWorkoutSpans = raw.workoutSpans
+            }
+
             let zones6 = computeHrZoneMinutes6(
                 samples: raw.hrSamples.map { ($0.0, $0.2) },
-                workoutSpans: raw.workoutSpans,
+                workoutSpans: effectiveWorkoutSpans,
                 maxHr: maxHr,
                 rhr: rhrForZones
             )
@@ -633,13 +657,13 @@ enum AppleHealthExportImporter {
 
             // Enrich workouts using real intraday HR samples (avgHrBpm, per-workout Z0..Z5, and 1-min post-workout HRR!)
             var inferredHrrVals: [Double] = []
-            let outdoorDistanceWorkouts = raw.workouts.filter { w in
+            let outdoorDistanceWorkouts = effectiveWorkoutsRaw.filter { w in
                 let l = w.title.lowercased()
-                return l.contains("bici") || l.contains("carrera") || l.contains("caminat") || l.contains("run") || l.contains("cycl") || l.contains("walk")
+                return l.contains("bici") || l.contains("carrera") || l.contains("caminat") || l.contains("run") || l.contains("cycl") || l.contains("walk") || l.contains("cardio")
             }
-            let enrichedWorkouts: [EffortEventItem] = raw.workouts.enumerated().map { idx, w in
+            let enrichedWorkouts: [EffortEventItem] = effectiveWorkoutsRaw.enumerated().map { idx, w in
                 var item = w
-                let span: ClosedRange<Int64>? = idx < raw.workoutSpans.count ? raw.workoutSpans[idx] : nil
+                let span: ClosedRange<Int64>? = idx < effectiveWorkoutSpans.count ? effectiveWorkoutSpans[idx] : nil
                 if let sp = span {
                     let inSpanSamples = raw.hrSamples.filter { sp.contains($0.0) }
                     if item.avgHrBpm == 0 && !inSpanSamples.isEmpty {
@@ -750,7 +774,7 @@ enum AppleHealthExportImporter {
                 sleepPct: sleepPct,
                 sleepStartEpoch: sleepSession?.startEpochSec,
                 sleepEndEpoch: sleepSession?.endEpochSec,
-                workoutSpans: raw.workoutSpans,
+                workoutSpans: effectiveWorkoutSpans,
                 asleepMinutes: asleepOrNil,
                 dayStartEpoch: dayStartEp
             )
@@ -766,7 +790,7 @@ enum AppleHealthExportImporter {
             let stressScore: Int? = stress5m.isEmpty ? nil : Int((stress5m.map(\.value).reduce(0, +) / Double(stress5m.count)).rounded())
             let energyPct: Int? = energy5m.last.map { Int($0.value.rounded()) }
 
-            totalWorkouts += raw.workouts.count
+            totalWorkouts += enrichedWorkouts.count
 
             summaries[dateIso] = RealBiometricDaySummary(
                 dateIso: dateIso,
@@ -1128,6 +1152,122 @@ enum AppleHealthExportImporter {
         let d = Date(timeIntervalSince1970: TimeInterval(epochSec))
         let comps = Calendar.current.dateComponents([.hour, .minute], from: d)
         return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+    }
+
+    /// Detects genuine sustained high-HR exercise bouts strictly from real intraday Apple Watch HR samples
+    /// when `HKWorkout` metadata wasn't exported (e.g. native Apple Shortcuts sync). Never fabricates workouts on rest days!
+    private static func detectElevatedHrWorkoutsFromRealSamples(
+        dateIso: String,
+        hrSamples: [(Int64, Int, Double)],
+        rhrRef: Double,
+        maxHr: Double,
+        profile: UserPhysiologyProfile,
+        sleepStartEpoch: Int64?,
+        sleepEndEpoch: Int64?,
+        dailyActiveKcal: Double?,
+        dailyDistanceKm: Double?
+    ) -> (workouts: [EffortEventItem], spans: [ClosedRange<Int64>]) {
+        guard hrSamples.count >= 6 else { return ([], []) }
+
+        let elevatedFloor = max(rhrRef + 32.0, 105.0)
+        let meanFloor = max(rhrRef + 38.0, 110.0)
+        let awakeElevated = hrSamples
+            .filter { sample in
+                if let s = sleepStartEpoch, let e = sleepEndEpoch, sample.0 >= s && sample.0 <= e {
+                    return false
+                }
+                return sample.2 >= elevatedFloor
+            }
+            .sorted { $0.0 < $1.0 }
+
+        guard awakeElevated.count >= 6 else { return ([], []) }
+
+        // Group consecutive elevated-HR readings separated by <= 8 minutes
+        var clusters: [[(Int64, Int, Double)]] = []
+        var current: [(Int64, Int, Double)] = [awakeElevated[0]]
+        for s in awakeElevated.dropFirst() {
+            if let prev = current.last, (s.0 - prev.0) <= 8 * 60 {
+                current.append(s)
+            } else {
+                clusters.append(current)
+                current = [s]
+            }
+        }
+        clusters.append(current)
+
+        var workouts: [EffortEventItem] = []
+        var spans: [ClosedRange<Int64>] = []
+        let age = profile.effectiveAgeYears
+        let weight = profile.weightKg
+
+        for (idx, rawCluster) in clusters.enumerated() {
+            // Trim a sharp post-effort cool-down tail (>= 15 bpm drop within 45..150s at the end of a bout)
+            // so workout end aligns with active peak effort and post-workout 1-min HRR captures the true recovery drop!
+            var cluster = rawCluster
+            while cluster.count >= 7,
+                  let tail = cluster.last,
+                  let beforeTail = cluster.dropLast().last,
+                  (tail.0 - beforeTail.0) >= 45 && (tail.0 - beforeTail.0) <= 150,
+                  beforeTail.2 >= 120.0,
+                  (beforeTail.2 - tail.2) >= 15.0 {
+                cluster.removeLast()
+            }
+            guard cluster.count >= 6,
+                  let first = cluster.first,
+                  let last = cluster.last else { continue }
+            let durSec = last.0 - first.0
+            let durMin = Int((Double(durSec) / 60.0).rounded())
+            guard durMin >= 12 && durMin <= 360 else { continue }
+
+            let avgHr = cluster.map(\.2).reduce(0, +) / Double(cluster.count)
+            guard avgHr >= meanFloor else { continue }
+
+            let avgHrInt = Int(avgHr.rounded())
+            // Physiological Keytel kcal estimate from real HR/duration/weight/age, bounded by measured daily active kcal
+            let kcalPerMin: Double = {
+                if profile.sex == .female {
+                    return max((-20.4022 + 0.4472 * avgHr - 0.1263 * weight + 0.074 * age) / 4.184, 3.0)
+                }
+                return max((-55.0969 + 0.6309 * avgHr + 0.1988 * weight + 0.2017 * age) / 4.184, 3.5)
+            }()
+            var estKcal = Int((kcalPerMin * Double(durMin)).rounded())
+            if let dayKcal = dailyActiveKcal, dayKcal > 20 {
+                estKcal = min(estKcal, max(Int((dayKcal * 0.92).rounded()), 30))
+            }
+
+            let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+                durationMin: durMin,
+                kcal: estKcal,
+                avgHrBpm: avgHrInt,
+                rhrBpm: rhrRef,
+                maxHrBpm: maxHr,
+                banisterB: profile.sex.banisterB
+            )
+            let sTime = String(format: "%02d:%02d", (first.1 / 60) % 24, first.1 % 60)
+            let eTime = String(format: "%02d:%02d", (last.1 / 60) % 24, last.1 % 60)
+            let title: String = {
+                if let d = dailyDistanceKm, d >= 3.5 && avgHr >= 134 { return "Carrera / Cardio" }
+                return "Sesión activa (FC)"
+            }()
+            let span = first.0...max(last.0, first.0 + 60)
+            spans.append(span)
+            workouts.append(
+                EffortEventItem(
+                    id: "hr_auto_\(dateIso)_\(idx)",
+                    title: title,
+                    timeRange: "\(sTime) - \(eTime)",
+                    durationMin: durMin,
+                    avgHrBpm: avgHrInt,
+                    strainScore: ws.strain21,
+                    strainPct: ws.strainPct,
+                    categoryLabel: "Cardio",
+                    kcal: estKcal,
+                    dateIso: dateIso,
+                    startEpochSec: first.0
+                )
+            )
+        }
+        return (workouts, spans)
     }
 
     // MARK: - Fault-Tolerant Zero-Abort Streaming XML Scanner (Guarantees 100% HRV & Workout Extraction!)

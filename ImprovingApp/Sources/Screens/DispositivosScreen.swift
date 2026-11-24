@@ -12,7 +12,7 @@ struct DispositivosScreen: View {
     @State private var copiedUrlToast = false
     @State private var apiKeyDraft: String = ""
     @State private var selectedModelDraft: String = "gemini-2.5-flash"
-    @State private var shortcutNameDraft: String = "Sync Improving (Automático)"
+    @State private var shortcutNameDraft: String = "Sync Improving"
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
     @State private var aiTestResult: (ok: Bool, text: String)? = nil
@@ -260,7 +260,7 @@ struct DispositivosScreen: View {
                             Text("Nombre exacto de tu Atajo en iOS")
                                 .font(ImprovingFont.caption(11))
                                 .foregroundColor(BevelColors.textSecondary)
-                            TextField("Sync Improving (Automático)", text: $shortcutNameDraft)
+                            TextField("Sync Improving", text: $shortcutNameDraft)
                                 .font(ImprovingFont.body(13))
                                 .foregroundColor(BevelColors.textPrimary)
                                 .padding(.horizontal, 11)
@@ -734,12 +734,12 @@ private struct ShortcutsAutomationGuideSheet: View {
 
                 guideCard(
                     step: "1",
-                    title: "Configuración clave para datos AL INSTANTE",
+                    title: "Un único atajo maestro: «Sync Improving»",
                     lines: [
-                        "En CADA acción «Buscar muestras de Salud» activa: Ordenar por → Fecha de inicio → «Lo más reciente primero». Si lo dejas en orden antiguo, cuando hay miles de muestras se cortan las lecturas de hoy.",
-                        "Usa 2 días en Frecuencia cardíaca (suficiente para hoy + anoche y 3× más rápido) y activa «Agrupar por: Día» en Pasos, Energía activa, Distancia y Pisos subidos.",
-                        "Si usas «Guardar archivo» en En mi iPhone / Improving / health_sync.json, activa «Sobrescribir si el archivo existe» y desactiva «Preguntar dónde guardar».",
-                        "Añade también: VFC (14 d), FC en reposo (14 d), Sueño (4 d), FR, SpO₂, VO₂ máx. (90 d) y Entrenamientos (30 d)."
+                        "Elimina cualquier atajo anterior e importa únicamente el atajo unificado «Sync Improving».",
+                        "Recopila en 1 toque las 18 métricas nativas de Apple Salud: FC en vivo (3 d, lo más reciente primero), VFC (30 d), FC en reposo (30 d), Sueño por fases (14 d), FR, SpO₂, Temperatura, Pasos (60 d), Calorías activas (60 d), VO₂ máx. (180 d), Distancia a pie/bici/natación (60 d), Pisos/desnivel (60 d), Peso, Grasa corporal, Masa magra y Glucosa.",
+                        "Los entrenamientos de cardio/esfuerzo y la Recuperación de FC (HRR) se detectan automáticamente desde tus lecturas reales de FC sin necesitar acciones incompatibles.",
+                        "Consejo: en Ajustes del iPhone → Improving → Pegar desde otras apps → elige «Permitir» para que se actualice al instante sin preguntar."
                     ]
                 )
 

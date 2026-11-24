@@ -33,10 +33,18 @@ struct ShortcutsSyncEnvelope: Codable {
     var distanceDates: [String]? = nil
     var cyclingDistanceValues: [String]? = nil
     var cyclingDistanceDates: [String]? = nil
+    var swimmingDistanceValues: [String]? = nil
+    var swimmingDistanceDates: [String]? = nil
     var flightsValues: [String]? = nil
     var flightsDates: [String]? = nil
     var weightValues: [String]? = nil
     var weightDates: [String]? = nil
+    var bodyFatValues: [String]? = nil
+    var bodyFatDates: [String]? = nil
+    var leanMassValues: [String]? = nil
+    var leanMassDates: [String]? = nil
+    var glucoseValues: [String]? = nil
+    var glucoseDates: [String]? = nil
     var sleepValues: [String]? = nil
     var sleepStarts: [String]? = nil
     var sleepEnds: [String]? = nil
@@ -141,8 +149,8 @@ enum ShortcutsHealthSyncImporter {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let mtimeMs = Int64((((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000.0).rounded())
         let sz = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        // v9 prefix ensures instant re-parse with Low Power Mode sleep recharge & recovery resilience
-        return "v9#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
+        // v10 prefix ensures instant re-parse with unified 18-metric shortcut & HR exercise bout detection
+        return "v10#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
     }
 
     static func fileModificationDate(for url: URL) -> Date? {
@@ -272,8 +280,12 @@ enum ShortcutsHealthSyncImporter {
         ingestParallelSeries(kind: .hrr, values: env.hrrValues, dates: env.hrrDates, into: &days)
         ingestParallelSeries(kind: .distanceKm, values: env.distanceValues, dates: env.distanceDates, into: &days)
         ingestParallelSeries(kind: .distanceKm, values: env.cyclingDistanceValues, dates: env.cyclingDistanceDates, into: &days)
+        ingestParallelSeries(kind: .swimmingDistanceKm, values: env.swimmingDistanceValues, dates: env.swimmingDistanceDates, into: &days)
         ingestParallelSeries(kind: .flights, values: env.flightsValues, dates: env.flightsDates, into: &days)
         ingestParallelSeries(kind: .weight, values: env.weightValues, dates: env.weightDates, into: &days)
+        ingestParallelSeries(kind: .bodyFat, values: env.bodyFatValues, dates: env.bodyFatDates, into: &days)
+        ingestParallelSeries(kind: .leanMass, values: env.leanMassValues, dates: env.leanMassDates, into: &days)
+        ingestParallelSeries(kind: .glucose, values: env.glucoseValues, dates: env.glucoseDates, into: &days)
         ingestParallelSleep(values: env.sleepValues, starts: env.sleepStarts, ends: env.sleepEnds, sourceName: env.source, into: &days)
         ingestParallelWorkouts(
             names: env.workoutNames,
@@ -316,7 +328,8 @@ enum ShortcutsHealthSyncImporter {
         let lists: [[String]?] = [
             e.hrValues, e.hrvValues, e.rhrValues, e.respValues, e.spo2Values,
             e.tempValues, e.stepsValues, e.kcalValues, e.vo2Values, e.hrrValues,
-            e.distanceValues, e.cyclingDistanceValues, e.flightsValues, e.weightValues,
+            e.distanceValues, e.cyclingDistanceValues, e.swimmingDistanceValues,
+            e.flightsValues, e.weightValues, e.bodyFatValues, e.leanMassValues, e.glucoseValues,
             e.sleepValues, e.workoutNames, e.workoutStarts, e.workoutLines
         ]
         if lists.contains(where: { !($0?.isEmpty ?? true) }) { return true }
@@ -326,8 +339,8 @@ enum ShortcutsHealthSyncImporter {
     // MARK: - Metric Kind Classification (Spanish & English)
 
     private enum SyncMetricKind {
-        case hr, hrv, hrvRmssd, rhr, resp, spo2, temp, steps, kcal, vo2, hrr, weight, bodyFat, leanMass, daylight, audio
-        case distanceKm, flights, elevationM, powerW, cadenceRpm
+        case hr, hrv, hrvRmssd, rhr, resp, spo2, temp, steps, kcal, vo2, hrr, weight, bodyFat, leanMass, glucose, daylight, audio
+        case distanceKm, swimmingDistanceKm, flights, elevationM, powerW, cadenceRpm
     }
 
     private static func classifyMetricKey(_ rawKey: String) -> SyncMetricKind? {
@@ -359,6 +372,8 @@ enum ShortcutsHealthSyncImporter {
         if k == "weight" || k == "peso" || k.contains("body mass") || k.contains("masa corporal") { return .weight }
         if k.contains("body fat") || k.contains("grasa") { return .bodyFat }
         if k.contains("lean") || k.contains("masa magra") { return .leanMass }
+        if k.contains("glucos") || k.contains("glucemi") { return .glucose }
+        if k.contains("swim") || k.contains("natacion") { return .swimmingDistanceKm }
         if k.contains("daylight") || k.contains("luz natural") || k.contains("luz solar") { return .daylight }
         if k.contains("audio") || k.contains("ruido") || k.contains("noise") { return .audio }
         return nil
@@ -502,11 +517,15 @@ enum ShortcutsHealthSyncImporter {
             ("vo2", .vo2),
             ("hrr", .hrr), ("hr_recovery", .hrr),
             ("distance", .distanceKm), ("walk_distance", .distanceKm), ("cycling_distance", .distanceKm), ("distancia", .distanceKm),
+            ("swimming_distance", .swimmingDistanceKm), ("swim_distance", .swimmingDistanceKm),
             ("flights", .flights), ("pisos", .flights),
             ("elevation", .elevationM), ("desnivel", .elevationM),
             ("power", .powerW), ("potencia", .powerW),
             ("cadence", .cadenceRpm), ("cadencia", .cadenceRpm),
-            ("weight", .weight), ("peso", .weight)
+            ("weight", .weight), ("peso", .weight),
+            ("body_fat", .bodyFat), ("bodyfat", .bodyFat), ("grasa", .bodyFat),
+            ("lean_mass", .leanMass), ("lean_body_mass", .leanMass),
+            ("glucose", .glucose), ("blood_glucose", .glucose), ("glucosa", .glucose)
         ]
         for (p, kind) in parallelPrefixes {
             let vList = extractStringList(dict["\(p)_values"] ?? dict["\(p)Values"])
@@ -945,6 +964,10 @@ enum ShortcutsHealthSyncImporter {
         case .leanMass:
             let kg = lowUnit.contains("lb") ? num * 0.453592 : num
             if (20.0...180.0).contains(kg) { day.leanMassValues.append(kg) }
+        case .glucose:
+            // Supports both mg/dL (40..450) and mmol/L (2.0..25.0)
+            let mgdl = (lowUnit.contains("mmol") || (num >= 2.0 && num <= 25.0)) ? num * 18.0182 : num
+            if (35.0...480.0).contains(mgdl) { day.glucoseMgDlValues.append(mgdl) }
         case .daylight:
             if (0.0...1440.0).contains(num) {
                 day.daylightMinSum += num
@@ -955,6 +978,18 @@ enum ShortcutsHealthSyncImporter {
         case .distanceKm:
             let km = (lowUnit.contains("mi") ? num * 1.60934 : ((lowUnit.contains(" m") || lowUnit == "m") && !lowUnit.contains("km") ? num / 1000.0 : num))
             if (0.0...300.0).contains(km) {
+                day.distanceKmSum += km
+                day.hasDistanceKm = true
+            }
+        case .swimmingDistanceKm:
+            // Apple Health reports Swimming Distance in meters by default (e.g. 1500 m -> 1.5 km)
+            let km: Double = {
+                if lowUnit.contains("km") { return num }
+                if lowUnit.contains("yd") { return num * 0.0009144 }
+                if lowUnit.contains("mi") { return num * 1.60934 }
+                return num > 25.0 ? (num / 1000.0) : num
+            }()
+            if (0.0...100.0).contains(km) {
                 day.distanceKmSum += km
                 day.hasDistanceKm = true
             }
