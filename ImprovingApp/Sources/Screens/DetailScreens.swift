@@ -44,6 +44,169 @@ struct DetailSheetHeader: View {
     }
 }
 
+// MARK: - Metric Methodology Guide Sheet (P1 — Real info.circle Explanation per Pillar)
+
+enum PillarInfoKind: String, Identifiable {
+    case strain
+    case recovery
+    case sleep
+    case stress
+    case energy
+    case biologicalAge
+
+    var id: String { rawValue }
+
+    var navTitle: String {
+        switch self {
+        case .strain: return "Guía de Esfuerzo"
+        case .recovery: return "Guía de Recuperación"
+        case .sleep: return "Guía de Sueño"
+        case .stress: return "Guía de Estrés"
+        case .energy: return "Guía de Energía"
+        case .biologicalAge: return "Edad Biológica"
+        }
+    }
+
+    var headline: String {
+        switch self {
+        case .strain: return "Cómo se calcula tu Esfuerzo (0–100% y Strain 0–21)"
+        case .recovery: return "Cómo se calcula tu Recuperación autonómica"
+        case .sleep: return "Cómo se calcula tu Puntuación del Sueño"
+        case .stress: return "Cómo medimos tu Estrés fisiológico"
+        case .energy: return "Cómo funciona tu Batería Corporal"
+        case .biologicalAge: return "Cómo estimamos tu Edad Biológica"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .strain: return BevelColors.amberStart
+        case .recovery: return BevelColors.greenPrimary
+        case .sleep: return BevelColors.periwinkleStart
+        case .stress: return BevelColors.tealLow
+        case .energy: return BevelColors.limeStart
+        case .biologicalAge: return BevelColors.bioTeal
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .strain:
+            return "Evalúa la carga cardiovascular y muscular acumulada en el día usando un modelo logarítmico tipo Banister TRIMP calibrado a tu FC máxima (fórmula de Tanaka), zonas cardíacas, calorías activas y sesiones registradas."
+        case .recovery:
+            return "Mide cuán preparado está tu sistema nervioso para asimilar carga comparando tu VFC nocturna (RMSSD/SDNN) y FC en reposo frente a tu propia línea base móvil de 60 días, ajustado por frecuencia respiratoria, SpO₂ y temperatura."
+        case .sleep:
+            return "Combina tu duración neta frente a tu meta fisiológica personalizada, la proporción de fases reparadoras (Sueño profundo y REM), la eficiencia en cama, la continuidad y el descenso nocturno de la frecuencia cardíaca."
+        case .stress:
+            return "Analiza tus muestras intradía de pulso y VFC en bloques de 5 minutos para estimar la activación del sistema nervioso simpático (0–34 bajo, 35–64 moderado, 65–100 alto), diferenciando descanso y carga."
+        case .energy:
+            return "Integra una curva continua de 24 horas entre días: se recarga durante el sueño reparador (incluso si el Apple Watch está en modo ahorro) y se descarga en función del estrés sostenido, el esfuerzo y los entrenamientos."
+        case .biologicalAge:
+            return "Compara tu media real de 30 días en FC en reposo, VFC, duración del sueño, pasos diarios, VO₂ máx. y composición corporal frente a referencias fisiológicas ajustadas a tu edad cronológica y sexo."
+        }
+    }
+
+    var bullets: [(icon: String, title: String, detail: String)] {
+        switch self {
+        case .strain:
+            return [
+                ("target", "Zona óptima dinámica", "El rango objetivo cambia cada mañana según tu Recuperación para evitar sobrecargas."),
+                ("heart.fill", "Zonas Z1–Z5", "Los minutos en zonas altas (Z4–Z5) suman exponencialmente más carga que actividad ligera."),
+                ("dumbbell.fill", "Fuerza + Cardio", "Combina sesiones de gimnasio, volumen en kg y carga cardiovascular.")
+            ]
+        case .recovery:
+            return [
+                ("waveform.path.ecg", "Línea base personal (60 d)", "No te compara con promedios genéricos sino contra tus propias noches recientes."),
+                ("checkmark.seal.fill", "Escala semafórica", "Verde (67–100%) listo para exigirte · Ámbar (34–66%) entreno moderado · Rojo (<34%) prioriza descanso."),
+                ("applewatch", "Resiliencia en modo ahorro", "Si faltan sensores puntuales, recalcula con las señales reales disponibles sin inventar datos.")
+            ]
+        case .sleep:
+            return [
+                ("bed.double.fill", "Sueño neto vs en cama", "Solo cuenta el tiempo realmente dormido; los despertares reducen la eficiencia."),
+                ("moon.stars.fill", "Fases reparadoras", "Profundo repara tejido muscular y sistema inmune; REM consolida memoria y foco."),
+                ("alarm.fill", "Deuda de sueño", "Suma las horas faltantes para recomendarte tu hora óptima de acostarte hoy.")
+            ]
+        case .stress:
+            return [
+                ("waveform.path", "Resolución cada 5 min", "Detecta picos de activación por reuniones, cafeína, digestiones pesadas o entrenos."),
+                ("moon.zzz.fill", "Estrés nocturno", "Un estrés bajo durante el sueño (<18) acelera la recarga de tu Batería Corporal."),
+                ("lungs.fill", "Nota fisiológica", "El estrés fisiológico también sube al entrenar o comer copiosamente; no siempre es estrés mental.")
+            ]
+        case .energy:
+            return [
+                ("battery.100percent.bolt", "Continuidad entre días", "Tu batería a las 00:00 parte exactamente del nivel con el que cerraste ayer."),
+                ("arrow.up.circle.fill", "Recarga nocturna", "Un sueño eficiente con buena recuperación puede sumar entre +35% y +65% de carga."),
+                ("flame.fill", "Descarga activa", "Entrenamientos intensos y picos prolongados de estrés consumen reservas más rápido.")
+            ]
+        case .biologicalAge:
+            return [
+                ("heart.circle.fill", "Marcadores clave", "VO₂ máx., FC en reposo y VFC son los predictores fisiológicos con mayor peso."),
+                ("scalemass.fill", "Actualización viva", "Mejora progresivamente al sostener 30+ días de buen sueño, pasos y carga cardiovascular."),
+                ("cross.case.fill", "Complemento clínico", "Combínalo con tus analíticas de sangre en Biología para una visión completa.")
+            ]
+        }
+    }
+}
+
+struct MetricMethodologyInfoSheet: View {
+    let kind: PillarInfoKind
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(kind.headline)
+                                .font(ImprovingFont.sectionTitle(18))
+                                .foregroundColor(BevelColors.textPrimary)
+                            Text(kind.summary)
+                                .font(ImprovingFont.body(14))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(16)
+                    }
+
+                    ForEach(Array(kind.bullets.enumerated()), id: \.offset) { _, b in
+                        BevelCard(cornerRadius: 18) {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: b.icon)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(kind.accent)
+                                    .frame(width: 34, height: 34)
+                                    .background(Circle().fill(kind.accent.opacity(0.15)))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(b.title)
+                                        .font(ImprovingFont.cardTitle(14.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text(b.detail)
+                                        .font(ImprovingFont.body(13))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(14)
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle(kind.navTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cerrar", action: onClose)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
 // MARK: - 1. Esfuerzo Detail Screen
 
 struct EsfuerzoScreen: View {
@@ -53,6 +216,7 @@ struct EsfuerzoScreen: View {
     var onOpenWorkout: ((EffortEventItem) -> Void)? = nil
 
     @State private var showShareSheet: Bool = false
+    @State private var showInfoSheet: Bool = false
 
     var body: some View {
         let avail = store.dataAvailability
@@ -75,7 +239,7 @@ struct EsfuerzoScreen: View {
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
                     canGoNextDay: store.dayOffset > 0,
                     onRightPrimary: { showShareSheet = true },
-                    onRightSecondary: { showShareSheet = true }
+                    onRightSecondary: { showInfoSheet = true }
                 ) {
                     BevelRecessedRingGauge(
                         progress: Double(store.strainPercent) / 100.0,
@@ -124,12 +288,13 @@ struct EsfuerzoScreen: View {
                                     Button {
                                         onOpenWorkout?(w)
                                     } label: {
+                                        let st = WorkoutSportStyle.resolve(title: w.title, category: w.categoryLabel)
                                         HStack(spacing: 12) {
-                                            Image(systemName: w.categoryLabel == "Fuerza" ? "dumbbell.fill" : "figure.run")
+                                            Image(systemName: st.icon)
                                                 .font(.system(size: 16, weight: .bold))
-                                                .foregroundColor(BevelColors.amberStart)
+                                                .foregroundColor(st.fg)
                                                 .frame(width: 40, height: 40)
-                                                .background(Circle().fill(BevelColors.amberSoftBg))
+                                                .background(Circle().fill(st.bg))
                                             VStack(alignment: .leading, spacing: 2) {
                                                 Text(w.timeRange).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textMuted)
                                                 Text(w.title).font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
@@ -177,6 +342,9 @@ struct EsfuerzoScreen: View {
         .sheet(isPresented: $showShareSheet) {
             ShareSummaryCardSheet(store: store, kind: .strain, onClose: { showShareSheet = false })
         }
+        .sheet(isPresented: $showInfoSheet) {
+            MetricMethodologyInfoSheet(kind: .strain, onClose: { showInfoSheet = false })
+        }
     }
 }
 
@@ -190,6 +358,7 @@ struct RecuperacionScreen: View {
     var onOpenTrend: ((EffortTrendItem) -> Void)? = nil
 
     @State private var showShareSheet: Bool = false
+    @State private var showInfoSheet: Bool = false
 
     var body: some View {
         let avail = store.dataAvailability
@@ -206,7 +375,7 @@ struct RecuperacionScreen: View {
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
                     canGoNextDay: store.dayOffset > 0,
                     onRightPrimary: { showShareSheet = true },
-                    onRightSecondary: { showShareSheet = true }
+                    onRightSecondary: { showInfoSheet = true }
                 ) {
                     BevelRecessedRingGauge(
                         progress: Double(store.recoveryPercent) / 100.0,
@@ -306,6 +475,9 @@ struct RecuperacionScreen: View {
         .background(BevelColors.canvas)
         .sheet(isPresented: $showShareSheet) {
             ShareSummaryCardSheet(store: store, kind: .recovery, onClose: { showShareSheet = false })
+        }
+        .sheet(isPresented: $showInfoSheet) {
+            MetricMethodologyInfoSheet(kind: .recovery, onClose: { showInfoSheet = false })
         }
     }
 }
@@ -1212,6 +1384,7 @@ struct EstresScreen: View {
     var onOpenTrend: ((EffortTrendItem) -> Void)? = nil
 
     @State private var showShareSheet: Bool = false
+    @State private var showInfoSheet: Bool = false
 
     private func formatHM(_ mins: Int) -> String {
         String(format: "%d:%02d:00", mins / 60, mins % 60)
@@ -1244,7 +1417,7 @@ struct EstresScreen: View {
                     onNextDay: { if store.dayOffset > 0 { store.shiftDay(-1) } },
                     canGoNextDay: store.dayOffset > 0,
                     onRightPrimary: { showShareSheet = true },
-                    onRightSecondary: { showShareSheet = true }
+                    onRightSecondary: { showInfoSheet = true }
                 ) {
                     VStack(spacing: 10) {
                         StressRadialDial(score: store.displayStressScore, statusLabel: store.stressStatusLabel, size: 176, isHeroGauge: true, hasData: avail.hasStressData)
@@ -1335,6 +1508,9 @@ struct EstresScreen: View {
         .sheet(isPresented: $showShareSheet) {
             ShareSummaryCardSheet(store: store, kind: .stress, onClose: { showShareSheet = false })
         }
+        .sheet(isPresented: $showInfoSheet) {
+            MetricMethodologyInfoSheet(kind: .stress, onClose: { showInfoSheet = false })
+        }
     }
 
     private func stressZonePill(label: String, pct: Int, duration: String, color: Color) -> some View {
@@ -1382,6 +1558,7 @@ struct EnergiaScreen: View {
     let onOpenSleepSession: () -> Void
 
     @State private var showShareSheet: Bool = false
+    @State private var showInfoSheet: Bool = false
 
     var body: some View {
         let avail = store.dataAvailability
@@ -1427,7 +1604,7 @@ struct EnergiaScreen: View {
                     rightPrimaryIcon: "square.and.arrow.up",
                     onRightPrimary: { showShareSheet = true },
                     rightSecondaryIcon: "info.circle",
-                    onRightSecondary: { showShareSheet = true }
+                    onRightSecondary: { showInfoSheet = true }
                 ) {
                     VStack(spacing: 14) {
                         HStack(spacing: 4) {
@@ -1592,6 +1769,9 @@ struct EnergiaScreen: View {
         .background(BevelColors.canvas)
         .sheet(isPresented: $showShareSheet) {
             ShareSummaryCardSheet(store: store, kind: .energy, onClose: { showShareSheet = false })
+        }
+        .sheet(isPresented: $showInfoSheet) {
+            MetricMethodologyInfoSheet(kind: .energy, onClose: { showInfoSheet = false })
         }
     }
 }

@@ -4,8 +4,12 @@ struct HoyScreen: View {
     @ObservedObject var store: ImprovingStore
     let onNavigate: (OverlayRoute) -> Void
     let onSelectHealthMetric: (HealthMetricKind) -> Void
+    var onOpenWorkout: ((EffortEventItem) -> Void)? = nil
 
     @State private var showCalendarSheet: Bool = false
+    @State private var showShareDailySheet: Bool = false
+    @State private var showEditHomeSheet: Bool = false
+    @State private var editHomeFocusHealth: Bool = false
     @State private var deepPullOffset: CGFloat = 0
     @State private var deepPullTriggered: Bool = false
     @State private var lastDeepPullAt: Date = .distantPast
@@ -29,18 +33,22 @@ struct HoyScreen: View {
         let sleepHours = Double(store.currentDaySummary?.asleepMinutes ?? 0) / 60.0
         let sleepEval = WhoopPhysiologyEngine.evaluateVital(value: sleepHours, bandLow: sleepBand.low, bandHigh: sleepBand.high, higherIsBetter: true, hasData: avail.hasSleepData)
 
-        let vitalsList = [respEval, rhrEval, hrvEval, spo2Eval, tempEval, sleepEval]
-        let recordedVitals = vitalsList.filter { $0.severity != .noData }
+        let evalMap: [HealthMetricKind: VitalBandEvaluation] = [
+            .respiratoryRate: respEval,
+            .restingHeartRate: rhrEval,
+            .hrv: hrvEval,
+            .oxygenSaturation: spo2Eval,
+            .wristTemperature: tempEval,
+            .sleepDuration: sleepEval
+        ]
+        let visibleHealthKinds = HealthMetricKind.allCases.filter { store.homeLayout.isHealthMetricVisible($0) }
+        let recordedVitals = visibleHealthKinds.compactMap { evalMap[$0] }.filter { $0.severity != .noData }
         let outOfRangeCount = recordedVitals.filter { $0.severity == .borderlineWarning || $0.severity == .alertOutOfRange }.count
 
-        let cardioWindow = store.trailingCalendarSummaries(days: 7)
-        let cardioSeries: [Double?] = cardioWindow.map { item in
-            guard let s = item.summary?.strainPct else { return nil }
-            return AppleHealthExportImporter.round1(Double(s) * 0.45)
-        }
-        let realCardioVals = cardioSeries.compactMap { $0 }
-        let latestCardioVal = realCardioVals.last
-
+        // P4: Exact EWMA Cardio Training Load unified 100% with FitnessScreen!
+        let cardioAnalysis = store.trainingLoadAnalysis(tab: .cardio, spanDays: 14, windowPageOffset: 0)
+        let cardioSeries: [Double?] = cardioAnalysis.points.map { $0.load }
+        let weeklySummary = store.computeWeeklyReview()
         let initials = store.userProfile.initials
 
         ScrollView {
@@ -80,7 +88,7 @@ struct HoyScreen: View {
                     .opacity(Double(min(progress * 1.4, 1.0)))
                 }
 
-                // 1. Top Bar with Dropdown Calendar Picker + < Date > Navigation Arrows
+                // 1. Top Bar with Dropdown Calendar Picker + < Date > + Real Daily Share Card & Profile Avatar (P1!)
                 HStack(spacing: 8) {
                     Button { showCalendarSheet = true } label: {
                         Image(systemName: "calendar")
@@ -137,7 +145,10 @@ struct HoyScreen: View {
                     Spacer(minLength: 4)
 
                     HStack(spacing: 8) {
-                        Button { onNavigate(.dispositivos) } label: {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            showShareDailySheet = true
+                        } label: {
                             Image(systemName: "square.and.arrow.up")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(BevelColors.textPrimary)
@@ -187,76 +198,184 @@ struct HoyScreen: View {
                     }
                 }
 
-                // 2. Hero Card: 3 Recessed Rings + Vertical Dividers + Coaching
-                BevelCard(cornerRadius: 24) {
-                    VStack(spacing: 0) {
-                        HStack(alignment: .top, spacing: 0) {
-                            Button { onNavigate(.esfuerzo) } label: {
-                                BevelRecessedRingGauge(
-                                    progress: Double(store.strainPercent) / 100.0,
-                                    centerText: "\(store.strainPercent)%",
-                                    label: "Esfuerzo",
-                                    kind: .strain,
-                                    size: 92,
-                                    strokeWidth: 9.5,
-                                    targetRange: avail.hasRecoveryData ? store.optimalEffortRange : nil,
-                                    hasData: avail.hasStrainData
-                                )
-                            }
-                            .frame(maxWidth: .infinity)
-
-                            Rectangle()
-                                .fill(BevelColors.divider)
-                                .frame(width: 1, height: 92)
-                                .padding(.top, 8)
-
-                            Button { onNavigate(.recuperacion) } label: {
-                                BevelRecessedRingGauge(
-                                    progress: Double(store.recoveryPercent) / 100.0,
-                                    centerText: "\(store.recoveryPercent)%",
-                                    label: "Recuperación",
-                                    kind: .recovery,
-                                    size: 92,
-                                    strokeWidth: 9.5,
-                                    hasData: avail.hasRecoveryData
-                                )
-                            }
-                            .frame(maxWidth: .infinity)
-
-                            Rectangle()
-                                .fill(BevelColors.divider)
-                                .frame(width: 1, height: 92)
-                                .padding(.top, 8)
-
-                            Button { onNavigate(.suenoDetail) } label: {
-                                BevelRecessedRingGauge(
-                                    progress: Double(store.sleepPercent) / 100.0,
-                                    centerText: "\(store.sleepPercent)%",
-                                    label: "Sueño",
-                                    kind: .sleep,
-                                    size: 92,
-                                    strokeWidth: 9.5,
-                                    hasData: avail.hasSleepData
-                                )
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 18)
-
-                        Divider().background(BevelColors.divider)
-
-                        LiveAiCoachingCard(
-                            section: .hoy,
-                            store: store,
-                            embedded: true,
-                            onAskMore: { onNavigate(.askBevel) }
+                // Customizable Ordered Home Sections (N2!)
+                ForEach(store.homeLayout.normalizedOrder) { section in
+                    if store.homeLayout.isSectionVisible(section) {
+                        homeSectionView(
+                            section,
+                            avail: avail,
+                            visibleHealthKinds: visibleHealthKinds,
+                            evalMap: evalMap,
+                            tempAbs: tempAbs,
+                            recordedVitals: recordedVitals,
+                            outOfRangeCount: outOfRangeCount,
+                            cardioAnalysis: cardioAnalysis,
+                            cardioSeries: cardioSeries,
+                            weeklySummary: weeklySummary
                         )
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 }
 
-                // 3. Estrés y Energía Section (Zero Fabricated Defaults)
+                // Signature Bevel Bottom Action Pills: "Editar Inicio" + "Ver todas las categorías" (Screenshot 1 & N2!)
+                VStack(spacing: 12) {
+                    Divider()
+                        .background(BevelColors.divider)
+                        .padding(.vertical, 4)
+
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        editHomeFocusHealth = false
+                        showEditHomeSheet = true
+                    } label: {
+                        Text("Editar Inicio")
+                            .font(ImprovingFont.cardTitle(15.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .background(Capsule().fill(BevelColors.card))
+                            .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.9))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        onNavigate(.allCategories)
+                    } label: {
+                        Text("Ver todas las categorías")
+                            .font(ImprovingFont.cardTitle(15.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .background(Capsule().fill(BevelColors.card))
+                            .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.9))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 155)
+        }
+        .coordinateSpace(name: "hoyScrollSpace")
+        .background(BevelColors.canvas)
+        .overlay(alignment: .top) {
+            SyncStatusBubbleOverlay(state: store.syncBannerState)
+                .padding(.top, 10)
+        }
+        .sheet(isPresented: $showCalendarSheet) {
+            DatePickerSheetView(
+                selectedDate: Binding(
+                    get: { store.selectedDate },
+                    set: { newDate in
+                        store.selectDate(newDate)
+                        showCalendarSheet = false
+                    }
+                ),
+                onJumpToday: {
+                    store.selectDayOffset(0)
+                    showCalendarSheet = false
+                },
+                onClose: { showCalendarSheet = false }
+            )
+        }
+        .sheet(isPresented: $showShareDailySheet) {
+            ShareSummaryCardSheet(store: store, kind: .dailyOverview, onClose: { showShareDailySheet = false })
+        }
+        .sheet(isPresented: $showEditHomeSheet) {
+            HomeLayoutEditorSheet(
+                store: store,
+                initialFocusHealthMonitor: editHomeFocusHealth,
+                onClose: { showEditHomeSheet = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func homeSectionView(
+        _ section: HomeSectionKind,
+        avail: DataAvailabilitySnapshot,
+        visibleHealthKinds: [HealthMetricKind],
+        evalMap: [HealthMetricKind: VitalBandEvaluation],
+        tempAbs: Double,
+        recordedVitals: [VitalBandEvaluation],
+        outOfRangeCount: Int,
+        cardioAnalysis: TrainingLoadAnalysis,
+        cardioSeries: [Double?],
+        weeklySummary: WeeklyReviewReport
+    ) -> some View {
+        switch section {
+        case .heroRings:
+            BevelCard(cornerRadius: 24) {
+                VStack(spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        Button { onNavigate(.esfuerzo) } label: {
+                            BevelRecessedRingGauge(
+                                progress: Double(store.strainPercent) / 100.0,
+                                centerText: "\(store.strainPercent)%",
+                                label: "Esfuerzo",
+                                kind: .strain,
+                                size: 92,
+                                strokeWidth: 9.5,
+                                targetRange: avail.hasRecoveryData ? store.optimalEffortRange : nil,
+                                hasData: avail.hasStrainData
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        Rectangle()
+                            .fill(BevelColors.divider)
+                            .frame(width: 1, height: 92)
+                            .padding(.top, 8)
+
+                        Button { onNavigate(.recuperacion) } label: {
+                            BevelRecessedRingGauge(
+                                progress: Double(store.recoveryPercent) / 100.0,
+                                centerText: "\(store.recoveryPercent)%",
+                                label: "Recuperación",
+                                kind: .recovery,
+                                size: 92,
+                                strokeWidth: 9.5,
+                                hasData: avail.hasRecoveryData
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        Rectangle()
+                            .fill(BevelColors.divider)
+                            .frame(width: 1, height: 92)
+                            .padding(.top, 8)
+
+                        Button { onNavigate(.suenoDetail) } label: {
+                            BevelRecessedRingGauge(
+                                progress: Double(store.sleepPercent) / 100.0,
+                                centerText: "\(store.sleepPercent)%",
+                                label: "Sueño",
+                                kind: .sleep,
+                                size: 92,
+                                strokeWidth: 9.5,
+                                hasData: avail.hasSleepData
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 18)
+
+                    Divider().background(BevelColors.divider)
+
+                    LiveAiCoachingCard(
+                        section: .hoy,
+                        store: store,
+                        embedded: true,
+                        onAskMore: { onNavigate(.askBevel) }
+                    )
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            }
+
+        case .stressEnergy:
+            VStack(alignment: .leading, spacing: 14) {
                 Text("Estrés y Energía")
                     .font(ImprovingFont.sectionTitle(18.5))
                     .foregroundColor(BevelColors.textPrimary)
@@ -279,8 +398,8 @@ struct HoyScreen: View {
                                             ? (store.lastStressSampleTimeLabel.map { "Última lectura a las \($0)" } ?? "Sin mediciones este día")
                                             : (avail.hasStressData ? "Media diaria · \(store.stressSamplesToday.count) lecturas" : "Sin mediciones este día")
                                     )
-                                        .font(ImprovingFont.caption(12))
-                                        .foregroundColor(BevelColors.textMuted)
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textMuted)
                                 }
 
                                 HStack(spacing: 14) {
@@ -317,70 +436,29 @@ struct HoyScreen: View {
                 }
 
                 EnergyBankBatteryBar(percent: store.energyPercent, hasData: avail.hasEnergyData, onClick: { onNavigate(.energia) })
+            }
 
-                // 4. Monitor de salud (2x3 Grid)
+        case .healthMonitor:
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Monitor de salud")
                         .font(ImprovingFont.sectionTitle(18.5))
                         .foregroundColor(BevelColors.textPrimary)
                     Spacer()
-                    Button("Editar >") { onNavigate(.dispositivos) }
-                        .font(ImprovingFont.caption(13))
-                        .foregroundColor(BevelColors.textSecondary)
+                    Button("Editar >") {
+                        editHomeFocusHealth = true
+                        showEditHomeSheet = true
+                    }
+                    .font(ImprovingFont.caption(13))
+                    .foregroundColor(BevelColors.textSecondary)
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    HealthMonitorRangeCard(
-                        title: "FR",
-                        value: avail.hasRespData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.respRateRpm) : "--",
-                        unit: "rpm",
-                        systemIcon: "lungs.fill",
-                        evaluation: respEval,
-                        onClick: { onSelectHealthMetric(.respiratoryRate) }
-                    )
-                    HealthMonitorRangeCard(
-                        title: "FCR",
-                        value: avail.hasRestingHrData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.restingHrBpm) : "--",
-                        unit: "ppm",
-                        systemIcon: "heart.fill",
-                        evaluation: rhrEval,
-                        onClick: { onSelectHealthMetric(.restingHeartRate) }
-                    )
-                    HealthMonitorRangeCard(
-                        title: "VFC",
-                        value: avail.hasHrvData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.hrvMs) : "--",
-                        unit: "ms",
-                        systemIcon: "waveform.path.ecg",
-                        evaluation: hrvEval,
-                        onClick: { onSelectHealthMetric(.hrv) }
-                    )
-                    HealthMonitorRangeCard(
-                        title: "SpO₂",
-                        value: avail.hasSpo2Data ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.spo2DisplayDouble) : "--",
-                        unit: "%",
-                        systemIcon: "drop.fill",
-                        evaluation: spo2Eval,
-                        onClick: { onSelectHealthMetric(.oxygenSaturation) }
-                    )
-                    HealthMonitorRangeCard(
-                        title: "Temp.",
-                        value: avail.hasTempData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), tempAbs) : "--",
-                        unit: "°C",
-                        systemIcon: "thermometer.medium",
-                        evaluation: tempEval,
-                        onClick: { onSelectHealthMetric(.wristTemperature) }
-                    )
-                    HealthMonitorRangeCard(
-                        title: "Sueño",
-                        value: store.sleepDurationText,
-                        unit: "",
-                        systemIcon: "bed.double.fill",
-                        evaluation: sleepEval,
-                        onClick: { onSelectHealthMetric(.sleepDuration) }
-                    )
+                    ForEach(visibleHealthKinds) { kind in
+                        healthMonitorTile(kind: kind, avail: avail, eval: evalMap[kind] ?? WhoopPhysiologyEngine.evaluateVital(value: 0, bandLow: 0, bandHigh: 1, hasData: false), tempAbs: tempAbs)
+                    }
                 }
 
-                // Honest Health Monitor status bar
                 if recordedVitals.isEmpty {
                     HStack(spacing: 10) {
                         Image(systemName: "info.circle.fill")
@@ -403,7 +481,7 @@ struct HoyScreen: View {
                             .font(.system(size: 15))
                             .foregroundColor(bannerColor)
                         Text(allNormal
-                            ? (recordedVitals.count == 6 ? "Todas las métricas están dentro del rango normal." : "\(recordedVitals.count) de 6 métricas registradas, todas en rango normal.")
+                            ? (recordedVitals.count == visibleHealthKinds.count ? "Todas las métricas están dentro del rango normal." : "\(recordedVitals.count) de \(visibleHealthKinds.count) métricas registradas, todas en rango normal.")
                             : "\(outOfRangeCount) métrica(s) fuera de tu rango habitual hoy.")
                             .font(ImprovingFont.body(13))
                             .foregroundColor(bannerColor)
@@ -414,8 +492,10 @@ struct HoyScreen: View {
                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(bannerBg))
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(bannerColor.opacity(0.3), lineWidth: 0.8))
                 }
+            }
 
-                // 5. Carga cardíaca Preview Card (Real data only)
+        case .cardioLoad:
+            VStack(alignment: .leading, spacing: 12) {
                 Text("Carga cardíaca")
                     .font(ImprovingFont.sectionTitle(18.5))
                     .foregroundColor(BevelColors.textPrimary)
@@ -439,25 +519,37 @@ struct HoyScreen: View {
                             }
                             HStack(alignment: .bottom) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(latestCardioVal.map { "\(Int($0.rounded()))" } ?? "Sin datos")
-                                        .font(ImprovingFont.metricHero(latestCardioVal != nil ? 26 : 20))
-                                        .foregroundColor(latestCardioVal != nil ? BevelColors.textPrimary : BevelColors.textMuted)
-                                    Text(latestCardioVal != nil ? "Basado en tus últimos 7 días" : "Sin registros de esfuerzo")
-                                        .font(ImprovingFont.caption(12))
-                                        .foregroundColor(latestCardioVal != nil ? BevelColors.greenPrimary : BevelColors.textMuted)
+                                    Text(cardioAnalysis.hasAnyData ? "\(cardioAnalysis.currentLoad)" : "Sin datos")
+                                        .font(ImprovingFont.metricHero(cardioAnalysis.hasAnyData ? 26 : 20))
+                                        .monospacedDigit()
+                                        .foregroundColor(cardioAnalysis.hasAnyData ? BevelColors.textPrimary : BevelColors.textMuted)
+                                    Text(cardioAnalysis.hasAnyData ? cardioAnalysis.currentState.rawValue : "Sin registros de esfuerzo")
+                                        .font(ImprovingFont.caption(12.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(cardioAnalysis.hasAnyData ? cardioAnalysis.currentState.accentColor : BevelColors.textMuted)
                                 }
                                 Spacer()
-                                if realCardioVals.count >= 2 {
-                                    TrendSparklineWithBand(optionalPoints: cardioSeries, bandLow: 24, bandHigh: 44, lineColor: BevelColors.periwinkleStart, showBand: true, showGlowDot: true)
-                                        .frame(width: 120, height: 48)
+                                if cardioAnalysis.hasAnyData && cardioSeries.compactMap({ $0 }).count >= 2 {
+                                    TrendSparklineWithBand(
+                                        optionalPoints: cardioSeries,
+                                        bandLow: Double(cardioAnalysis.optimalLow),
+                                        bandHigh: Double(cardioAnalysis.optimalHigh),
+                                        lineColor: BevelColors.periwinkleStart,
+                                        showBand: true,
+                                        showGlowDot: true
+                                    )
+                                    .frame(width: 132, height: 50)
                                 }
                             }
                         }
                         .padding(16)
                     }
                 }
+                .buttonStyle(.plain)
+            }
 
-                // 6. Nutrición — Exact Screenshot 1 "Alimentos de hoy" Card (Plate Tick Gauge + 3 Dot-Matrix Grids!)
+        case .nutrition:
+            VStack(alignment: .leading, spacing: 12) {
                 Text("Nutrición")
                     .font(ImprovingFont.sectionTitle(18.5))
                     .foregroundColor(BevelColors.textPrimary)
@@ -465,20 +557,81 @@ struct HoyScreen: View {
                 NutritionHomeSummaryCard(store: store) {
                     onNavigate(.nutricion)
                 }
+            }
 
-                if let w = store.workoutsToday.first {
+        case .weeklyReview:
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Resumen semanal")
+                    .font(ImprovingFont.sectionTitle(18.5))
+                    .foregroundColor(BevelColors.textPrimary)
+
+                Button { onNavigate(.weeklyReview) } label: {
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                HStack(spacing: 7) {
+                                    Image(systemName: "calendar.badge.checkmark")
+                                        .font(.system(size: 13.5, weight: .semibold))
+                                        .foregroundColor(BevelColors.periwinkleStart)
+                                    Text("Últimos 7 días · \(weeklySummary.dateRangeLabel)")
+                                        .font(ImprovingFont.caption(13))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(BevelColors.textMuted)
+                            }
+
+                            HStack(spacing: 10) {
+                                weeklyMiniStat(
+                                    label: "Recup.",
+                                    value: weeklySummary.avgRecovery.map { "\($0)%" } ?? "--",
+                                    delta: weeklySummary.recoveryDelta.map { ($0 >= 0 ? "+\($0)" : "\($0)") },
+                                    positive: (weeklySummary.recoveryDelta ?? 0) >= 0
+                                )
+                                weeklyMiniStat(
+                                    label: "Entrenos",
+                                    value: "\(weeklySummary.workoutsCount)",
+                                    delta: "\(weeklySummary.totalWorkoutMinutes)m",
+                                    positive: true
+                                )
+                                weeklyMiniStat(
+                                    label: "Nutrición",
+                                    value: weeklySummary.avgNutritionScore.map { "\($0)" } ?? "--",
+                                    delta: weeklySummary.avgHrv.map { String(format: "%.0fms", $0) } ?? "--",
+                                    positive: true
+                                )
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
+        case .recentActivity:
+            if let w = store.workoutsToday.first {
+                let st = WorkoutSportStyle.resolve(title: w.title, category: w.categoryLabel)
+                VStack(alignment: .leading, spacing: 12) {
                     Text("Actividad reciente")
                         .font(ImprovingFont.sectionTitle(18.5))
                         .foregroundColor(BevelColors.textPrimary)
 
-                    Button { onNavigate(.esfuerzo) } label: {
+                    Button {
+                        if let onOpenWorkout {
+                            onOpenWorkout(w)
+                        } else {
+                            onNavigate(.esfuerzo)
+                        }
+                    } label: {
                         BevelCard(cornerRadius: 20) {
                             HStack(spacing: 12) {
-                                Image(systemName: w.categoryLabel == "Fuerza" ? "dumbbell.fill" : "figure.run")
+                                Image(systemName: st.icon)
                                     .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(BevelColors.orangeEnd)
+                                    .foregroundColor(st.fg)
                                     .frame(width: 42, height: 42)
-                                    .background(Circle().fill(BevelColors.amberSoftBg))
+                                    .background(Circle().fill(st.bg))
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(w.title)
                                         .font(ImprovingFont.cardTitle(14.5))
@@ -504,32 +657,96 @@ struct HoyScreen: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 150)
         }
-        .coordinateSpace(name: "hoyScrollSpace")
-        .background(BevelColors.canvas)
-        .overlay(alignment: .top) {
-            SyncStatusBubbleOverlay(state: store.syncBannerState)
-                .padding(.top, 10)
-        }
-        .sheet(isPresented: $showCalendarSheet) {
-            DatePickerSheetView(
-                selectedDate: Binding(
-                    get: { store.selectedDate },
-                    set: { newDate in
-                        store.selectDate(newDate)
-                        showCalendarSheet = false
-                    }
-                ),
-                onJumpToday: {
-                    store.selectDayOffset(0)
-                    showCalendarSheet = false
-                },
-                onClose: { showCalendarSheet = false }
+    }
+
+    @ViewBuilder
+    private func healthMonitorTile(
+        kind: HealthMetricKind,
+        avail: DataAvailabilitySnapshot,
+        eval: VitalBandEvaluation,
+        tempAbs: Double
+    ) -> some View {
+        switch kind {
+        case .respiratoryRate:
+            HealthMonitorRangeCard(
+                title: "FR",
+                value: avail.hasRespData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.respRateRpm) : "--",
+                unit: "rpm",
+                systemIcon: "lungs.fill",
+                evaluation: eval,
+                onClick: { onSelectHealthMetric(.respiratoryRate) }
+            )
+        case .restingHeartRate:
+            HealthMonitorRangeCard(
+                title: "FCR",
+                value: avail.hasRestingHrData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.restingHrBpm) : "--",
+                unit: "ppm",
+                systemIcon: "heart.fill",
+                evaluation: eval,
+                onClick: { onSelectHealthMetric(.restingHeartRate) }
+            )
+        case .hrv:
+            HealthMonitorRangeCard(
+                title: "VFC",
+                value: avail.hasHrvData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.hrvMs) : "--",
+                unit: "ms",
+                systemIcon: "waveform.path.ecg",
+                evaluation: eval,
+                onClick: { onSelectHealthMetric(.hrv) }
+            )
+        case .oxygenSaturation:
+            HealthMonitorRangeCard(
+                title: "SpO₂",
+                value: avail.hasSpo2Data ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.spo2DisplayDouble) : "--",
+                unit: "%",
+                systemIcon: "drop.fill",
+                evaluation: eval,
+                onClick: { onSelectHealthMetric(.oxygenSaturation) }
+            )
+        case .wristTemperature:
+            HealthMonitorRangeCard(
+                title: "Temp.",
+                value: avail.hasTempData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), tempAbs) : "--",
+                unit: "°C",
+                systemIcon: "thermometer.medium",
+                evaluation: eval,
+                onClick: { onSelectHealthMetric(.wristTemperature) }
+            )
+        case .sleepDuration:
+            HealthMonitorRangeCard(
+                title: "Sueño",
+                value: store.sleepDurationText,
+                unit: "",
+                systemIcon: "bed.double.fill",
+                evaluation: eval,
+                onClick: { onSelectHealthMetric(.sleepDuration) }
             )
         }
+    }
+
+    private func weeklyMiniStat(label: String, value: String, delta: String?, positive: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(ImprovingFont.caption(11))
+                .foregroundColor(BevelColors.textMuted)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value)
+                    .font(ImprovingFont.metricTile(17))
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textPrimary)
+                if let d = delta {
+                    Text(d)
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.semibold)
+                        .foregroundColor(positive ? BevelColors.greenPrimary : BevelColors.amberStart)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(BevelColors.cardSubtle))
     }
 
     private func stressStatColumn(val: String, label: String, color: Color) -> some View {

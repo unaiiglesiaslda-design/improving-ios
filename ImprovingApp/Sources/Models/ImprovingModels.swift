@@ -46,10 +46,207 @@ enum OverlayRoute: String, Equatable, Hashable, Identifiable {
     case trainingLoad
     case cardioMetricDetail
     case workoutDetail
+    case bodyCompositionDetail
+    case weeklyReview
+    case allCategories
     case askBevel
     case dispositivos
 
     var id: String { rawValue }
+}
+
+enum HomeSectionKind: String, CaseIterable, Codable, Identifiable, Hashable {
+    case heroRings = "Anillos principales"
+    case stressEnergy = "Estrés y Energía"
+    case healthMonitor = "Monitor de salud"
+    case cardioLoad = "Carga cardíaca"
+    case nutrition = "Nutrición"
+    case weeklyReview = "Resumen semanal"
+    case recentActivity = "Actividad reciente"
+
+    var id: String { rawValue }
+
+    var systemIcon: String {
+        switch self {
+        case .heroRings: return "circle.circle.fill"
+        case .stressEnergy: return "bolt.heart.fill"
+        case .healthMonitor: return "waveform.path.ecg"
+        case .cardioLoad: return "figure.run"
+        case .nutrition: return "fork.knife"
+        case .weeklyReview: return "calendar.badge.checkmark"
+        case .recentActivity: return "flame.fill"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .heroRings: return "Esfuerzo, Recuperación, Sueño y Coaching IA"
+        case .stressEnergy: return "Dial de estrés intradía y Batería Corporal"
+        case .healthMonitor: return "FR, FCR, VFC, SpO₂, Temperatura y Sueño"
+        case .cardioLoad: return "Carga cardiovascular EWMA de los últimos días"
+        case .nutrition: return "Alimentos de hoy, puntuación y macros"
+        case .weeklyReview: return "Comparativa 7 días + conclusiones de Gemini IA"
+        case .recentActivity: return "Último entrenamiento registrado del día"
+        }
+    }
+}
+
+struct HomeLayoutPreferences: Codable, Equatable {
+    var sectionOrder: [HomeSectionKind] = HomeSectionKind.allCases
+    var hiddenSections: [HomeSectionKind] = []
+    var hiddenHealthMetrics: [HealthMetricKind] = []
+
+    var normalizedOrder: [HomeSectionKind] {
+        var result = sectionOrder.filter { HomeSectionKind.allCases.contains($0) }
+        for kind in HomeSectionKind.allCases where !result.contains(kind) {
+            result.append(kind)
+        }
+        return result
+    }
+
+    func isSectionVisible(_ kind: HomeSectionKind) -> Bool {
+        !hiddenSections.contains(kind)
+    }
+
+    func isHealthMetricVisible(_ kind: HealthMetricKind) -> Bool {
+        !hiddenHealthMetrics.contains(kind)
+    }
+}
+
+enum BodyCompositionMetricKind: String, CaseIterable, Codable, Identifiable {
+    case weight = "Peso"
+    case bodyFat = "Grasa corporal"
+    case leanMass = "Masa magra"
+    case bloodPressure = "Presión arterial"
+
+    var id: String { rawValue }
+
+    var unit: String {
+        switch self {
+        case .weight, .leanMass: return "kg"
+        case .bodyFat: return "%"
+        case .bloodPressure: return "mmHg"
+        }
+    }
+
+    var systemIcon: String {
+        switch self {
+        case .weight: return "scalemass.fill"
+        case .bodyFat: return "drop.triangle.fill"
+        case .leanMass: return "figure.strengthtraining.traditional"
+        case .bloodPressure: return "heart.text.square.fill"
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .weight: return BevelColors.skyBlue
+        case .bodyFat: return BevelColors.amberStart
+        case .leanMass: return BevelColors.bioTeal
+        case .bloodPressure: return BevelColors.coralHigh
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .weight: return "Evolución de tu peso corporal registrado desde Apple Salud o tu báscula manual."
+        case .bodyFat: return "Porcentaje estimado de grasa corporal respecto a tu peso total."
+        case .leanMass: return "Peso de músculo, hueso y agua corporal (masa libre de grasa)."
+        case .bloodPressure: return "Lecturas de tensión sistólica y diastólica en milímetros de mercurio (mmHg)."
+        }
+    }
+}
+
+enum LabBiomarkerStatus: String, Codable, CaseIterable {
+    case optimal = "Óptimo"
+    case normal = "Normal"
+    case low = "Bajo"
+    case high = "Alto"
+
+    var color: Color {
+        switch self {
+        case .optimal: return BevelColors.greenPrimary
+        case .normal: return BevelColors.skyBlue
+        case .low: return BevelColors.amberStart
+        case .high: return BevelColors.coralHigh
+        }
+    }
+}
+
+struct LabBiomarkerItem: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var name: String
+    var value: Double
+    var unit: String
+    var refMin: Double?
+    var refMax: Double?
+    var optimalMin: Double?
+    var optimalMax: Double?
+    var status: LabBiomarkerStatus
+    var category: String
+}
+
+struct LabReportRecord: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var dateIso: String
+    var title: String
+    var sourceLabel: String
+    var summary: String
+    var biomarkers: [LabBiomarkerItem]
+}
+
+struct WeeklyAiReviewInsight: Codable, Equatable {
+    var weekKey: String
+    var headline: String
+    var takeaways: [String]
+    var generatedAtLabel: String
+    var modelUsed: String
+    var isLiveAI: Bool
+}
+
+struct WeeklyReviewReport: Equatable {
+    let weekKey: String
+    let dateRangeLabel: String
+    let daysWithData: Int
+    let avgRecovery: Int?
+    let recoveryDelta: Int?
+    let avgHrv: Double?
+    let hrvDelta: Double?
+    let avgRhr: Double?
+    let rhrDelta: Double?
+    let avgSleepMinutes: Int?
+    let sleepMinutesDelta: Int?
+    let avgSleepPct: Int?
+    let sleepDebtMinutes: Int
+    let avgStrainPct: Int?
+    let strainDelta: Int?
+    let workoutsCount: Int
+    let totalWorkoutMinutes: Int
+    let workoutsDelta: Int
+    let cardioLoadCurrent: Int
+    let cardioLoadState: TrainingLoadState
+    let avgNutritionScore: Int?
+    let nutritionScoreDelta: Int?
+    let avgNetEnergyKcal: Int?
+    let avgSteps: Int?
+    let topHabits: [(emoji: String, title: String, count: Int)]
+
+    static func == (lhs: WeeklyReviewReport, rhs: WeeklyReviewReport) -> Bool {
+        lhs.weekKey == rhs.weekKey &&
+            lhs.daysWithData == rhs.daysWithData &&
+            lhs.avgRecovery == rhs.avgRecovery &&
+            lhs.avgSleepPct == rhs.avgSleepPct &&
+            lhs.avgStrainPct == rhs.avgStrainPct &&
+            lhs.workoutsCount == rhs.workoutsCount &&
+            lhs.avgNutritionScore == rhs.avgNutritionScore
+    }
+}
+
+enum NutritionComposerInitialMode: String, Equatable {
+    case standard
+    case camera
+    case photoLibrary
+    case barcode
 }
 
 enum CoachingSection: String, CaseIterable, Codable, Identifiable {
@@ -704,6 +901,62 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
     let timestampLabel: String
     let isSuggestionChip: Bool
     var modelUsed: String? = nil
+    var attachedPhotoFilename: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, isUser, verdictTitle, text, bullets, timestampLabel, isSuggestionChip, modelUsed, attachedPhotoFilename
+    }
+
+    init(
+        id: String,
+        isUser: Bool,
+        verdictTitle: String? = nil,
+        text: String,
+        bullets: [String] = [],
+        timestampLabel: String,
+        isSuggestionChip: Bool,
+        modelUsed: String? = nil,
+        attachedPhotoFilename: String? = nil
+    ) {
+        self.id = id
+        self.isUser = isUser
+        self.verdictTitle = verdictTitle
+        self.text = text
+        self.bullets = bullets
+        self.timestampLabel = timestampLabel
+        self.isSuggestionChip = isSuggestionChip
+        self.modelUsed = modelUsed
+        self.attachedPhotoFilename = attachedPhotoFilename
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        isUser = try c.decode(Bool.self, forKey: .isUser)
+        verdictTitle = try c.decodeIfPresent(String.self, forKey: .verdictTitle)
+        text = try c.decode(String.self, forKey: .text)
+        bullets = try c.decodeIfPresent([String].self, forKey: .bullets) ?? []
+        timestampLabel = try c.decode(String.self, forKey: .timestampLabel)
+        isSuggestionChip = try c.decodeIfPresent(Bool.self, forKey: .isSuggestionChip) ?? false
+        modelUsed = try c.decodeIfPresent(String.self, forKey: .modelUsed)
+        attachedPhotoFilename = try c.decodeIfPresent(String.self, forKey: .attachedPhotoFilename)
+    }
+}
+
+struct CoachChatThread: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var title: String
+    var dateIso: String
+    var updatedAtLabel: String
+    var messages: [CoachChatMessage]
+}
+
+struct CoachDynamicSuggestion: Identifiable, Equatable {
+    let id: String
+    let icon: String
+    let title: String
+    let subtitle: String
+    let prompt: String
 }
 
 struct MetricFloatingAiInsight: Equatable {

@@ -54,6 +54,11 @@ final class ImprovingStore: ObservableObject {
         var notificationSettings: SmartNotificationSettings?
         var savedFoodsLibrary: [SavedFoodLibraryItem]?
         var customNutritionGoals: CustomNutritionGoals?
+        var homeLayout: HomeLayoutPreferences?
+        var coachThreads: [CoachChatThread]?
+        var activeCoachThreadId: String?
+        var labReports: [LabReportRecord]?
+        var weeklyAiInsightsCache: [String: WeeklyAiReviewInsight]?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -83,6 +88,12 @@ final class ImprovingStore: ObservableObject {
     @Published var selectedNutrientKey: String = "Proteína"
     @Published var selectedTrendItem: EffortTrendItem? = nil
     @Published var selectedWorkoutItem: EffortEventItem? = nil
+    @Published var selectedBodyMetric: BodyCompositionMetricKind = .weight
+    @Published var homeLayout: HomeLayoutPreferences = HomeLayoutPreferences()
+    @Published var pendingNutritionLaunchMode: NutritionComposerInitialMode? = nil
+    @Published var labReports: [LabReportRecord] = []
+    @Published var weeklyAiInsightsCache: [String: WeeklyAiReviewInsight] = [:]
+    @Published var isGeneratingWeeklyReviewAI: Bool = false
 
     @Published var smartAlarmEnabled: Bool = true
     @Published var wakeOffsetMinutes: Int = 0
@@ -127,8 +138,14 @@ final class ImprovingStore: ObservableObject {
     @Published var geminiApiKey: String = ""
     @Published var selectedGeminiModel: String = "auto"
     @Published var coachMessages: [CoachChatMessage] = []
+    @Published var coachThreads: [CoachChatThread] = []
+    @Published var activeCoachThreadId: String? = nil
     @Published var isCoachThinking: Bool = false
     private var activeCoachInteractionId: String? = nil
+
+    // Background debounced persistence queue (zero main-thread JSON serialization jank!)
+    private let persistenceQueue = DispatchQueue(label: "com.improving.persist.queue", qos: .utility)
+    private var pendingPersistWorkItem: DispatchWorkItem? = nil
 
     // 4-Hour Time-Aware Section Coaching Cache
     @Published var sectionCoachingCache: [String: SectionCoachingCard] = [:]
@@ -174,9 +191,11 @@ final class ImprovingStore: ObservableObject {
         _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
         scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
         refreshSmartNotificationSchedules(promptPermission: false)
+        publishWidgetSnapshot(triggerReload: false)
     }
 
     deinit {
+        pendingPersistWorkItem?.cancel()
         bleStreamTask?.cancel()
         timerTask?.cancel()
         syncBannerDismissTask?.cancel()
@@ -3541,9 +3560,19 @@ final class ImprovingStore: ObservableObject {
             "comidas_registradas": mealsToday.map { "\($0.timeLabel) \($0.title) (\($0.kcal) kcal, P:\($0.proteinG)g C:\($0.carbsG)g G:\($0.fatG)g)" }
         ]
 
+        let latestLabsSummary: [[String: Any]] = latestBiomarkersByName.prefix(14).map { b in
+            [
+                "nombre": b.name,
+                "valor": b.value,
+                "unidad": b.unit,
+                "estado": b.status.rawValue,
+                "categoria": b.category
+            ]
+        }
+
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "hora_local_actual": nowFmt.string(from: Date()),
             "fecha_seleccionada": selectedDateIso,
             "origen_datos": hasImportedOrPairedRealData ? "Apple Health / Sensores reales" : "Modo vista previa",
@@ -3552,6 +3581,9 @@ final class ImprovingStore: ObservableObject {
             "diario_hoy": diarioHoy,
             "nutricion_hoy": nutricionHoy
         ]
+        if !latestLabsSummary.isEmpty {
+            payload["analiticas_recientes"] = latestLabsSummary
+        }
 
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]),
            let str = String(data: data, encoding: .utf8) {
@@ -3560,8 +3592,88 @@ final class ImprovingStore: ObservableObject {
         return ("{}", highlights)
     }
 
-    func sendCoachPrompt(_ rawPrompt: String) {
-        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Context-aware suggested questions adapted to today's actual physiological metrics!
+    var dynamicCoachSuggestions: [CoachDynamicSuggestion] {
+        var list: [CoachDynamicSuggestion] = []
+        let avail = dataAvailability
+        let debt = currentDaySummary?.sleepDebtMinutes ?? 0
+
+        if avail.hasRecoveryData && recoveryPercent < 50 {
+            list.append(CoachDynamicSuggestion(
+                id: "low_rec",
+                icon: "heart.text.square.fill",
+                title: "Recuperación baja (\(recoveryPercent)%)",
+                subtitle: "¿Qué hago hoy para remontar?",
+                prompt: "Hoy tengo la recuperación en \(recoveryPercent)%. Analiza mis constantes reales y dime cómo plantear el día y el entrenamiento."
+            ))
+        } else if avail.hasRecoveryData && recoveryPercent >= 72 {
+            list.append(CoachDynamicSuggestion(
+                id: "high_rec",
+                icon: "flame.fill",
+                title: "Recuperación alta (\(recoveryPercent)%)",
+                subtitle: "Plan de sesión intensa",
+                prompt: "Hoy amanecí con \(recoveryPercent)% de recuperación. ¿Qué entrenamiento me recomiendas aprovechar según mi carga y frescura muscular?"
+            ))
+        } else {
+            list.append(CoachDynamicSuggestion(
+                id: "train_today",
+                icon: "figure.run",
+                title: "¿Entreno fuerte hoy?",
+                subtitle: "Según mi recuperación real",
+                prompt: "¿Debería entrenar fuerte hoy o ir suave según mis datos reales?"
+            ))
+        }
+
+        if debt >= 35 {
+            list.append(CoachDynamicSuggestion(
+                id: "sleep_debt",
+                icon: "moon.zzz.fill",
+                title: "Deuda de sueño (\(debt) min)",
+                subtitle: "Cómo recuperarla esta semana",
+                prompt: "Tengo \(debt) minutos de deuda de sueño y dormí \(sleepDurationText). Dame un plan realista para recuperarla sin arruinar mis horarios."
+            ))
+        } else {
+            list.append(CoachDynamicSuggestion(
+                id: "sleep_check",
+                icon: "moon.stars.fill",
+                title: "Analizar mi sueño",
+                subtitle: "Fases y descanso real",
+                prompt: "Analiza mi última noche de sueño y dime qué puedo mejorar hoy"
+            ))
+        }
+
+        if let nutScore = foodQualityScore, nutScore < 65 {
+            list.append(CoachDynamicSuggestion(
+                id: "nut_fix",
+                icon: "fork.knife",
+                title: "Mejorar mi nutrición (\(nutScore))",
+                subtitle: "Qué cenar hoy para equilibrar",
+                prompt: "Mi puntuación de nutrición hoy está en \(nutScore) con \(totalCaloriesToday) kcal y \(totalProteinToday) g de proteína. ¿Qué cena rápida me ayuda a cuadrar el día?"
+            ))
+        } else if !latestBiomarkersByName.isEmpty {
+            list.append(CoachDynamicSuggestion(
+                id: "lab_review",
+                icon: "cross.case.fill",
+                title: "Revisar mi analítica",
+                subtitle: "\(latestBiomarkersByName.count) biomarcadores guardados",
+                prompt: "Revisa los biomarcadores de mi última analítica junto con mi sueño y recuperación, y dime qué prioridades tengo."
+            ))
+        } else {
+            list.append(CoachDynamicSuggestion(
+                id: "open_food",
+                icon: "fork.knife",
+                title: "¿Qué me conviene cenar hoy?",
+                subtitle: "Adaptado a mi gasto real",
+                prompt: "Con mi actividad y comida de hoy, ¿qué cena me recomiendas para dormir mejor y recuperar bien?"
+            ))
+        }
+
+        return list
+    }
+
+    func sendCoachPrompt(_ rawPrompt: String, jpegImageData: Data? = nil, attachedPhotoFilename: String? = nil) {
+        let trimmed = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = trimmed.isEmpty && jpegImageData != nil ? "Analiza esta imagen en relación con mis datos reales de salud y entrenamiento." : trimmed
         guard !prompt.isEmpty, !isCoachThinking else { return }
 
         let now = Date()
@@ -3570,8 +3682,16 @@ final class ImprovingStore: ObservableObject {
         let tsLabel = timeFmt.string(from: now)
 
         let historySnap = Array(coachMessages.suffix(16))
-        let userMsg = CoachChatMessage(id: UUID().uuidString, isUser: true, text: prompt, timestampLabel: tsLabel, isSuggestionChip: false)
+        let userMsg = CoachChatMessage(
+            id: UUID().uuidString,
+            isUser: true,
+            text: prompt,
+            timestampLabel: tsLabel,
+            isSuggestionChip: false,
+            attachedPhotoFilename: attachedPhotoFilename
+        )
         coachMessages.append(userMsg)
+        syncCurrentChatIntoThreads(updatedAtLabel: tsLabel)
         isCoachThinking = true
 
         let ctx = buildBiometricContextJson()
@@ -3592,7 +3712,8 @@ final class ImprovingStore: ObservableObject {
                 availableHighlights: ctx.highlights,
                 missingCategories: missing,
                 history: historySnap,
-                previousInteractionId: prevId
+                previousInteractionId: prevId,
+                jpegImageData: jpegImageData
             )
             await MainActor.run {
                 guard let self else { return }
@@ -3602,6 +3723,7 @@ final class ImprovingStore: ObservableObject {
                 }
                 let replyFmt = DateFormatter()
                 replyFmt.dateFormat = "HH:mm"
+                let replyTs = replyFmt.string(from: Date())
                 self.coachMessages.append(
                     CoachChatMessage(
                         id: UUID().uuidString,
@@ -3609,19 +3731,416 @@ final class ImprovingStore: ObservableObject {
                         verdictTitle: result.verdictTitle.isEmpty ? nil : result.verdictTitle,
                         text: result.text,
                         bullets: result.bullets,
-                        timestampLabel: replyFmt.string(from: Date()),
+                        timestampLabel: replyTs,
                         isSuggestionChip: false,
                         modelUsed: result.modelUsed
                     )
                 )
+                self.syncCurrentChatIntoThreads(updatedAtLabel: replyTs)
             }
         }
     }
 
-    func startNewCleanChat() {
-        coachMessages = []
+    private func syncCurrentChatIntoThreads(updatedAtLabel: String) {
+        guard !coachMessages.isEmpty else { return }
+        let todayIso = isoFormatter.string(from: Date())
+        let firstUserText = coachMessages.first(where: { $0.isUser })?.text ?? "Conversación"
+        let cleanTitle = String(firstUserText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
+
+        if let activeId = activeCoachThreadId, let idx = coachThreads.firstIndex(where: { $0.id == activeId }) {
+            coachThreads[idx].messages = coachMessages
+            coachThreads[idx].updatedAtLabel = updatedAtLabel
+            if coachThreads[idx].title.isEmpty { coachThreads[idx].title = cleanTitle }
+            let updated = coachThreads.remove(at: idx)
+            coachThreads.insert(updated, at: 0)
+        } else {
+            let newId = UUID().uuidString
+            activeCoachThreadId = newId
+            let thread = CoachChatThread(
+                id: newId,
+                title: cleanTitle.isEmpty ? "Consulta Coach IA" : cleanTitle,
+                dateIso: todayIso,
+                updatedAtLabel: updatedAtLabel,
+                messages: coachMessages
+            )
+            coachThreads.insert(thread, at: 0)
+        }
+        if coachThreads.count > 30 {
+            coachThreads = Array(coachThreads.prefix(30))
+        }
+        persistState()
+    }
+
+    func selectCoachThread(_ id: String) {
+        guard let thread = coachThreads.first(where: { $0.id == id }) else { return }
+        activeCoachThreadId = thread.id
+        coachMessages = thread.messages
         activeCoachInteractionId = nil
         isCoachThinking = false
+        persistState()
+    }
+
+    func deleteCoachThread(_ id: String) {
+        coachThreads.removeAll { $0.id == id }
+        if activeCoachThreadId == id {
+            if let next = coachThreads.first {
+                activeCoachThreadId = next.id
+                coachMessages = next.messages
+            } else {
+                activeCoachThreadId = nil
+                coachMessages = []
+            }
+            activeCoachInteractionId = nil
+        }
+        persistState()
+    }
+
+    func startNewCleanChat() {
+        coachMessages = []
+        activeCoachThreadId = nil
+        activeCoachInteractionId = nil
+        isCoachThinking = false
+        persistState()
+    }
+
+    // MARK: - Home Layout Customization (N2)
+
+    func toggleHomeSection(_ kind: HomeSectionKind) {
+        if homeLayout.hiddenSections.contains(kind) {
+            homeLayout.hiddenSections.removeAll { $0 == kind }
+        } else {
+            // Keep at least 1 section visible
+            let visibleCount = HomeSectionKind.allCases.filter { !homeLayout.hiddenSections.contains($0) }.count
+            if visibleCount > 1 {
+                homeLayout.hiddenSections.append(kind)
+            }
+        }
+        persistState()
+    }
+
+    func moveHomeSection(_ kind: HomeSectionKind, direction: Int) {
+        var order = homeLayout.normalizedOrder
+        guard let idx = order.firstIndex(of: kind) else { return }
+        let target = idx + direction
+        guard order.indices.contains(target) else { return }
+        order.swapAt(idx, target)
+        homeLayout.sectionOrder = order
+        persistState()
+    }
+
+    func toggleHealthMonitorMetric(_ kind: HealthMetricKind) {
+        if homeLayout.hiddenHealthMetrics.contains(kind) {
+            homeLayout.hiddenHealthMetrics.removeAll { $0 == kind }
+        } else {
+            let visibleCount = HealthMetricKind.allCases.filter { !homeLayout.hiddenHealthMetrics.contains($0) }.count
+            if visibleCount > 1 {
+                homeLayout.hiddenHealthMetrics.append(kind)
+            }
+        }
+        persistState()
+    }
+
+    func resetHomeLayout() {
+        homeLayout = HomeLayoutPreferences()
+        persistState()
+    }
+
+    // MARK: - Manual Scale & Blood Pressure Logging + Lab Reports / Biomarkers (P2 & N6)
+
+    func logManualScaleReading(
+        date: Date = Date(),
+        weightKg: Double?,
+        bodyFatPct: Double?,
+        leanMassKg: Double?,
+        systolicBp: Int?,
+        diastolicBp: Int?
+    ) {
+        let iso = isoFormatter.string(from: date)
+        var d = activeHistory[iso] ?? RealBiometricDaySummary(dateIso: iso)
+        if let w = weightKg, w > 20, w < 300 {
+            d.bodyWeightKg = AppleHealthExportImporter.round1(w)
+            userProfile.weightKg = AppleHealthExportImporter.round1(w)
+        }
+        if let f = bodyFatPct, f >= 2, f <= 70 {
+            d.bodyFatPct = AppleHealthExportImporter.round1(f)
+            userProfile.bodyFatPct = AppleHealthExportImporter.round1(f)
+        }
+        if let l = leanMassKg, l > 15, l < 220 {
+            d.leanMassKg = AppleHealthExportImporter.round1(l)
+        } else if let w = d.bodyWeightKg, let f = d.bodyFatPct {
+            d.leanMassKg = AppleHealthExportImporter.round1(w * (1.0 - f / 100.0))
+        }
+        if let sys = systolicBp, let dia = diastolicBp, sys >= 70, sys <= 240, dia >= 40, dia <= 150 {
+            d.systolicBp = sys
+            d.diastolicBp = dia
+        }
+
+        if hasImportedOrPairedRealData {
+            realHistory[iso] = d
+        } else {
+            simulatedHistory[iso] = d
+        }
+        dataRevision += 1
+        persistState()
+    }
+
+    func bodyMetricSeries(for kind: BodyCompositionMetricKind, spanDays: Int, windowPageOffset: Int) -> MetricWindowSeries {
+        customWindowSeries(spanDays: spanDays, windowPageOffset: windowPageOffset) { day in
+            switch kind {
+            case .weight: return day.bodyWeightKg
+            case .bodyFat: return day.bodyFatPct
+            case .leanMass: return day.leanMassKg
+            case .bloodPressure: return day.systolicBp.map { Double($0) }
+            }
+        }
+    }
+
+    func bodyMetricHistoryEntries(for kind: BodyCompositionMetricKind, limit: Int = 40) -> [(dateIso: String, primary: String, secondary: String?)] {
+        let sorted = activeHistory.keys.sorted(by: >)
+        var out: [(String, String, String?)] = []
+        for iso in sorted {
+            guard let d = activeHistory[iso] else { continue }
+            switch kind {
+            case .weight:
+                if let v = d.bodyWeightKg {
+                    out.append((iso, String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), v), d.bodyFatPct.map { String(format: "Grasa %.1f%%", locale: Locale(identifier: "es_ES"), $0) }))
+                }
+            case .bodyFat:
+                if let v = d.bodyFatPct {
+                    out.append((iso, String(format: "%.1f %%", locale: Locale(identifier: "es_ES"), v), d.bodyWeightKg.map { String(format: "Peso %.1f kg", locale: Locale(identifier: "es_ES"), $0) }))
+                }
+            case .leanMass:
+                if let v = d.leanMassKg {
+                    out.append((iso, String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), v), d.bodyWeightKg.map { String(format: "Peso %.1f kg", locale: Locale(identifier: "es_ES"), $0) }))
+                }
+            case .bloodPressure:
+                if let sys = d.systolicBp, let dia = d.diastolicBp {
+                    let tone = (sys < 125 && dia < 82) ? "Óptima" : ((sys < 135 && dia < 88) ? "Normal" : "Elevada")
+                    out.append((iso, "\(sys)/\(dia) mmHg", tone))
+                }
+            }
+            if out.count >= limit { break }
+        }
+        return out
+    }
+
+    var latestBiomarkersByName: [LabBiomarkerItem] {
+        let sortedReports = labReports.sorted { $0.dateIso > $1.dateIso }
+        var seen = Set<String>()
+        var result: [LabBiomarkerItem] = []
+        for rep in sortedReports {
+            for b in rep.biomarkers {
+                let key = b.name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+                if seen.insert(key).inserted {
+                    result.append(b)
+                }
+            }
+        }
+        return result
+    }
+
+    func saveLabReport(_ report: LabReportRecord) {
+        if let idx = labReports.firstIndex(where: { $0.id == report.id }) {
+            labReports[idx] = report
+        } else {
+            labReports.insert(report, at: 0)
+        }
+        labReports.sort { $0.dateIso > $1.dateIso }
+        dataRevision += 1
+        persistState()
+    }
+
+    func deleteLabReport(id: String) {
+        labReports.removeAll { $0.id == id }
+        dataRevision += 1
+        persistState()
+    }
+
+    func addManualBiomarker(_ item: LabBiomarkerItem, dateIso: String? = nil) {
+        let iso = dateIso ?? isoFormatter.string(from: Date())
+        if let idx = labReports.firstIndex(where: { $0.dateIso == iso && $0.title == "Biomarcadores manuales" }) {
+            labReports[idx].biomarkers.insert(item, at: 0)
+        } else {
+            let rep = LabReportRecord(
+                id: UUID().uuidString,
+                dateIso: iso,
+                title: "Biomarcadores manuales",
+                sourceLabel: "Registro manual",
+                summary: "Registro manual de biomarcadores clínicos.",
+                biomarkers: [item]
+            )
+            labReports.insert(rep, at: 0)
+        }
+        labReports.sort { $0.dateIso > $1.dateIso }
+        dataRevision += 1
+        persistState()
+    }
+
+    // MARK: - Weekly Review Computation & AI Analysis (N5)
+
+    func computeWeeklyReview(anchorDate: Date? = nil) -> WeeklyReviewReport {
+        let cal = Calendar.current
+        let anchor = cal.startOfDay(for: anchorDate ?? selectedDate)
+        let curDates: [Date] = (0..<7).reversed().compactMap { cal.date(byAdding: .day, value: -$0, to: anchor) }
+        let prevDates: [Date] = (7..<14).reversed().compactMap { cal.date(byAdding: .day, value: -$0, to: anchor) }
+
+        let curIsos = curDates.map { isoFormatter.string(from: $0) }
+        let prevIsos = prevDates.map { isoFormatter.string(from: $0) }
+        let curDays = curIsos.compactMap { activeHistory[$0] }
+        let prevDays = prevIsos.compactMap { activeHistory[$0] }
+
+        func avgInt(_ vals: [Int]) -> Int? {
+            guard !vals.isEmpty else { return nil }
+            return Int((Double(vals.reduce(0, +)) / Double(vals.count)).rounded())
+        }
+        func avgDbl(_ vals: [Double]) -> Double? {
+            guard !vals.isEmpty else { return nil }
+            return vals.reduce(0, +) / Double(vals.count)
+        }
+
+        let avgRec = avgInt(curDays.compactMap(\.recoveryPct))
+        let prevRec = avgInt(prevDays.compactMap(\.recoveryPct))
+        let avgHrv = avgDbl(curDays.compactMap(\.hrvMs))
+        let prevHrv = avgDbl(prevDays.compactMap(\.hrvMs))
+        let avgRhr = avgDbl(curDays.compactMap(\.restingHrBpm))
+        let prevRhr = avgDbl(prevDays.compactMap(\.restingHrBpm))
+        let avgSleepMin = avgInt(curDays.compactMap(\.asleepMinutes).filter { $0 > 0 })
+        let prevSleepMin = avgInt(prevDays.compactMap(\.asleepMinutes).filter { $0 > 0 })
+        let avgSleepPct = avgInt(curDays.compactMap(\.sleepPct))
+        let sleepDebt = curDays.last?.sleepDebtMinutes ?? curDays.compactMap(\.sleepDebtMinutes).last ?? 0
+        let avgStrain = avgInt(curDays.compactMap(\.strainPct))
+        let prevStrain = avgInt(prevDays.compactMap(\.strainPct))
+
+        let curWorkouts = curDays.flatMap(\.workouts)
+        let prevWorkouts = prevDays.flatMap(\.workouts)
+        let totalWkMin = curWorkouts.reduce(0) { $0 + $1.durationMin }
+
+        let cardioAnalysis = trainingLoadAnalysis(tab: .cardio, spanDays: 14, windowPageOffset: 0)
+
+        let curNutScores = curIsos.compactMap { nutritionScore(for: $0) }
+        let prevNutScores = prevIsos.compactMap { nutritionScore(for: $0) }
+        let avgNut = avgInt(curNutScores)
+        let prevNut = avgInt(prevNutScores)
+
+        let curNetVals = curIsos.compactMap { iso -> Int? in
+            let meals = mealsByDate[iso] ?? []
+            guard !meals.isEmpty else { return nil }
+            return netEnergyKcal(for: iso).net
+        }
+        let avgNet = avgInt(curNetVals)
+        let avgSteps = avgInt(curDays.compactMap(\.stepsCount).filter { $0 > 0 })
+
+        // Top checked habits during this 7-day window
+        var habitCounts: [String: Int] = [:]
+        for iso in curIsos {
+            for (hid, st) in (journalCheckinsByDate[iso] ?? [:]) where st == .yes {
+                habitCounts[hid, default: 0] += 1
+            }
+        }
+        let catalogMap = Dictionary(uniqueKeysWithValues: allCatalogAndCustomEntries.map { ($0.id, ($0.emoji, $0.title)) })
+        let topHabits: [(emoji: String, title: String, count: Int)] = habitCounts
+            .sorted { $0.value > $1.value }
+            .prefix(4)
+            .compactMap { k, v in
+                guard let meta = catalogMap[k] else { return nil }
+                return (meta.0, meta.1, v)
+            }
+
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "es_ES")
+        fmt.dateFormat = "d MMM"
+        let startLbl = curDates.first.map { fmt.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
+        let endLbl = curDates.last.map { fmt.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
+        let weekKey = "\(curIsos.first ?? "")_\(curIsos.last ?? "")_r\(dataRevision)"
+
+        return WeeklyReviewReport(
+            weekKey: weekKey,
+            dateRangeLabel: "\(startLbl) – \(endLbl)",
+            daysWithData: curDays.count,
+            avgRecovery: avgRec,
+            recoveryDelta: (avgRec != nil && prevRec != nil) ? (avgRec! - prevRec!) : nil,
+            avgHrv: avgHrv,
+            hrvDelta: (avgHrv != nil && prevHrv != nil) ? (avgHrv! - prevHrv!) : nil,
+            avgRhr: avgRhr,
+            rhrDelta: (avgRhr != nil && prevRhr != nil) ? (avgRhr! - prevRhr!) : nil,
+            avgSleepMinutes: avgSleepMin,
+            sleepMinutesDelta: (avgSleepMin != nil && prevSleepMin != nil) ? (avgSleepMin! - prevSleepMin!) : nil,
+            avgSleepPct: avgSleepPct,
+            sleepDebtMinutes: sleepDebt,
+            avgStrainPct: avgStrain,
+            strainDelta: (avgStrain != nil && prevStrain != nil) ? (avgStrain! - prevStrain!) : nil,
+            workoutsCount: curWorkouts.count,
+            totalWorkoutMinutes: totalWkMin,
+            workoutsDelta: curWorkouts.count - prevWorkouts.count,
+            cardioLoadCurrent: cardioAnalysis.currentLoad,
+            cardioLoadState: cardioAnalysis.currentState,
+            avgNutritionScore: avgNut,
+            nutritionScoreDelta: (avgNut != nil && prevNut != nil) ? (avgNut! - prevNut!) : nil,
+            avgNetEnergyKcal: avgNet,
+            avgSteps: avgSteps,
+            topHabits: topHabits
+        )
+    }
+
+    func generateWeeklyReviewAI(report: WeeklyReviewReport, force: Bool = false) {
+        if !force, weeklyAiInsightsCache[report.weekKey] != nil { return }
+        guard !isGeneratingWeeklyReviewAI else { return }
+        isGeneratingWeeklyReviewAI = true
+        let key = geminiApiKey
+        let model = selectedGeminiModel
+        let uName = userProfile.displayFirstName
+
+        Task { [weak self] in
+            let insight = await GeminiCoachService.shared.generateWeeklyReviewInsight(
+                report: report,
+                userName: uName,
+                apiKey: key,
+                selectedModel: model
+            )
+            await MainActor.run {
+                guard let self else { return }
+                self.isGeneratingWeeklyReviewAI = false
+                self.weeklyAiInsightsCache[report.weekKey] = insight
+                self.persistState()
+            }
+        }
+    }
+
+    // MARK: - WidgetKit Shared Snapshot Bridge (N7)
+
+    func publishWidgetSnapshot(triggerReload: Bool = true) {
+        let todayIso = isoFormatter.string(from: Date())
+        let todayDay = activeHistory[todayIso] ?? currentDaySummary
+        let nutTotals = nutritionDayTotals(for: todayIso)
+        let goals = effectiveNutritionGoals
+        let sleepDur: String = {
+            if let m = todayDay?.asleepMinutes, m > 0 {
+                return "\(m / 60)h \(String(format: "%02d", m % 60))m"
+            }
+            return "--"
+        }()
+
+        let snap = ImprovingWidgetSnapshot(
+            dateIso: todayIso,
+            dateLabel: "Hoy",
+            strainPct: todayDay?.strainPct,
+            recoveryPct: todayDay?.recoveryPct,
+            sleepPct: todayDay?.sleepPct,
+            energyPct: todayDay?.energyBankPercent,
+            stressScore: todayDay?.stressSamples5m.last.map { Int($0.value.rounded()) } ?? todayDay?.stressScore,
+            hrvMs: todayDay?.hrvMs,
+            restingHrBpm: todayDay?.restingHrBpm,
+            sleepDurationText: sleepDur,
+            nutritionScore: nutTotals.score,
+            caloriesToday: nutTotals.kcal,
+            caloriesGoal: goals.kcal,
+            proteinG: Int(nutTotals.proteinG.rounded()),
+            carbsG: Int(nutTotals.carbsG.rounded()),
+            fatG: Int(nutTotals.fatG.rounded()),
+            stepsCount: todayDay?.stepsCount,
+            updatedAt: Date()
+        )
+        WidgetSnapshotStore.save(snap, triggerReload: triggerReload)
     }
 
     func updateGeminiConfig(apiKey: String, model: String) {
@@ -3631,10 +4150,10 @@ final class ImprovingStore: ObservableObject {
         persistState()
     }
 
-    // MARK: - Persistence
+    // MARK: - Async Debounced Background Persistence (P3 — Zero Main-Thread Jank!)
 
-    func persistState() {
-        let snap = PersistedSnapshot(
+    private func buildPersistedSnapshot() -> PersistedSnapshot {
+        PersistedSnapshot(
             userProfile: userProfile,
             isDarkMode: BevelColors.isDarkMode,
             hasImportedOrPairedRealData: hasImportedOrPairedRealData,
@@ -3662,11 +4181,42 @@ final class ImprovingStore: ObservableObject {
             journalNotesByDate: journalNotesByDate,
             notificationSettings: notificationSettings,
             savedFoodsLibrary: savedFoodsLibrary,
-            customNutritionGoals: customNutritionGoals
+            customNutritionGoals: customNutritionGoals,
+            homeLayout: homeLayout,
+            coachThreads: Array(coachThreads.prefix(30)),
+            activeCoachThreadId: activeCoachThreadId,
+            labReports: labReports,
+            weeklyAiInsightsCache: weeklyAiInsightsCache
         )
-        if let data = try? JSONEncoder().encode(snap) {
-            try? data.write(to: persistenceURL, options: .atomic)
+    }
+
+    func persistState(immediate: Bool = false) {
+        let snap = buildPersistedSnapshot()
+        let targetURL = persistenceURL
+        publishWidgetSnapshot(triggerReload: true)
+
+        pendingPersistWorkItem?.cancel()
+        if immediate {
+            pendingPersistWorkItem = nil
+            persistenceQueue.sync {
+                if let data = try? JSONEncoder().encode(snap) {
+                    try? data.write(to: targetURL, options: .atomic)
+                }
+            }
+            return
         }
+
+        let work = DispatchWorkItem {
+            if let data = try? JSONEncoder().encode(snap) {
+                try? data.write(to: targetURL, options: .atomic)
+            }
+        }
+        pendingPersistWorkItem = work
+        persistenceQueue.asyncAfter(deadline: .now() + 0.28, execute: work)
+    }
+
+    func flushPersistenceNow() {
+        persistState(immediate: true)
     }
 
     private func loadPersistedState() {
@@ -3719,6 +4269,20 @@ final class ImprovingStore: ObservableObject {
         if let notifCfg = snap.notificationSettings { notificationSettings = notifCfg }
         if let library = snap.savedFoodsLibrary { savedFoodsLibrary = library }
         if let nutGoals = snap.customNutritionGoals { customNutritionGoals = nutGoals }
+        if let layout = snap.homeLayout { homeLayout = layout }
+        if let threads = snap.coachThreads {
+            coachThreads = threads
+            if let activeId = snap.activeCoachThreadId,
+               let activeThread = threads.first(where: { $0.id == activeId }) {
+                activeCoachThreadId = activeId
+                coachMessages = activeThread.messages
+            } else if let first = threads.first {
+                activeCoachThreadId = first.id
+                coachMessages = first.messages
+            }
+        }
+        if let labs = snap.labReports { labReports = labs }
+        if let wkCache = snap.weeklyAiInsightsCache { weeklyAiInsightsCache = wkCache }
 
         // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
         var sanitizedCorruptStrain = false

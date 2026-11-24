@@ -12,6 +12,12 @@ struct ImprovingRootView: View {
     @State private var cardioRoute: CardioMetricRoute = .activitiesDuration
     @State private var showLaunchSplash: Bool = true
 
+    // Quick Action 1-tap sheets (P7!)
+    @State private var showQuickNoteSheet: Bool = false
+    @State private var quickNoteDraft: String = ""
+    @State private var showQuickScaleSheet: Bool = false
+    @State private var showQuickWorkoutSheet: Bool = false
+
     private var currentOverlay: OverlayRoute { overlayStack.last ?? .none }
 
     var body: some View {
@@ -40,6 +46,10 @@ struct ImprovingRootView: View {
                                 onSelectHealthMetric: { kind in
                                     store.selectedHealthMetric = kind
                                     push(.healthMetricDetail)
+                                },
+                                onOpenWorkout: { w in
+                                    store.selectWorkout(w)
+                                    push(.workoutDetail)
                                 }
                             )
                         case .diario:
@@ -68,6 +78,14 @@ struct ImprovingRootView: View {
                                     store.selectedHealthMetric = kind
                                     push(.healthMetricDetail)
                                 },
+                                onOpenBodyMetric: { bodyKind in
+                                    store.selectedBodyMetric = bodyKind
+                                    push(.bodyCompositionDetail)
+                                },
+                                onOpenVo2Max: {
+                                    cardioRoute = .vo2Max
+                                    push(.cardioMetricDetail)
+                                },
                                 onNavigate: { push($0) }
                             )
                         }
@@ -81,15 +99,45 @@ struct ImprovingRootView: View {
 
                     if quickMenuOpen && currentOverlay != .askBevel {
                         QuickActionsOverlaySheet(
+                            hydrationTodayMl: Int(store.totalHydrationTodayMl.rounded()),
                             onDismiss: { quickMenuOpen = false },
-                            onOpenNutrition: { push(.nutricion) },
+                            onCaptureFoodAI: {
+                                store.pendingNutritionLaunchMode = .camera
+                                push(.nutricion)
+                            },
+                            onScanBarcode: {
+                                store.pendingNutritionLaunchMode = .barcode
+                                push(.nutricion)
+                            },
+                            onDescribeFoodAI: {
+                                store.pendingNutritionLaunchMode = .standard
+                                push(.nutricion)
+                            },
+                            onAddWater250ml: {
+                                store.addNutrientAmount(key: "Hidratación", amount: 250)
+                            },
                             onOpenAskBevel: {
                                 push(.askBevel)
                             },
-                            onOpenFitness: { selectTab(.fitness) },
-                            onOpenJournal: { selectTab(.diario) },
-                            onOpenSleep: { push(.suenoDetail) },
-                            onOpenDevices: { push(.dispositivos) }
+                            onQuickJournalNote: {
+                                quickMenuOpen = false
+                                quickNoteDraft = store.journalNote()
+                                showQuickNoteSheet = true
+                            },
+                            onLogScale: {
+                                quickMenuOpen = false
+                                showQuickScaleSheet = true
+                            },
+                            onLogWorkout: {
+                                quickMenuOpen = false
+                                showQuickWorkoutSheet = true
+                            },
+                            onOpenWeeklyReview: {
+                                push(.weeklyReview)
+                            },
+                            onOpenDevices: {
+                                push(.dispositivos)
+                            }
                         )
                         .zIndex(15)
                     }
@@ -137,6 +185,52 @@ struct ImprovingRootView: View {
         }
         .preferredColorScheme(themeSettings.isDarkMode ? .dark : .light)
         .animation(.easeInOut(duration: 0.25), value: currentOverlay)
+        .sheet(isPresented: $showQuickNoteSheet) {
+            NavigationStack {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Nota rápida para \(store.dateLabel) (visible para tu Coach IA)")
+                        .font(ImprovingFont.caption(13))
+                        .foregroundColor(BevelColors.textSecondary)
+                    TextEditor(text: $quickNoteDraft)
+                        .font(ImprovingFont.body(15))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .scrollContentBackground(.hidden)
+                        .padding(12)
+                        .frame(minHeight: 130)
+                        .background(RoundedRectangle(cornerRadius: 16).fill(BevelColors.card))
+                        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                    Button {
+                        store.setJournalNote(quickNoteDraft)
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        showQuickNoteSheet = false
+                    } label: {
+                        Text("Guardar nota del día")
+                            .font(ImprovingFont.cardTitle(15))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Capsule().fill(BevelColors.emeraldEnd))
+                    }
+                    Spacer()
+                }
+                .padding(16)
+                .background(BevelColors.canvas.ignoresSafeArea())
+                .navigationTitle("Nota del Diario")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Cerrar") { showQuickNoteSheet = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showQuickScaleSheet) {
+            ManualScaleLoggerSheet(store: store, onClose: { showQuickScaleSheet = false })
+        }
+        .sheet(isPresented: $showQuickWorkoutSheet) {
+            StrengthSessionLoggerSheet(store: store, routine: nil, onClose: { showQuickWorkoutSheet = false })
+        }
     }
 
     @ViewBuilder
@@ -259,6 +353,43 @@ struct ImprovingRootView: View {
             } else {
                 CardioMetricDetailScreen(store: store, route: cardioRoute, onBack: { pop() })
             }
+        case .bodyCompositionDetail:
+            BodyCompositionDetailScreen(
+                store: store,
+                kind: store.selectedBodyMetric,
+                onBack: { pop() }
+            )
+        case .weeklyReview:
+            WeeklyReviewScreen(
+                store: store,
+                onBack: { pop() },
+                onAskCoach: { push(.askBevel) }
+            )
+        case .allCategories:
+            AllCategoriesDirectoryScreen(
+                store: store,
+                onBack: { pop() },
+                onNavigate: { push($0) },
+                onSelectHealthMetric: { kind in
+                    store.selectedHealthMetric = kind
+                    push(.healthMetricDetail)
+                },
+                onOpenCardioMetric: { c in
+                    cardioRoute = c
+                    push(.cardioMetricDetail)
+                },
+                onOpenBodyMetric: { b in
+                    store.selectedBodyMetric = b
+                    push(.bodyCompositionDetail)
+                },
+                onOpenNutrient: { key in
+                    store.selectedNutrientKey = key
+                    push(.nutrientDetail)
+                },
+                onSelectMainTab: { tab in
+                    selectTab(tab)
+                }
+            )
         case .askBevel:
             AskBevelScreen(store: store, onClose: { pop() }, onOpenSettings: { push(.dispositivos) })
         case .dispositivos:
@@ -349,162 +480,129 @@ private struct LaunchMotionGraphicOverlay: View {
 
                 let r2 = min(max((rippleProgress - 0.18) / 0.82, 0), 1)
                 if r2 > 0.01 && r2 < 0.99 {
-                    let rad = maxR * (0.14 + 0.66 * r2)
+                    let rad = maxR * (0.14 + 0.72 * r2)
                     var p = Path()
                     p.addEllipse(in: CGRect(x: center.x - rad, y: center.y - rad, width: rad * 2, height: rad * 2))
-                    ctx.stroke(p, with: .color(BevelColors.textPrimary.opacity(Double(1 - r2) * 0.16)), lineWidth: max(2.2 * (1 - r2 * 0.5), 1))
+                    ctx.stroke(p, with: .color(Color(hex: 0x38D9B5).opacity(Double(1 - r2) * 0.24)), lineWidth: max(2.4 * (1 - r2 * 0.5), 1))
                 }
             }
-            .frame(width: 310, height: 310)
+            .ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                // Choreographed Improving App Icon Squircle
+            VStack(spacing: 26) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    RoundedRectangle(cornerRadius: 34, style: .continuous)
                         .fill(
                             LinearGradient(
-                                colors: isDark
-                                    ? [Color(hex: 0x202733), Color(hex: 0x161B24), Color(hex: 0x12161E)]
-                                    : [Color.white, Color(hex: 0xF1F5F9), Color(hex: 0xE2E8F0)],
+                                colors: [Color(hex: 0x161E24), Color(hex: 0x0F151A)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
+                        .frame(width: 132, height: 132)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                                .strokeBorder(Color.white.opacity((isDark ? 0.16 : 0.85) * Double(tileElevation)), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.11), lineWidth: 1)
                         )
-                        .shadow(color: BevelColors.greenPrimary.opacity(0.24 * Double(tileElevation)), radius: 22, y: 10)
+                        .shadow(color: BevelColors.greenPrimary.opacity(0.28 * Double(tileElevation)), radius: 26, y: 12)
+                        .scaleEffect(0.84 + 0.16 * tileElevation)
+                        .opacity(Double(tileElevation))
 
                     Canvas { ctx, sz in
-                        let w = sz.width
-                        let h = sz.height
-                        let cx = w / 2
-                        let cy = h / 2
-                        let radius = (30.0 / 108.0) * w * (0.76 + 0.24 * trackProgress)
-                        let strokePx = (10.2 / 108.0) * w
+                        let c = CGPoint(x: sz.width / 2, y: sz.height / 2)
+                        let r: CGFloat = 38
 
-                        // 1. Recessed circular track
                         if trackProgress > 0.01 {
                             var track = Path()
-                            track.addEllipse(in: CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2))
-                            ctx.stroke(track, with: .color(Color(hex: isDark ? 0x2E3848 : 0xCBD5E1).opacity(Double(trackProgress))), lineWidth: strokePx)
+                            track.addArc(center: c, radius: r, startAngle: .degrees(-90), endAngle: .degrees(-90 + 360 * Double(trackProgress)), clockwise: false)
+                            ctx.stroke(track, with: .color(Color.white.opacity(0.11)), style: StrokeStyle(lineWidth: 10.5, lineCap: .round))
                         }
 
-                        // 2. Signature Emerald-Lime Recovery Arc + Specular Comet Highlight
-                        if arcSweep > 0.5 {
+                        if arcSweep > 0.01 {
                             var arc = Path()
-                            arc.addArc(
-                                center: CGPoint(x: cx, y: cy),
-                                radius: radius,
-                                startAngle: .degrees(-90),
-                                endAngle: .degrees(-90 + Double(arcSweep)),
-                                clockwise: false
-                            )
-                            let grad = Gradient(colors: [Color(hex: 0x4ADE80), Color(hex: 0x22C55E), Color(hex: 0x10B981)])
+                            arc.addArc(center: c, radius: r, startAngle: .degrees(-90), endAngle: .degrees(-90 + 275 * Double(arcSweep)), clockwise: false)
                             ctx.stroke(
                                 arc,
-                                with: .linearGradient(grad, startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: w, y: h)),
-                                style: StrokeStyle(lineWidth: strokePx, lineCap: .round)
-                            )
-
-                            let tipFade = min(max(1.0 - Double(tileElevation) * 0.72, 0), 1)
-                            if tipFade > 0.05 {
-                                let rad = (-90.0 + Double(arcSweep)) * .pi / 180.0
-                                let tip = CGPoint(x: cx + radius * CGFloat(cos(rad)), y: cy + radius * CGFloat(sin(rad)))
-                                let glowR = strokePx * 1.45
-                                let tipGrad = Gradient(colors: [.white.opacity(0.85 * tipFade), Color(hex: 0x22C55E).opacity(0.45 * tipFade), .clear])
-                                ctx.fill(
-                                    Path(ellipseIn: CGRect(x: tip.x - glowR, y: tip.y - glowR, width: glowR * 2, height: glowR * 2)),
-                                    with: .radialGradient(tipGrad, center: tip, startRadius: 0, endRadius: glowR)
-                                )
-                            }
-                        }
-
-                        // 3. Center pulse spark dot
-                        let dotR = (6.4 / 108.0) * w * dotScale
-                        if dotR > 0.5 {
-                            ctx.fill(
-                                Path(ellipseIn: CGRect(x: cx - dotR, y: cy - dotR, width: dotR * 2, height: dotR * 2)),
-                                with: .color(isDark ? .white : Color(hex: 0x111827))
-                            )
-                        }
-
-                        // 4. Diagonal specular glass sheen sweep
-                        if sheenProgress > -0.5 && sheenProgress < 1.5 {
-                            let bandStart = CGPoint(x: w * (sheenProgress - 0.35), y: 0)
-                            let bandEnd = CGPoint(x: w * (sheenProgress + 0.35), y: h)
-                            let sheenGrad = Gradient(colors: [.clear, Color.white.opacity(isDark ? 0.18 : 0.42), .clear])
-                            ctx.fill(
-                                Path(CGRect(x: 0, y: 0, width: w, height: h)),
-                                with: .linearGradient(sheenGrad, startPoint: bandStart, endPoint: bandEnd)
+                                with: .linearGradient(
+                                    Gradient(colors: [Color(hex: 0x4ADE80), Color(hex: 0x10B981), Color(hex: 0x38D9B5)]),
+                                    startPoint: CGPoint(x: 0, y: 0),
+                                    endPoint: CGPoint(x: sz.width, y: sz.height)
+                                ),
+                                style: StrokeStyle(lineWidth: 10.5, lineCap: .round)
                             )
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-                }
-                .frame(width: 116, height: 116)
-                .scaleEffect(0.86 + 0.14 * tileElevation)
+                    .frame(width: 132, height: 132)
 
-                // Masked kinetic wordmark reveal
+                    Circle()
+                        .fill(BevelColors.greenPrimary)
+                        .frame(width: 14, height: 14)
+                        .scaleEffect(dotScale)
+                        .shadow(color: BevelColors.greenPrimary.opacity(0.7), radius: 8)
+
+                    LinearGradient(
+                        colors: [.clear, Color.white.opacity(0.22), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: 60, height: 180)
+                    .rotationEffect(.degrees(24))
+                    .offset(x: sheenProgress * 160)
+                    .mask(RoundedRectangle(cornerRadius: 34, style: .continuous).frame(width: 132, height: 132))
+                }
+
                 VStack(spacing: 6) {
                     Text("Improving")
-                        .font(.system(size: 31, weight: .heavy, design: .rounded))
-                        .tracking(-0.6 + (1 - wordmarkProgress) * 2.4)
+                        .font(ImprovingFont.displayLarge(30))
                         .foregroundColor(BevelColors.textPrimary)
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(BevelColors.greenPrimary)
-                            .frame(width: 6, height: 6)
-                        Text("TU FISIOLOGÍA, A MEDIDA")
-                            .font(ImprovingFont.microLabel(10.5))
-                            .tracking(1.5)
-                            .foregroundColor(BevelColors.textSecondary)
-                    }
+                        .tracking(0.6)
+                    Text("BIOMETRÍA REAL · RENDIMIENTO INTELIGENTE")
+                        .font(ImprovingFont.microLabel(10))
+                        .foregroundColor(BevelColors.greenPrimary.opacity(0.9))
                 }
                 .opacity(Double(wordmarkProgress))
-                .offset(y: (1 - wordmarkProgress) * 28)
+                .offset(y: (1 - wordmarkProgress) * 10)
             }
         }
         .opacity(exitAlpha)
-        .contentShape(Rectangle())
-        .onTapGesture { triggerFinish() }
-        .task {
+        .onAppear {
             if reduceMotion {
-                dotScale = 1
-                trackProgress = 1
-                arcSweep = 248
-                tileElevation = 1
-                wordmarkProgress = 1
-                try? await Task.sleep(nanoseconds: 420_000_000)
-                withAnimation(.easeIn(duration: 0.22)) { exitAlpha = 0 }
-                try? await Task.sleep(nanoseconds: 240_000_000)
-                triggerFinish()
+                dotScale = 1; trackProgress = 1; arcSweep = 1; tileElevation = 1; wordmarkProgress = 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    withAnimation(.easeOut(duration: 0.25)) { exitAlpha = 0 }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { triggerFinish() }
+                }
                 return
             }
 
-            // Beat 1: Center pulse dot + dual biometric sonar ripples
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.56)) { dotScale = 1.0 }
-            withAnimation(.timingCurve(0.16, 1.0, 0.3, 1.0, duration: 1.05)) { rippleProgress = 1.0 }
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.68)) {
+                dotScale = 1.0
+                tileElevation = 1.0
+            }
+            withAnimation(.easeOut(duration: 1.05)) {
+                rippleProgress = 1.0
+            }
+            withAnimation(.easeOut(duration: 0.42).delay(0.14)) {
+                trackProgress = 1.0
+            }
+            withAnimation(.spring(response: 0.62, dampingFraction: 0.80).delay(0.24)) {
+                arcSweep = 1.0
+            }
+            withAnimation(.easeInOut(duration: 0.68).delay(0.55)) {
+                sheenProgress = 1.15
+            }
+            withAnimation(.easeOut(duration: 0.42).delay(0.40)) {
+                wordmarkProgress = 1.0
+            }
 
-            // Beat 2: Ring track + emerald recovery arc with overshoot settle
-            try? await Task.sleep(nanoseconds: 160_000_000)
-            withAnimation(.easeOut(duration: 0.46)) { trackProgress = 1.0 }
-            try? await Task.sleep(nanoseconds: 75_000_000)
-            withAnimation(.timingCurve(0.22, 1.0, 0.36, 1.0, duration: 0.66)) { arcSweep = 258 }
-
-            // Beat 3: Squircle elevation + specular sheen + kinetic wordmark rise
-            try? await Task.sleep(nanoseconds: 380_000_000)
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.66)) { arcSweep = 248 }
-            withAnimation(.easeOut(duration: 0.42)) { tileElevation = 1.0 }
-            withAnimation(.easeInOut(duration: 0.65)) { sheenProgress = 1.6 }
-            withAnimation(.easeOut(duration: 0.52)) { wordmarkProgress = 1.0 }
-
-            let holdNs: UInt64 = isOnboardingNext ? 820_000_000 : 480_000_000
-            try? await Task.sleep(nanoseconds: holdNs)
-            withAnimation(.easeIn(duration: 0.30)) { exitAlpha = 0.0 }
-            try? await Task.sleep(nanoseconds: 320_000_000)
-            triggerFinish()
+            let hold: Double = isOnboardingNext ? 1.10 : 1.18
+            DispatchQueue.main.asyncAfter(deadline: .now() + hold) {
+                withAnimation(.easeOut(duration: 0.32)) {
+                    exitAlpha = 0.0
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+                    triggerFinish()
+                }
+            }
         }
     }
 }

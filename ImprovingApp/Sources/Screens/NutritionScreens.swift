@@ -107,6 +107,7 @@ struct NutricionScreen: View {
     @State private var showMyFoodsSheet: Bool = false
     @State private var showFullTimelineSheet: Bool = false
     @State private var showMealComposer: Bool = false
+    @State private var composerInitialMode: NutritionComposerInitialMode = .standard
     @State private var mealToEdit: NutritionMealItem? = nil
     @State private var macroDetailsInPercent: Bool = false
     @State private var factorsExpanded: Bool = false
@@ -173,9 +174,17 @@ struct NutricionScreen: View {
                                 Menu {
                                     Button {
                                         mealToEdit = nil
+                                        composerInitialMode = .standard
                                         showMealComposer = true
                                     } label: {
                                         Label("Registrar comida con IA (foto/texto)", systemImage: "camera.viewfinder")
+                                    }
+                                    Button {
+                                        mealToEdit = nil
+                                        composerInitialMode = .barcode
+                                        showMealComposer = true
+                                    } label: {
+                                        Label("Escanear código de barras (OpenFoodFacts)", systemImage: "barcode.viewfinder")
                                     }
                                     Button { showGoalsSheet = true } label: {
                                         Label("Editar objetivos diarios", systemImage: "target")
@@ -529,16 +538,31 @@ struct NutricionScreen: View {
                                     .foregroundColor(BevelColors.textMuted)
                             }
                             Spacer()
-                            Button {
-                                mealToEdit = nil
-                                showMealComposer = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 15, weight: .bold))
-                                    .foregroundColor(BevelColors.textPrimary)
-                                    .frame(width: 36, height: 36)
-                                    .background(Circle().fill(BevelColors.card))
-                                    .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                            HStack(spacing: 8) {
+                                Button {
+                                    mealToEdit = nil
+                                    composerInitialMode = .barcode
+                                    showMealComposer = true
+                                } label: {
+                                    Image(systemName: "barcode.viewfinder")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                        .frame(width: 36, height: 36)
+                                        .background(Circle().fill(BevelColors.card))
+                                        .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                                }
+                                Button {
+                                    mealToEdit = nil
+                                    composerInitialMode = .standard
+                                    showMealComposer = true
+                                } label: {
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                        .frame(width: 36, height: 36)
+                                        .background(Circle().fill(BevelColors.card))
+                                        .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                                }
                             }
                         }
                         .padding(.top, 8)
@@ -635,11 +659,23 @@ struct NutricionScreen: View {
             MealComposerSheet(
                 store: store,
                 existingMeal: mealToEdit,
+                initialMode: composerInitialMode,
                 onClose: {
                     showMealComposer = false
                     mealToEdit = nil
+                    composerInitialMode = .standard
                 }
             )
+        }
+        .onAppear {
+            if let pending = store.pendingNutritionLaunchMode {
+                store.pendingNutritionLaunchMode = nil
+                mealToEdit = nil
+                composerInitialMode = pending
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    showMealComposer = true
+                }
+            }
         }
         .sheet(isPresented: $showGoalsSheet) {
             NutritionGoalsSheet(store: store, onClose: { showGoalsSheet = false })
@@ -1507,16 +1543,19 @@ private struct NutritionInfoSheet: View {
     }
 }
 
-// MARK: - Multimodal AI Meal Composer & Editor Sheet (Camera + Gallery + Natural Text + Favorite + Manual Override)
+// MARK: - Multimodal AI & Barcode Meal Composer Sheet (Camera + Gallery + OpenFoodFacts Barcode + Natural Text!)
 
 private struct MealComposerSheet: View {
     @ObservedObject var store: ImprovingStore
     let existingMeal: NutritionMealItem?
+    var initialMode: NutritionComposerInitialMode = .standard
     let onClose: () -> Void
 
     @State private var naturalDescription: String = ""
     @State private var selectedPhotoItem: PhotosPickerItem? = nil
     @State private var showCameraSheet: Bool = false
+    @State private var showBarcodeScannerSheet: Bool = false
+    @State private var didApplyInitialMode: Bool = false
     @State private var capturedImage: UIImage? = nil
     @State private var capturedJpegData: Data? = nil
     @State private var removedExistingPhoto: Bool = false
@@ -1561,11 +1600,11 @@ private struct MealComposerSheet: View {
                                 }
                             }
 
-                            HStack(spacing: 10) {
+                            HStack(spacing: 8) {
                                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
                                     Button { showCameraSheet = true } label: {
                                         Label("Cámara", systemImage: "camera.fill")
-                                            .font(ImprovingFont.caption(12.5))
+                                            .font(ImprovingFont.caption(12))
                                             .fontWeight(.semibold)
                                             .foregroundColor(BevelColors.textPrimary)
                                             .frame(maxWidth: .infinity)
@@ -1575,13 +1614,23 @@ private struct MealComposerSheet: View {
                                 }
 
                                 PhotosPicker(selection: $selectedPhotoItem, matching: .images, photoLibrary: .shared()) {
-                                    Label(capturedImage != nil ? "Cambiar foto" : "Fototeca", systemImage: "photo.on.rectangle")
-                                        .font(ImprovingFont.caption(12.5))
+                                    Label(capturedImage != nil ? "Foto" : "Fototeca", systemImage: "photo.on.rectangle")
+                                        .font(ImprovingFont.caption(12))
                                         .fontWeight(.semibold)
                                         .foregroundColor(BevelColors.textPrimary)
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 10)
                                         .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                                }
+
+                                Button { showBarcodeScannerSheet = true } label: {
+                                    Label("Código", systemImage: "barcode.viewfinder")
+                                        .font(ImprovingFont.caption(12))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                        .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.greenSoftBg))
                                 }
                             }
 
@@ -1756,7 +1805,21 @@ private struct MealComposerSheet: View {
             .navigationTitle(existingMeal == nil ? "Registrar comida" : "Editar comida")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
-            .onAppear { populateInitialFields() }
+            .onAppear {
+                populateInitialFields()
+                if !didApplyInitialMode && existingMeal == nil {
+                    didApplyInitialMode = true
+                    if initialMode == .barcode {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showBarcodeScannerSheet = true
+                        }
+                    } else if initialMode == .camera && UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            showCameraSheet = true
+                        }
+                    }
+                }
+            }
             .onChange(of: selectedPhotoItem) { _, newItem in
                 guard let newItem else { return }
                 Task {
@@ -1783,7 +1846,32 @@ private struct MealComposerSheet: View {
                 )
                 .ignoresSafeArea()
             }
+            .sheet(isPresented: $showBarcodeScannerSheet) {
+                BarcodeScannerSheet(
+                    onApplyEstimate: { est in
+                        applyAnalyzedEstimate(est)
+                        showBarcodeScannerSheet = false
+                    },
+                    onClose: { showBarcodeScannerSheet = false }
+                )
+            }
         }
+    }
+
+    private func applyAnalyzedEstimate(_ est: AnalyzedMealEstimate) {
+        titleDraft = est.title
+        emojiDraft = est.emoji
+        kcalDraft = "\(est.kcal)"
+        proteinDraft = "\(est.proteinG)"
+        carbsDraft = "\(est.carbsG)"
+        fatDraft = "\(est.fatG)"
+        qualityDraft = Double(est.qualityScore)
+        caffeineDraft = "\(Int(est.caffeineMg.rounded()))"
+        alcoholDraft = est.alcoholDrinks > 0 ? String(format: "%.1f", est.alcoholDrinks) : "0"
+        calciumDraft = "\(Int(est.calciumMg.rounded()))"
+        computedFactors = est.qualityFactors
+        aiFeedbackText = est.aiSummary
+        aiModelBadge = est.usedLiveAI ? "✓ \(est.modelUsed)" : "Modo local"
     }
 
     private func numericField(_ label: String, text: Binding<String>, accent: Color, decimal: Bool = false) -> some View {
@@ -1934,6 +2022,258 @@ private struct MealComposerSheet: View {
             ))
         }
         onClose()
+    }
+}
+
+// MARK: - N3. OpenFoodFacts Barcode Scanner Sheet (Native AVFoundation + Gram Scaler + Zero API Key!)
+
+private struct BarcodeScannerSheet: View {
+    let onApplyEstimate: (AnalyzedMealEstimate) -> Void
+    let onClose: () -> Void
+
+    @State private var isTorchOn: Bool = false
+    @State private var manualCode: String = ""
+    @State private var isLookingUp: Bool = false
+    @State private var cameraNotice: String? = nil
+    @State private var errorText: String? = nil
+    @State private var foundProduct: BarcodeProductResult? = nil
+    @State private var gramsAmount: Double = 100.0
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    // Live Camera Viewfinder with Laser Guide
+                    ZStack(alignment: .bottomTrailing) {
+                        BarcodeScannerCameraView(
+                            isTorchOn: isTorchOn,
+                            onCodeDetected: { code in
+                                manualCode = code
+                                lookupBarcode(code)
+                            },
+                            onCameraUnavailable: { notice in
+                                cameraNotice = notice
+                            }
+                        )
+                        .frame(height: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .strokeBorder(BevelColors.cardBorder, lineWidth: 1)
+                        )
+                        .overlay {
+                            if let notice = cameraNotice {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "barcode.viewfinder")
+                                        .font(.system(size: 32))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                    Text(notice)
+                                        .font(ImprovingFont.caption(12.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal, 24)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(BevelColors.card)
+                                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                            } else {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(BevelColors.greenPrimary.opacity(0.9), lineWidth: 2)
+                                    .frame(width: 220, height: 100)
+                                    .overlay(
+                                        Rectangle()
+                                            .fill(BevelColors.greenPrimary.opacity(0.65))
+                                            .frame(height: 1.5)
+                                    )
+                            }
+                        }
+
+                        if cameraNotice == nil {
+                            Button {
+                                isTorchOn.toggle()
+                            } label: {
+                                Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(isTorchOn ? .black : .white)
+                                    .frame(width: 38, height: 38)
+                                    .background(Circle().fill(isTorchOn ? BevelColors.amberStart : Color.black.opacity(0.65)))
+                            }
+                            .padding(12)
+                        }
+                    }
+
+                    // Manual EAN Input Fallback
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("CÓDIGO DE BARRAS (OPENFOODFACTS GRATIS)")
+                                .font(ImprovingFont.microLabel(10.5))
+                                .foregroundColor(BevelColors.textMuted)
+                            HStack(spacing: 8) {
+                                TextField("Ej: 8410076472106", text: $manualCode)
+                                    .keyboardType(.numberPad)
+                                    .font(ImprovingFont.cardTitle(15))
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.textPrimary)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+
+                                Button {
+                                    lookupBarcode(manualCode)
+                                } label: {
+                                    if isLookingUp {
+                                        ProgressView().tint(.white)
+                                            .frame(width: 78, height: 40)
+                                            .background(Capsule().fill(BevelColors.indigoEnd))
+                                    } else {
+                                        Text("Buscar")
+                                            .font(ImprovingFont.cardTitle(13.5))
+                                            .foregroundColor(.white)
+                                            .frame(width: 78, height: 40)
+                                            .background(Capsule().fill(BevelColors.indigoEnd))
+                                    }
+                                }
+                                .disabled(isLookingUp || manualCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+
+                            if let err = errorText {
+                                Text(err)
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.amberStart)
+                            }
+                        }
+                        .padding(14)
+                    }
+
+                    // Found Product Preview & Portion Adjuster
+                    if let prod = foundProduct {
+                        let est = prod.toMealEstimate(grams: gramsAmount)
+                        BevelCard(cornerRadius: 20) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text(est.emoji)
+                                        .font(.system(size: 28))
+                                        .frame(width: 44, height: 44)
+                                        .background(Circle().fill(BevelColors.cardSubtle))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(prod.displayTitle)
+                                            .font(ImprovingFont.cardTitle(15.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        HStack(spacing: 8) {
+                                            Text("Calidad \(est.qualityScore)/100")
+                                                .font(ImprovingFont.caption(12))
+                                                .fontWeight(.bold)
+                                                .foregroundColor(est.qualityScore >= 70 ? BevelColors.greenPrimary : BevelColors.amberStart)
+                                            if let ns = prod.nutriscoreGrade?.uppercased(), !ns.isEmpty {
+                                                Text("Nutri-Score \(ns)")
+                                                    .font(ImprovingFont.caption(11.5))
+                                                    .fontWeight(.semibold)
+                                                    .foregroundColor(BevelColors.skyBlue)
+                                            }
+                                            if let sz = prod.servingSizeLabel, !sz.isEmpty {
+                                                Text("Porción: \(sz)")
+                                                    .font(ImprovingFont.caption(11.5))
+                                                    .foregroundColor(BevelColors.textMuted)
+                                            }
+                                        }
+                                    }
+                                    Spacer()
+                                }
+
+                                // Portion Gram Control
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("Cantidad consumida")
+                                            .font(ImprovingFont.caption(12.5))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                        Spacer()
+                                        Text("\(Int(gramsAmount.rounded())) g")
+                                            .font(ImprovingFont.cardTitle(16))
+                                            .monospacedDigit()
+                                            .foregroundColor(BevelColors.textPrimary)
+                                    }
+                                    HStack(spacing: 8) {
+                                        ForEach([30.0, 50.0, 100.0, 150.0, 200.0], id: \.self) { preset in
+                                            Button("\(Int(preset))g") {
+                                                UISelectionFeedbackGenerator().selectionChanged()
+                                                gramsAmount = preset
+                                            }
+                                            .font(ImprovingFont.caption(12))
+                                            .fontWeight(.bold)
+                                            .foregroundColor(abs(gramsAmount - preset) < 1 ? .white : BevelColors.textSecondary)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 7)
+                                            .background(Capsule().fill(abs(gramsAmount - preset) < 1 ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                                        }
+                                    }
+                                    Slider(value: $gramsAmount, in: 10...500, step: 5)
+                                        .tint(BevelColors.greenPrimary)
+                                }
+
+                                // Scaled Macros Grid
+                                HStack(spacing: 8) {
+                                    macroPill("kcal", val: "\(est.kcal)", color: BevelColors.textPrimary)
+                                    macroPill("Grasa", val: "\(est.fatG)g", color: NutritionPalette.fatBlue)
+                                    macroPill("Carbos", val: "\(est.carbsG)g", color: NutritionPalette.carbsAmber)
+                                    macroPill("Prot", val: "\(est.proteinG)g", color: NutritionPalette.proteinPink)
+                                }
+
+                                Button {
+                                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                    onApplyEstimate(est)
+                                } label: {
+                                    Text("Usar este producto (\(est.kcal) kcal)")
+                                        .font(ImprovingFont.cardTitle(15))
+                                        .foregroundColor(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 13)
+                                        .background(Capsule().fill(BevelColors.emeraldEnd))
+                                }
+                            }
+                            .padding(16)
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle("Escanear código de barras")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cerrar", action: onClose)
+                }
+            }
+        }
+    }
+
+    private func lookupBarcode(_ raw: String) {
+        guard !isLookingUp else { return }
+        isLookingUp = true
+        errorText = nil
+        Task {
+            let res = await OpenFoodFactsService.lookupProduct(barcode: raw)
+            await MainActor.run {
+                isLookingUp = false
+                if let p = res.product {
+                    foundProduct = p
+                    gramsAmount = p.defaultGrams
+                    errorText = nil
+                } else {
+                    foundProduct = nil
+                    errorText = res.errorMessage
+                }
+            }
+        }
+    }
+
+    private func macroPill(_ label: String, val: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(val).font(ImprovingFont.cardTitle(15)).monospacedDigit().foregroundColor(color)
+            Text(label).font(ImprovingFont.caption(10.5)).foregroundColor(BevelColors.textMuted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 11).fill(BevelColors.cardSubtle))
     }
 }
 

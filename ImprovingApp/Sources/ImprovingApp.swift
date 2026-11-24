@@ -13,8 +13,15 @@ struct ImprovingApp: App {
                     store.handleIncomingURL(url)
                 }
                 .onChange(of: scenePhase) { _, newPhase in
-                    if newPhase == .active {
+                    switch newPhase {
+                    case .active:
                         store.handleAppBecameActive()
+                        store.publishWidgetSnapshot(triggerReload: true)
+                    case .inactive, .background:
+                        store.publishWidgetSnapshot(triggerReload: true)
+                        store.flushPersistenceNow()
+                    @unknown default:
+                        break
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .improvingShortcutsSyncDidArrive)) { _ in

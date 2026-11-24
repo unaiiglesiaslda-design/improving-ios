@@ -330,9 +330,9 @@ actor GeminiCoachService {
         """
     }
 
-    // MARK: - Multi-Turn Role Normalization (Prevents Gemini HTTP 400 on Turn 2+!)
+    // MARK: - Multi-Turn Role Normalization (Prevents Gemini HTTP 400 on Turn 2+ & Supports Photo Attachments!)
 
-    private func buildNormalizedGeminiContents(history: [CoachChatMessage], currentPrompt: String) -> [[String: Any]] {
+    private func buildNormalizedGeminiContents(history: [CoachChatMessage], currentPrompt: String, jpegImageData: Data? = nil) -> [[String: Any]] {
         var turns: [(role: String, text: String)] = []
 
         for msg in history.suffix(16) {
@@ -366,8 +366,18 @@ actor GeminiCoachService {
             turns.append(("user", cleanPrompt))
         }
 
-        return turns.map { turn in
-            ["role": turn.role, "parts": [["text": turn.text]]]
+        return turns.enumerated().map { idx, turn in
+            var parts: [[String: Any]] = []
+            if idx == turns.count - 1, let img = jpegImageData, !img.isEmpty {
+                parts.append([
+                    "inline_data": [
+                        "mime_type": "image/jpeg",
+                        "data": img.base64EncodedString()
+                    ]
+                ])
+            }
+            parts.append(["text": turn.text])
+            return ["role": turn.role, "parts": parts]
         }
     }
 
@@ -414,7 +424,8 @@ actor GeminiCoachService {
         availableHighlights: [String],
         missingCategories: [String],
         history: [CoachChatMessage],
-        previousInteractionId: String? = nil
+        previousInteractionId: String? = nil,
+        jpegImageData: Data? = nil
     ) async -> GeminiCoachResult {
         let seed = nextSeed()
         let isFollowUp = !history.isEmpty
@@ -432,7 +443,7 @@ actor GeminiCoachService {
 
         // Tier 1: User's Gemini API Key (auto-discovers live active models via /v1beta/models so 404 deprecations self-heal!)
         if !cleanKey.isEmpty {
-            if model.hasPrefix("gemini-4"),
+            if jpegImageData == nil, model.hasPrefix("gemini-4"),
                let res = await callGeminiInteractionsChat(
                 prompt: prompt,
                 sysPrompt: sysPrompt,
@@ -458,7 +469,8 @@ actor GeminiCoachService {
                     sysPrompt: sysPrompt,
                     history: history,
                     apiKey: cleanKey,
-                    model: m
+                    model: m,
+                    jpegImageData: jpegImageData
                 )
                 if let res = attempt.result {
                     return res
@@ -481,18 +493,21 @@ actor GeminiCoachService {
         }
 
         // Tier 2: Out-of-the-box Keyless Cloud LLM with full multi-turn history & multi-model retry
-        if let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
+        if jpegImageData == nil, let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
             return cloudRes
         }
 
         // Tier 3: Honest offline conversational fallback with real diagnostic cause
+        let extraDiag: String? = (jpegImageData != nil && cleanKey.isEmpty)
+            ? "Para analizar imágenes en el chat añade tu API Key gratuita de Google AI Studio en Dispositivos y Ajustes."
+            : lastCloudError
         return buildOfflineChatFallback(
             prompt: prompt,
             userName: userName,
             currentDate: currentDate,
             availableHighlights: availableHighlights,
             missingCategories: missingCategories,
-            diagnosticNote: lastCloudError
+            diagnosticNote: extraDiag
         )
     }
 
@@ -556,18 +571,19 @@ actor GeminiCoachService {
         sysPrompt: String,
         history: [CoachChatMessage],
         apiKey: String,
-        model: String
+        model: String,
+        jpegImageData: Data? = nil
     ) async -> (result: GeminiCoachResult?, errorDetail: String?) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
             return (nil, "URL de modelo inválida")
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 26
+        req.timeoutInterval = 28
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
-        let contents = buildNormalizedGeminiContents(history: history, currentPrompt: prompt)
+        let contents = buildNormalizedGeminiContents(history: history, currentPrompt: prompt, jpegImageData: jpegImageData)
         var genConfig: [String: Any] = [
             "temperature": 0.78,
             "maxOutputTokens": model.contains("pro") ? 2400 : 1600
@@ -1689,6 +1705,422 @@ actor GeminiCoachService {
             aiSummary: note,
             usedLiveAI: false,
             modelUsed: "local-nutrition"
+        )
+    }
+
+    // MARK: - 4. Weekly Review AI Analyst (7-Day vs Previous 7-Day Real Comparison)
+
+    func generateWeeklyReviewInsight(
+        report: WeeklyReviewReport,
+        userName: String,
+        apiKey: String,
+        selectedModel: String
+    ) async -> WeeklyAiReviewInsight {
+        let nowFmt = DateFormatter()
+        nowFmt.dateFormat = "HH:mm"
+        let generatedLabel = nowFmt.string(from: Date())
+        let cleanKey = Self.sanitizeApiKey(apiKey)
+        let name = userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "el atleta" : userName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let payloadDict: [String: Any] = [
+            "periodo": report.dateRangeLabel,
+            "dias_con_datos": report.daysWithData,
+            "recuperacion_media_pct": report.avgRecovery.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "delta_recuperacion_pct": report.recoveryDelta.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "vfc_media_ms": report.avgHrv.map { AppleHealthExportImporter.round1($0) as Any } ?? "NO_DISPONIBLE",
+            "delta_vfc_ms": report.hrvDelta.map { AppleHealthExportImporter.round1($0) as Any } ?? "NO_DISPONIBLE",
+            "fcr_media_ppm": report.avgRhr.map { AppleHealthExportImporter.round1($0) as Any } ?? "NO_DISPONIBLE",
+            "sueno_medio_min": report.avgSleepMinutes.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "delta_sueno_min": report.sleepMinutesDelta.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "deuda_sueno_min": report.sleepDebtMinutes,
+            "esfuerzo_medio_pct": report.avgStrainPct.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "entrenamientos_7d": report.workoutsCount,
+            "minutos_entreno_7d": report.totalWorkoutMinutes,
+            "carga_cardio_actual": report.cardioLoadCurrent,
+            "estado_carga_cardio": report.cardioLoadState.rawValue,
+            "puntuacion_nutricion_media": report.avgNutritionScore.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "energia_neta_media_kcal": report.avgNetEnergyKcal.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "pasos_medios": report.avgSteps.map { $0 as Any } ?? "NO_DISPONIBLE",
+            "habitos_top": report.topHabits.map { "\($0.title) (\($0.count)d)" }
+        ]
+        let jsonStr: String = {
+            guard let d = try? JSONSerialization.data(withJSONObject: payloadDict, options: [.prettyPrinted]),
+                  let s = String(data: d, encoding: .utf8) else { return "{}" }
+            return s
+        }()
+
+        let sysPrompt = """
+        Eres el fisiólogo deportivo de \(name) en Improving. Analiza su semana real frente a los 7 días anteriores y devuelve EXCLUSIVAMENTE un JSON válido:
+        {
+          "headline": "Titular corto y directo de máximo 9 palabras resumiendo la semana",
+          "takeaways": [
+            "Conclusión 1 concreta con datos reales y acción práctica para la próxima semana",
+            "Conclusión 2 concreta conectando sueño/VFC/carga o nutrición real",
+            "Conclusión 3 concreta de prioridad para los próximos 7 días"
+          ]
+        }
+        Reglas estrictas:
+        - Español natural de tú a tú, SIN asteriscos **, SIN paréntesis (), SIN inventar cifras marcadas como NO_DISPONIBLE.
+        - Exactamente 3 elementos en takeaways, cada uno de 1-2 frases concisas y accionables.
+        """
+        let userPrompt = "Resumen semanal real de \(name):\n\(jsonStr)"
+
+        if !cleanKey.isEmpty {
+            let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
+            for m in candidates.prefix(4) {
+                if let raw = await callGeminiMultimodalJson(
+                    prompt: userPrompt,
+                    sysPrompt: sysPrompt,
+                    jpegImageData: nil,
+                    apiKey: cleanKey,
+                    model: m
+                ), let parsed = Self.parseWeeklyReviewJson(raw, weekKey: report.weekKey, generatedAt: generatedLabel, modelUsed: m, isLiveAI: true) {
+                    return parsed
+                }
+            }
+        }
+
+        if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
+           let parsed = Self.parseWeeklyReviewJson(raw, weekKey: report.weekKey, generatedAt: generatedLabel, modelUsed: "improving-live-ai", isLiveAI: true) {
+            return parsed
+        }
+
+        return Self.buildOfflineWeeklyReview(report: report, generatedAt: generatedLabel)
+    }
+
+    nonisolated static func parseWeeklyReviewJson(
+        _ raw: String,
+        weekKey: String,
+        generatedAt: String,
+        modelUsed: String,
+        isLiveAI: Bool
+    ) -> WeeklyAiReviewInsight? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for p in ["```json", "```JSON", "```"] where cleaned.hasPrefix(p) { cleaned = String(cleaned.dropFirst(p.count)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        guard let s = cleaned.firstIndex(of: "{"), let e = cleaned.lastIndex(of: "}"), e > s,
+              let data = String(cleaned[s...e]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let headline = sanitizeDirectHumanText((obj["headline"] as? String) ?? "")
+        let items = ((obj["takeaways"] as? [String]) ?? [])
+            .map { sanitizeDirectHumanText($0) }
+            .filter { !$0.isEmpty }
+        guard !headline.isEmpty, !items.isEmpty else { return nil }
+        return WeeklyAiReviewInsight(
+            weekKey: weekKey,
+            headline: headline,
+            takeaways: Array(items.prefix(3)),
+            generatedAtLabel: generatedAt,
+            modelUsed: modelUsed,
+            isLiveAI: isLiveAI
+        )
+    }
+
+    nonisolated static func buildOfflineWeeklyReview(report: WeeklyReviewReport, generatedAt: String) -> WeeklyAiReviewInsight {
+        var bullets: [String] = []
+        if let rec = report.avgRecovery {
+            let deltaTxt = report.recoveryDelta.map { $0 >= 0 ? "subiendo \($0) puntos respecto a la semana previa" : "bajando \(abs($0)) puntos frente a la semana anterior" } ?? "consolidando tu base autonómica"
+            bullets.append("Tu recuperación media semanal se situó en \(rec)%, \(deltaTxt). Mantén las sesiones intensas los días por encima de 65%.")
+        }
+        if let sleepM = report.avgSleepMinutes {
+            let h = sleepM / 60
+            let m = sleepM % 60
+            if report.sleepDebtMinutes > 35 {
+                bullets.append("Promediaste \(h) h \(String(format: "%02d", m)) min de sueño y arrastras \(report.sleepDebtMinutes) min de deuda. Adelanta 25 minutos tu hora de acostarte las próximas tres noches.")
+            } else {
+                bullets.append("Buen control del descanso con \(h) h \(String(format: "%02d", m)) min de media nocturna. Conserva horarios estables para seguir protegiendo tu VFC.")
+            }
+        }
+        if report.workoutsCount > 0 {
+            bullets.append("Completaste \(report.workoutsCount) entrenamientos sumando \(report.totalWorkoutMinutes) minutos y una carga cardio de \(report.cardioLoadCurrent) en estado \(report.cardioLoadState.rawValue.lowercased()).")
+        } else if let nut = report.avgNutritionScore {
+            bullets.append("Tu puntuación media de nutrición fue de \(nut) sobre 100. Prioriza proteína y alimentos enteros en tus dos comidas principales.")
+        }
+        while bullets.count < 3 {
+            bullets.append("Sigue registrando sueño, entrenamientos y hábitos del Diario para afinar tus correlaciones reales de los próximos 7 días.")
+        }
+        let headline: String = {
+            if let rec = report.avgRecovery, rec >= 72 { return "Semana sólida con buena asimilación fisiológica" }
+            if report.sleepDebtMinutes > 45 { return "Semana exigente: prioriza recuperar horas de sueño" }
+            if report.workoutsCount >= 4 { return "Buen volumen de entrenamiento con carga activa" }
+            return "Balance semanal de tus métricas reales"
+        }()
+        return WeeklyAiReviewInsight(
+            weekKey: report.weekKey,
+            headline: headline,
+            takeaways: Array(bullets.prefix(3)),
+            generatedAtLabel: generatedAt,
+            modelUsed: "motor-local",
+            isLiveAI: false
+        )
+    }
+
+    // MARK: - 5. Blood Test / Lab Report Multimodal AI Extractor (Photo or PDF Pages -> Biomarkers)
+
+    func analyzeLabReportWithAI(
+        pageImagesData: [Data],
+        extractedPdfText: String,
+        apiKey: String,
+        selectedModel: String
+    ) async -> (report: LabReportRecord?, errorMessage: String?) {
+        let cleanKey = Self.sanitizeApiKey(apiKey)
+        let trimmedText = extractedPdfText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !pageImagesData.isEmpty || !trimmedText.isEmpty else {
+            return (nil, "Selecciona una foto o un archivo PDF de tu analítica.")
+        }
+
+        let sysPrompt = """
+        Eres un extractor clínico de analíticas de sangre en español para la app Improving.
+        Extrae EXCLUSIVAMENTE los biomarcadores reales visibles en la imagen o texto de la analítica sin inventar NINGÚN valor.
+        Devuelve SOLO un JSON válido con este formato exacto:
+        {
+          "title": "Analítica general (o nombre del laboratorio si aparece)",
+          "date_iso": "yyyy-MM-dd (fecha del análisis si aparece, si no cadena vacía)",
+          "summary": "Resumen claro en 1-2 frases en español sin paréntesis ni asteriscos.",
+          "biomarkers": [
+            {
+              "name": "Vitamina D (25-OH)",
+              "value": 34.5,
+              "unit": "ng/mL",
+              "ref_min": 30.0,
+              "ref_max": 100.0,
+              "optimal_min": 40.0,
+              "optimal_max": 70.0,
+              "status": "normal",
+              "category": "Vitaminas"
+            }
+          ]
+        }
+        Valores permitidos en status: "optimal", "normal", "low", "high".
+        Categorías sugeridas: "Metabolismo", "Lípidos", "Hormonas", "Vitaminas y Minerales", "Hematología", "Inflamación", "Hígado y Riñón".
+        Prioriza marcadores clave como Glucosa, HbA1c, Insulina, Colesterol total, HDL, LDL, Triglicéridos, ApoB, Ferritina, Hierro, Vitamina D, Vitamina B12, Ácido fólico, TSH, T4 libre, Testosterona total, Cortisol, PCR ultrasensible, Hemoglobina, Hematocrito, Creatinina, AST, ALT, GGT, Ácido úrico, Magnesio.
+        """
+        let userPrompt = trimmedText.isEmpty
+            ? "Extrae todos los biomarcadores numéricos reales de estas páginas de analítica de sangre."
+            : "Extrae todos los biomarcadores numéricos reales de esta analítica de sangre:\n\n\(String(trimmedText.prefix(12000)))"
+
+        if !cleanKey.isEmpty {
+            let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
+            for m in candidates.prefix(4) {
+                if let raw = await callGeminiMultiImageJson(
+                    prompt: userPrompt,
+                    sysPrompt: sysPrompt,
+                    jpegImagesData: Array(pageImagesData.prefix(4)),
+                    apiKey: cleanKey,
+                    model: m,
+                    maxOutputTokens: 2200
+                ), let parsed = Self.parseLabReportJson(raw, sourceLabel: "Gemini \(m)") {
+                    return (parsed, nil)
+                }
+            }
+        }
+
+        if !trimmedText.isEmpty {
+            if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
+               let parsed = Self.parseLabReportJson(raw, sourceLabel: "Improving Cloud") {
+                return (parsed, nil)
+            }
+            if let local = Self.parseLabReportFromPlainTextLocally(trimmedText) {
+                return (local, nil)
+            }
+        }
+
+        if cleanKey.isEmpty && !pageImagesData.isEmpty && trimmedText.isEmpty {
+            return (nil, "Para leer analíticas desde foto/imagen necesitas configurar tu API Key gratuita de Gemini en Dispositivos y Ajustes (o subir un PDF con texto seleccionable).")
+        }
+        return (nil, "No se pudieron extraer biomarcadores automáticamente. Puedes añadirlos manualmente en 1 toque.")
+    }
+
+    private func callGeminiMultiImageJson(
+        prompt: String,
+        sysPrompt: String,
+        jpegImagesData: [Data],
+        apiKey: String,
+        model: String,
+        maxOutputTokens: Int = 2000
+    ) async -> String? {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 36
+        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+
+        var userParts: [[String: Any]] = []
+        for img in jpegImagesData where !img.isEmpty {
+            userParts.append([
+                "inline_data": [
+                    "mime_type": "image/jpeg",
+                    "data": img.base64EncodedString()
+                ]
+            ])
+        }
+        userParts.append(["text": prompt])
+
+        var genConfig: [String: Any] = [
+            "temperature": 0.15,
+            "maxOutputTokens": maxOutputTokens,
+            "responseMimeType": "application/json"
+        ]
+        if model.hasPrefix("gemini-2.5-flash") {
+            genConfig["thinkingConfig"] = ["thinkingBudget": 0]
+        }
+
+        let body: [String: Any] = [
+            "system_instruction": ["parts": [["text": sysPrompt]]],
+            "contents": [["role": "user", "parts": userParts]],
+            "generationConfig": genConfig
+        ]
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = httpBody
+
+        do {
+            let (respData, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let content = candidates.first?["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]] else { return nil }
+            let joined = parts.compactMap { part -> String? in
+                if (part["thought"] as? Bool) == true { return nil }
+                return part["text"] as? String
+            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            return joined.isEmpty ? nil : joined
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated static func parseLabReportJson(_ raw: String, sourceLabel: String) -> LabReportRecord? {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for p in ["```json", "```JSON", "```"] where cleaned.hasPrefix(p) { cleaned = String(cleaned.dropFirst(p.count)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        guard let s = cleaned.firstIndex(of: "{"), let e = cleaned.lastIndex(of: "}"), e > s,
+              let data = String(cleaned[s...e]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawItems = obj["biomarkers"] as? [[String: Any]] else {
+            return nil
+        }
+
+        func dbl(_ d: [String: Any], _ key: String) -> Double? {
+            if let n = d[key] as? NSNumber { return n.doubleValue }
+            if let s = d[key] as? String {
+                let norm = s.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                return Double(norm)
+            }
+            return nil
+        }
+
+        var items: [LabBiomarkerItem] = []
+        for entry in rawItems {
+            let name = ((entry["name"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, let value = dbl(entry, "value") else { continue }
+            let unit = ((entry["unit"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let refMin = dbl(entry, "ref_min")
+            let refMax = dbl(entry, "ref_max")
+            let optMin = dbl(entry, "optimal_min") ?? refMin
+            let optMax = dbl(entry, "optimal_max") ?? refMax
+            let rawStatus = ((entry["status"] as? String) ?? "").lowercased()
+            let status: LabBiomarkerStatus = {
+                switch rawStatus {
+                case "optimal", "optimo", "óptimo": return .optimal
+                case "low", "bajo": return .low
+                case "high", "alto": return .high
+                case "normal": return .normal
+                default:
+                    if let rMin = refMin, value < rMin { return .low }
+                    if let rMax = refMax, value > rMax { return .high }
+                    if let oMin = optMin, let oMax = optMax, value >= oMin, value <= oMax { return .optimal }
+                    return .normal
+                }
+            }()
+            let cat = ((entry["category"] as? String) ?? "General").trimmingCharacters(in: .whitespacesAndNewlines)
+            items.append(LabBiomarkerItem(
+                id: UUID().uuidString,
+                name: name,
+                value: value,
+                unit: unit,
+                refMin: refMin,
+                refMax: refMax,
+                optimalMin: optMin,
+                optimalMax: optMax,
+                status: status,
+                category: cat.isEmpty ? "General" : cat
+            ))
+        }
+
+        guard !items.isEmpty else { return nil }
+        let isoFmt = DateFormatter()
+        isoFmt.locale = Locale(identifier: "en_US_POSIX")
+        isoFmt.dateFormat = "yyyy-MM-dd"
+        let rawDate = ((obj["date_iso"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let validDate = isoFmt.date(from: rawDate) != nil ? rawDate : isoFmt.string(from: Date())
+        let rawTitle = ((obj["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = sanitizeDirectHumanText((obj["summary"] as? String) ?? "Analítica procesada con \(items.count) biomarcadores extraídos.")
+
+        return LabReportRecord(
+            id: UUID().uuidString,
+            dateIso: validDate,
+            title: rawTitle.isEmpty ? "Analítica de sangre" : String(rawTitle.prefix(64)),
+            sourceLabel: sourceLabel,
+            summary: summary,
+            biomarkers: items
+        )
+    }
+
+    nonisolated static func parseLabReportFromPlainTextLocally(_ text: String) -> LabReportRecord? {
+        let patterns: [(regex: String, name: String, unit: String, rMin: Double, rMax: Double, oMin: Double, oMax: Double, cat: String)] = [
+            (#"(?i)glucosa[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Glucosa", "mg/dL", 70, 100, 72, 90, "Metabolismo"),
+            (#"(?i)hba1c|hemoglobina\s+glicosilada[^\d]{0,20}(\d(?:[.,]\d+)?)"#, "HbA1c", "%", 4.0, 5.6, 4.5, 5.3, "Metabolismo"),
+            (#"(?i)vitamina\s*d[^\d]{0,25}(\d{1,3}(?:[.,]\d+)?)"#, "Vitamina D (25-OH)", "ng/mL", 30, 100, 40, 70, "Vitaminas y Minerales"),
+            (#"(?i)ferritina[^\d]{0,20}(\d{1,4}(?:[.,]\d+)?)"#, "Ferritina", "ng/mL", 30, 300, 50, 150, "Vitaminas y Minerales"),
+            (#"(?i)colesterol\s+total[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Colesterol total", "mg/dL", 120, 200, 140, 190, "Lípidos"),
+            (#"(?i)\bhdl\b[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Colesterol HDL", "mg/dL", 40, 100, 55, 90, "Lípidos"),
+            (#"(?i)\bldl\b[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Colesterol LDL", "mg/dL", 50, 130, 60, 100, "Lípidos"),
+            (#"(?i)triglic[eé]ridos[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Triglicéridos", "mg/dL", 35, 150, 40, 100, "Lípidos"),
+            (#"(?i)\btsh\b[^\d]{0,20}(\d(?:[.,]\d+)?)"#, "TSH", "µUI/mL", 0.4, 4.2, 0.8, 2.5, "Hormonas"),
+            (#"(?i)testosterona\s+total[^\d]{0,20}(\d{2,4}(?:[.,]\d+)?)"#, "Testosterona total", "ng/dL", 280, 900, 450, 850, "Hormonas"),
+            (#"(?i)vitamina\s*b12[^\d]{0,20}(\d{2,4}(?:[.,]\d+)?)"#, "Vitamina B12", "pg/mL", 200, 900, 450, 850, "Vitaminas y Minerales"),
+            (#"(?i)hemoglobina[^\d]{0,20}(\d{1,2}(?:[.,]\d+)?)"#, "Hemoglobina", "g/dL", 13.0, 17.5, 14.0, 16.5, "Hematología")
+        ]
+        var found: [LabBiomarkerItem] = []
+        let nsText = text as NSString
+        for p in patterns {
+            if let rx = try? NSRegularExpression(pattern: p.regex),
+               let m = rx.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+               m.numberOfRanges >= 2, m.range(at: 1).location != NSNotFound {
+                let rawNum = nsText.substring(with: m.range(at: 1)).replacingOccurrences(of: ",", with: ".")
+                if let val = Double(rawNum) {
+                    let st: LabBiomarkerStatus = val < p.rMin ? .low : (val > p.rMax ? .high : ((val >= p.oMin && val <= p.oMax) ? .optimal : .normal))
+                    found.append(LabBiomarkerItem(
+                        id: UUID().uuidString,
+                        name: p.name,
+                        value: val,
+                        unit: p.unit,
+                        refMin: p.rMin,
+                        refMax: p.rMax,
+                        optimalMin: p.oMin,
+                        optimalMax: p.oMax,
+                        status: st,
+                        category: p.cat
+                    ))
+                }
+            }
+        }
+        guard !found.isEmpty else { return nil }
+        let isoFmt = DateFormatter()
+        isoFmt.locale = Locale(identifier: "en_US_POSIX")
+        isoFmt.dateFormat = "yyyy-MM-dd"
+        return LabReportRecord(
+            id: UUID().uuidString,
+            dateIso: isoFmt.string(from: Date()),
+            title: "Analítica importada (PDF)",
+            sourceLabel: "Extractor local PDF",
+            summary: "Se extrajeron \(found.count) biomarcadores del texto del PDF. Revisa y ajusta si hace falta.",
+            biomarkers: found
         )
     }
 }

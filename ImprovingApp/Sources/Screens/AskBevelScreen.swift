@@ -1,6 +1,8 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
-// MARK: - Ask Improving AI Screen (Android Coach Personality + Structured Verdicts & Bullets + Open-Ended Freedom)
+// MARK: - Ask Improving AI Screen (P6: Persisted Threads + Photo Attachments + Copy + Dynamic Suggestions!)
 
 struct AskBevelScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -8,6 +10,11 @@ struct AskBevelScreen: View {
     let onOpenSettings: () -> Void
 
     @State private var inputText: String = ""
+    @State private var selectedPhotoItem: PhotosPickerItem? = nil
+    @State private var pendingImage: UIImage? = nil
+    @State private var pendingJpegData: Data? = nil
+    @State private var showHistorySheet: Bool = false
+    @State private var copiedMessageId: String? = nil
 
     private var hasUserConversation: Bool {
         !store.coachMessages.isEmpty
@@ -16,6 +23,7 @@ struct AskBevelScreen: View {
     var body: some View {
         let userName = store.userProfile.displayFirstName.isEmpty ? "tú" : store.userProfile.displayFirstName
         let hasKey = !store.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let suggestions = store.dynamicCoachSuggestions
 
         ZStack {
             RadialGradient(
@@ -29,13 +37,36 @@ struct AskBevelScreen: View {
             .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Top Bar
-                HStack {
-                    Button { store.startNewCleanChat() } label: {
+                // Top Bar: History + New Chat | Model Status Pill | Close
+                HStack(spacing: 8) {
+                    Button { showHistorySheet = true } label: {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(BevelColors.glassChromeFill))
+                                .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                            if !store.coachThreads.isEmpty {
+                                Text("\(min(store.coachThreads.count, 99))")
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4.5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Capsule().fill(BevelColors.indigoEnd))
+                                    .offset(x: 3, y: -3)
+                            }
+                        }
+                    }
+
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        store.startNewCleanChat()
+                    } label: {
                         Image(systemName: "square.and.pencil")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(BevelColors.textPrimary)
-                            .frame(width: 42, height: 42)
+                            .frame(width: 40, height: 40)
                             .background(Circle().fill(BevelColors.glassChromeFill))
                             .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                     }
@@ -51,6 +82,7 @@ struct AskBevelScreen: View {
                                 .font(ImprovingFont.caption(12))
                                 .fontWeight(.semibold)
                                 .foregroundColor(BevelColors.textPrimary)
+                                .lineLimit(1)
                         }
                         .padding(.horizontal, 12)
                         .frame(height: 34)
@@ -64,7 +96,7 @@ struct AskBevelScreen: View {
                         Image(systemName: "xmark")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(BevelColors.textPrimary)
-                            .frame(width: 42, height: 42)
+                            .frame(width: 40, height: 40)
                             .background(Circle().fill(BevelColors.glassChromeFill))
                             .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                     }
@@ -83,7 +115,7 @@ struct AskBevelScreen: View {
                             Text(userName == "tú" ? "Hola, ¿qué necesitas?" : "Hola, \(userName).")
                                 .font(ImprovingFont.displayLarge(28))
                                 .foregroundColor(BevelColors.textPrimary)
-                            Text("Pregúntame cualquier cosa sobre tu cuerpo, entrenamiento, comida, descanso o planes de hoy.")
+                            Text("Pregúntame cualquier cosa o adjunta una foto de un plato, entrenamiento o analítica.")
                                 .font(ImprovingFont.body(13.5))
                                 .foregroundColor(BevelColors.textSecondary)
                                 .multilineTextAlignment(.center)
@@ -100,15 +132,28 @@ struct AskBevelScreen: View {
                                     if msg.isUser {
                                         HStack {
                                             Spacer(minLength: 44)
-                                            Text(msg.text)
-                                                .font(ImprovingFont.body(14.5))
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, 15)
-                                                .padding(.vertical, 11)
-                                                .background(
-                                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                                        .fill(BevelColors.indigoEnd)
-                                                )
+                                            VStack(alignment: .trailing, spacing: 6) {
+                                                if let photoImg = MealPhotoStorage.loadImage(filename: msg.attachedPhotoFilename) {
+                                                    Image(uiImage: photoImg)
+                                                        .resizable()
+                                                        .scaledToFill()
+                                                        .frame(width: 170, height: 120)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                                        .overlay(
+                                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8)
+                                                        )
+                                                }
+                                                Text(msg.text)
+                                                    .font(ImprovingFont.body(14.5))
+                                                    .foregroundColor(.white)
+                                                    .padding(.horizontal, 15)
+                                                    .padding(.vertical, 11)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                                            .fill(BevelColors.indigoEnd)
+                                                    )
+                                            }
                                         }
                                         .id(msg.id)
                                     } else {
@@ -146,16 +191,49 @@ struct AskBevelScreen: View {
                                                     .padding(.top, 2)
                                                 }
 
-                                                if let model = msg.modelUsed, !model.isEmpty {
-                                                    HStack(spacing: 6) {
+                                                HStack(spacing: 8) {
+                                                    if let model = msg.modelUsed, !model.isEmpty {
+                                                        Text("\(msg.timestampLabel) · \(model)")
+                                                            .font(ImprovingFont.caption(10.5))
+                                                            .foregroundColor(BevelColors.textMuted)
+                                                    } else {
                                                         Text(msg.timestampLabel)
-                                                        Text("·")
-                                                        Text(model)
+                                                            .font(ImprovingFont.caption(10.5))
+                                                            .foregroundColor(BevelColors.textMuted)
                                                     }
-                                                    .font(ImprovingFont.caption(10.5))
-                                                    .foregroundColor(BevelColors.textMuted)
-                                                    .padding(.top, 2)
+                                                    Spacer()
+                                                    Button {
+                                                        var full = msg.text
+                                                        if !msg.bullets.isEmpty {
+                                                            full += "\n" + msg.bullets.map { "• \($0)" }.joined(separator: "\n")
+                                                        }
+                                                        UIPasteboard.general.string = full
+                                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                                            copiedMessageId = msg.id
+                                                        }
+                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                                                            if copiedMessageId == msg.id {
+                                                                withAnimation(.easeOut(duration: 0.2)) {
+                                                                    copiedMessageId = nil
+                                                                }
+                                                            }
+                                                        }
+                                                    } label: {
+                                                        HStack(spacing: 4) {
+                                                            Image(systemName: copiedMessageId == msg.id ? "checkmark" : "doc.on.doc")
+                                                                .font(.system(size: 10.5, weight: .semibold))
+                                                            Text(copiedMessageId == msg.id ? "Copiado" : "Copiar")
+                                                                .font(ImprovingFont.caption(10.5))
+                                                                .fontWeight(.semibold)
+                                                        }
+                                                        .foregroundColor(copiedMessageId == msg.id ? BevelColors.greenPrimary : BevelColors.textMuted)
+                                                        .padding(.horizontal, 8)
+                                                        .padding(.vertical, 4)
+                                                        .background(Capsule().fill(Color.white.opacity(0.06)))
+                                                    }
                                                 }
+                                                .padding(.top, 2)
                                             }
                                             .padding(.horizontal, 15)
                                             .padding(.vertical, 13)
@@ -213,18 +291,14 @@ struct AskBevelScreen: View {
                     }
                 }
 
-                // Bottom Suggestion Cards (only before first message so chat stays clean)
+                // Dynamic Data-Aware Suggestion Cards (adapted to today's actual metrics!)
                 if !hasUserConversation {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
-                            suggestionCard(icon: "figure.run", title: "¿Entreno fuerte hoy?", subtitle: "Según mi recuperación real") {
-                                store.sendCoachPrompt("¿Debería entrenar fuerte hoy o ir suave según mis datos reales?")
-                            }
-                            suggestionCard(icon: "moon.stars.fill", title: "Analizar mi sueño", subtitle: "Fases y descanso real") {
-                                store.sendCoachPrompt("Analiza mi última noche de sueño y dime qué puedo mejorar hoy")
-                            }
-                            suggestionCard(icon: "fork.knife", title: "¿Puedo cenar pizza hoy?", subtitle: "Pregunta abierta libre") {
-                                store.sendCoachPrompt("¿Me afecta mucho si hoy ceno pizza o me tomo algo con amigos?")
+                            ForEach(suggestions) { item in
+                                suggestionCard(icon: item.icon, title: item.title, subtitle: item.subtitle) {
+                                    store.sendCoachPrompt(item.prompt)
+                                }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -232,8 +306,40 @@ struct AskBevelScreen: View {
                     }
                 }
 
-                // Frosted Glass Open-Ended Composer Box
+                // Frosted Glass Open-Ended Multimodal Composer Box
                 VStack(alignment: .leading, spacing: 10) {
+                    if let img = pendingImage {
+                        HStack(spacing: 10) {
+                            ZStack(alignment: .topTrailing) {
+                                Image(uiImage: img)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 62, height: 62)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                Button {
+                                    pendingImage = nil
+                                    pendingJpegData = nil
+                                    selectedPhotoItem = nil
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 3)
+                                        .offset(x: 5, y: -5)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Imagen adjunta")
+                                    .font(ImprovingFont.cardTitle(12.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Gemini la analizará junto con tus métricas")
+                                    .font(ImprovingFont.caption(11))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            Spacer()
+                        }
+                    }
+
                     TextField("Pregunta a Improving lo que sea", text: $inputText, axis: .vertical)
                         .lineLimit(1...4)
                         .font(ImprovingFont.body(15))
@@ -241,6 +347,20 @@ struct AskBevelScreen: View {
                         .onSubmit { sendCurrentInput() }
 
                     HStack(spacing: 8) {
+                        PhotosPicker(selection: $selectedPhotoItem, matching: .images, photoLibrary: .shared()) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "photo.badge.plus")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("Foto")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.semibold)
+                            }
+                            .foregroundColor(pendingImage != nil ? BevelColors.greenPrimary : BevelColors.textPrimary)
+                            .padding(.horizontal, 11)
+                            .frame(height: 34)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                        }
+
                         Button(action: onOpenSettings) {
                             HStack(spacing: 5) {
                                 Image(systemName: "key.fill").font(.system(size: 11))
@@ -249,13 +369,14 @@ struct AskBevelScreen: View {
                                     .fontWeight(.semibold)
                             }
                             .foregroundColor(hasKey ? BevelColors.greenPrimary : BevelColors.textSecondary)
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 11)
                             .frame(height: 34)
                             .background(Capsule().fill(Color.white.opacity(0.08)))
                         }
 
                         Spacer()
 
+                        let canSend = (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingJpegData != nil) && !store.isCoachThinking
                         Button(action: sendCurrentInput) {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 15, weight: .bold))
@@ -263,8 +384,8 @@ struct AskBevelScreen: View {
                                 .frame(width: 36, height: 36)
                                 .background(Circle().fill(.white))
                         }
-                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isCoachThinking)
-                        .opacity(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1.0)
+                        .disabled(!canSend)
+                        .opacity(canSend ? 1.0 : 0.45)
                     }
                 }
                 .padding(14)
@@ -280,13 +401,45 @@ struct AskBevelScreen: View {
                 .padding(.bottom, 10)
             }
         }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let rawData = try? await newItem.loadTransferable(type: Data.self),
+                   let uiImg = UIImage(data: rawData),
+                   let jpg = MealPhotoStorage.prepareJpegData(from: uiImg, maxDimension: 1280, quality: 0.78) {
+                    await MainActor.run {
+                        pendingImage = uiImg
+                        pendingJpegData = jpg
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showHistorySheet) {
+            CoachChatHistorySheet(
+                store: store,
+                onSelect: { id in
+                    store.selectCoachThread(id)
+                    showHistorySheet = false
+                },
+                onNewChat: {
+                    store.startNewCleanChat()
+                    showHistorySheet = false
+                },
+                onClose: { showHistorySheet = false }
+            )
+        }
     }
 
     private func sendCurrentInput() {
         let q = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty, !store.isCoachThinking else { return }
+        guard (!q.isEmpty || pendingJpegData != nil), !store.isCoachThinking else { return }
+        let jpg = pendingJpegData
+        let savedName = jpg.flatMap { MealPhotoStorage.savePhotoData($0) }
         inputText = ""
-        store.sendCoachPrompt(q)
+        pendingImage = nil
+        pendingJpegData = nil
+        selectedPhotoItem = nil
+        store.sendCoachPrompt(q, jpegImageData: jpg, attachedPhotoFilename: savedName)
     }
 
     private func suggestionCard(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
@@ -307,5 +460,87 @@ struct AskBevelScreen: View {
             .background(RoundedRectangle(cornerRadius: 18).fill(BevelColors.glassChromeFill))
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
         }
+    }
+}
+
+private struct CoachChatHistorySheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onSelect: (String) -> Void
+    let onNewChat: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Button(action: onNewChat) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.bubble.fill")
+                            Text("Nueva conversación")
+                                .font(ImprovingFont.cardTitle(14.5))
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(Capsule().fill(BevelColors.indigoEnd))
+                    }
+
+                    if store.coachThreads.isEmpty {
+                        BevelCard(cornerRadius: 18) {
+                            Text("Tus conversaciones con el Coach IA se guardarán automáticamente aquí para que puedas retomarlas cuando quieras.")
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .padding(16)
+                        }
+                    } else {
+                        ForEach(store.coachThreads) { thread in
+                            let isActive = store.activeCoachThreadId == thread.id
+                            BevelCard(cornerRadius: 18) {
+                                HStack(spacing: 12) {
+                                    Button { onSelect(thread.id) } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 6) {
+                                                if isActive {
+                                                    Circle().fill(BevelColors.greenPrimary).frame(width: 7, height: 7)
+                                                }
+                                                Text(thread.title)
+                                                    .font(ImprovingFont.cardTitle(14.5))
+                                                    .foregroundColor(BevelColors.textPrimary)
+                                                    .lineLimit(1)
+                                            }
+                                            Text("\(thread.dateIso) · \(thread.updatedAtLabel) · \(thread.messages.count) mensajes")
+                                                .font(ImprovingFont.caption(12))
+                                                .foregroundColor(BevelColors.textSecondary)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        store.deleteCoachThread(thread.id)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 13.5))
+                                            .foregroundColor(BevelColors.textMuted)
+                                            .frame(width: 32, height: 32)
+                                    }
+                                }
+                                .padding(14)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle("Historial Coach IA")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cerrar", action: onClose)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>AppGroupIdentifier</key>
+	<string>$(APP_GROUP_ID)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>es</string>
 	<key>CFBundleDisplayName</key>
@@ -76,6 +78,6 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Improving guarda en tu carrete las tarjetas resumen que decidas exportar.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Improving usa la cámara únicamente cuando haces una foto a tu plato para calcular calorías y macros con IA.</string>
+	<string>Improving usa la cámara para escanear códigos de barras, analizar platos con IA o fotografiar analíticas de sangre.</string>
 </dict>
 </plist>

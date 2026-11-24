@@ -3,9 +3,15 @@ import SwiftUI
 struct BiologiaScreen: View {
     @ObservedObject var store: ImprovingStore
     let onSelectHealthMetric: (HealthMetricKind) -> Void
+    let onOpenBodyMetric: (BodyCompositionMetricKind) -> Void
+    let onOpenVo2Max: () -> Void
     let onNavigate: (OverlayRoute) -> Void
 
     @State private var expandedCategoryId: String? = "sleep"
+    @State private var showBioInfoSheet: Bool = false
+    @State private var showShareBioSheet: Bool = false
+    @State private var showScaleSheet: Bool = false
+    @State private var showLabScannerSheet: Bool = false
 
     var body: some View {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
@@ -41,10 +47,11 @@ struct BiologiaScreen: View {
         let fatSeries = recent30.map { $0.summary?.bodyFatPct }
         let leanSeries = recent30.map { $0.summary?.leanMassKg }
         let vo2Series = recent30.map { $0.summary?.vo2MaxMlKgMin }
+        let latestBiomarkers = store.latestBiomarkersByName
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                // 1. Atmospheric Biological Age Hero (Strictly derived from real imported data!)
+                // 1. Atmospheric Biological Age Hero (P2: Real Action Menu on ···)
                 ZStack(alignment: .top) {
                     LinearGradient(
                         colors: BevelColors.isDarkMode ? [Color(hex: 0x1A2E2A), Color(hex: 0x172022), BevelColors.canvas] : [BevelColors.canvas, BevelColors.canvas],
@@ -57,7 +64,21 @@ struct BiologiaScreen: View {
                     VStack(spacing: 8) {
                         HStack {
                             Spacer()
-                            Button { onNavigate(.dispositivos) } label: {
+                            Menu {
+                                Button { showShareBioSheet = true } label: {
+                                    Label("Compartir Edad Biológica", systemImage: "square.and.arrow.up")
+                                }
+                                Button { showBioInfoSheet = true } label: {
+                                    Label("Cómo se calcula", systemImage: "info.circle")
+                                }
+                                Divider()
+                                Button { showScaleSheet = true } label: {
+                                    Label("Registrar peso / báscula", systemImage: "scalemass.fill")
+                                }
+                                Button { showLabScannerSheet = true } label: {
+                                    Label("Subir analítica de sangre (IA)", systemImage: "doc.text.viewfinder")
+                                }
+                            } label: {
                                 Image(systemName: "ellipsis")
                                     .font(.system(size: 15, weight: .bold))
                                     .foregroundColor(BevelColors.textPrimary)
@@ -87,11 +108,43 @@ struct BiologiaScreen: View {
                 }
 
                 VStack(alignment: .leading, spacing: 16) {
+                    // Quick Biology Actions: Scale + Blood Test AI (N6!)
+                    HStack(spacing: 10) {
+                        Button { showScaleSheet = true } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: "scalemass.fill")
+                                    .font(.system(size: 13.5, weight: .semibold))
+                                    .foregroundColor(BevelColors.skyBlue)
+                                Text("+ Báscula / TA")
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(BevelColors.card))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                        }
+
+                        Button { showLabScannerSheet = true } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: "doc.text.viewfinder")
+                                    .font(.system(size: 13.5, weight: .semibold))
+                                    .foregroundColor(BevelColors.bioTeal)
+                                Text("+ Analítica IA")
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(BevelColors.card))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(BevelColors.bioTeal.opacity(0.35), lineWidth: 0.8))
+                        }
+                    }
+
                     Text("Biomarcadores de edad")
                         .font(ImprovingFont.sectionTitle(18.5))
                         .foregroundColor(BevelColors.textPrimary)
 
-                    // Category 1: Sueño (only if real sleep data exists)
                     if let avgS = meanSleep {
                         let hrs = Int(avgS)
                         let mins = Int(((avgS - Double(hrs)) * 60).rounded())
@@ -119,7 +172,6 @@ struct BiologiaScreen: View {
                         }
                     }
 
-                    // Category 2: Actividad (only if steps or zones exist)
                     if let avgSt = meanSteps {
                         bioCategoryCard(
                             id: "activity",
@@ -145,7 +197,6 @@ struct BiologiaScreen: View {
                         }
                     }
 
-                    // Category 3: Fitness (only showing recorded sub-biomarkers)
                     if meanRhr != nil || vo2Val != nil {
                         bioCategoryCard(
                             id: "fitness",
@@ -188,46 +239,144 @@ struct BiologiaScreen: View {
                         }
                     }
 
-                    // 4. Otros biomarcadores (Strictly real readings — omit unrecorded body/blood metrics!)
+                    // N6: Analíticas de Sangre y Biomarcadores Clínicos
+                    HStack {
+                        Text("Analíticas de sangre")
+                            .font(ImprovingFont.sectionTitle(18.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Spacer()
+                        Button("+ Subir") { showLabScannerSheet = true }
+                            .font(ImprovingFont.caption(13))
+                            .fontWeight(.semibold)
+                            .foregroundColor(BevelColors.bioTeal)
+                    }
+                    .padding(.top, 4)
+
+                    if latestBiomarkers.isEmpty {
+                        Button { showLabScannerSheet = true } label: {
+                            BevelCard(cornerRadius: 20) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "cross.case.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundColor(BevelColors.bioTeal)
+                                        .frame(width: 42, height: 42)
+                                        .background(Circle().fill(BevelColors.bioTeal.opacity(0.15)))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Añade tu última analítica con Gemini IA")
+                                            .font(ImprovingFont.cardTitle(14.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("Foto o PDF · Extrae Vitamina D, Ferritina, Glucosa, Lípidos, TSH…")
+                                            .font(ImprovingFont.caption(12))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(BevelColors.textMuted)
+                                }
+                                .padding(15)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        BevelCard(cornerRadius: 20) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if let latestRep = store.labReports.first {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(latestRep.title)
+                                                .font(ImprovingFont.cardTitle(14.5))
+                                                .foregroundColor(BevelColors.textPrimary)
+                                            Text("\(latestRep.dateIso) · \(latestBiomarkers.count) biomarcadores activos")
+                                                .font(ImprovingFont.caption(11.5))
+                                                .foregroundColor(BevelColors.textSecondary)
+                                        }
+                                        Spacer()
+                                        Menu {
+                                            Button("Añadir nueva analítica / marcador", systemImage: "plus") {
+                                                showLabScannerSheet = true
+                                            }
+                                            Button("Eliminar último informe", systemImage: "trash", role: .destructive) {
+                                                store.deleteLabReport(id: latestRep.id)
+                                            }
+                                        } label: {
+                                            Image(systemName: "ellipsis.circle")
+                                                .font(.system(size: 16))
+                                                .foregroundColor(BevelColors.textMuted)
+                                        }
+                                    }
+                                    Divider().background(BevelColors.divider)
+                                }
+
+                                ForEach(Array(latestBiomarkers.prefix(10).enumerated()), id: \.element.id) { idx, b in
+                                    LabBiomarkerBarRow(item: b)
+                                    if idx < min(latestBiomarkers.count, 10) - 1 {
+                                        Divider().background(BevelColors.divider)
+                                    }
+                                }
+                            }
+                            .padding(16)
+                        }
+                    }
+
+                    // 4. Otros biomarcadores (P2: All wired to dedicated charts & VO₂ max bug FIXED!)
                     Text("Otros biomarcadores")
                         .font(ImprovingFont.sectionTitle(18.5))
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.top, 4)
 
                     if let w = store.latestBodyWeightKg {
-                        otherBioCard(title: "Peso", statusText: "Registrado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), w), lineColor: BevelColors.textSecondary, points: weightSeries) { onNavigate(.dispositivos) }
+                        otherBioCard(title: "Peso", statusText: "Registrado", statusColor: BevelColors.skyBlue, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), w), lineColor: BevelColors.skyBlue, points: weightSeries) {
+                            onOpenBodyMetric(.weight)
+                        }
                     }
                     if store.dataAvailability.hasHrvData || meanHrv != nil {
                         let val = store.dataAvailability.hasHrvData ? store.hrvMs : (meanHrv ?? 0)
-                        otherBioCard(title: "VFC histórico", statusText: "Real", statusColor: BevelColors.greenPrimary, value: String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), val), lineColor: BevelColors.greenPrimary, points: hrvSeries) { onSelectHealthMetric(.hrv) }
+                        otherBioCard(title: "VFC histórico", statusText: "Real", statusColor: BevelColors.greenPrimary, value: String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), val), lineColor: BevelColors.greenPrimary, points: hrvSeries) {
+                            onSelectHealthMetric(.hrv)
+                        }
                     }
                     if store.dataAvailability.hasRestingHrData || meanRhr != nil {
                         let val = store.dataAvailability.hasRestingHrData ? store.restingHrBpm : (meanRhr ?? 0)
-                        otherBioCard(title: "Históricos FCR", statusText: "Real", statusColor: BevelColors.skyBlue, value: String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), val), lineColor: BevelColors.skyBlue, points: rhrSeries) { onSelectHealthMetric(.restingHeartRate) }
+                        otherBioCard(title: "Históricos FCR", statusText: "Real", statusColor: BevelColors.skyBlue, value: String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), val), lineColor: BevelColors.skyBlue, points: rhrSeries) {
+                            onSelectHealthMetric(.restingHeartRate)
+                        }
                     }
                     if let fat = store.latestBodyFatPct {
-                        otherBioCard(title: "Grasa corporal", statusText: "Registrado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f %%", locale: Locale(identifier: "es_ES"), fat), lineColor: BevelColors.textMuted, points: fatSeries) { onNavigate(.dispositivos) }
+                        otherBioCard(title: "Grasa corporal", statusText: "Registrado", statusColor: BevelColors.amberStart, value: String(format: "%.1f %%", locale: Locale(identifier: "es_ES"), fat), lineColor: BevelColors.amberStart, points: fatSeries) {
+                            onOpenBodyMetric(.bodyFat)
+                        }
                     }
                     if let lean = store.latestLeanMassKg {
-                        otherBioCard(title: "Masa magra", statusText: "Registrado", statusColor: BevelColors.textSecondary, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), lean), lineColor: BevelColors.textMuted, points: leanSeries) { onNavigate(.dispositivos) }
+                        otherBioCard(title: "Masa magra", statusText: "Registrado", statusColor: BevelColors.bioTeal, value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), lean), lineColor: BevelColors.bioTeal, points: leanSeries) {
+                            onOpenBodyMetric(.leanMass)
+                        }
                     }
                     if let v = vo2Val {
-                        otherBioCard(title: "VO₂ máx.", statusText: "Registrado", statusColor: BevelColors.amberStart, value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), v), lineColor: BevelColors.amberStart, points: vo2Series) { onNavigate(.cardioMetricDetail) }
+                        otherBioCard(title: "VO₂ máx.", statusText: "Registrado", statusColor: BevelColors.amberStart, value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), v), lineColor: BevelColors.amberStart, points: vo2Series) {
+                            onOpenVo2Max()
+                        }
                     }
                     if let bp = store.latestBloodPressure {
-                        BevelCard(cornerRadius: 20) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text("Presión arterial").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
-                                    Text("\(bp.sys)/\(bp.dia) mmHg")
-                                        .font(ImprovingFont.caption(13.5))
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(BevelColors.greenPrimary)
+                        Button { onOpenBodyMetric(.bloodPressure) } label: {
+                            BevelCard(cornerRadius: 20) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Presión arterial").font(ImprovingFont.cardTitle(15)).foregroundColor(BevelColors.textPrimary)
+                                        Text("\(bp.sys)/\(bp.dia) mmHg")
+                                            .font(ImprovingFont.caption(13.5))
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(BevelColors.greenPrimary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.right")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(BevelColors.textMuted)
                                 }
-                                Spacer()
+                                .padding(16)
                             }
-                            .padding(16)
                         }
+                        .buttonStyle(.plain)
                     }
 
                     if !hasBioBase {
@@ -244,6 +393,18 @@ struct BiologiaScreen: View {
             .padding(.bottom, 155)
         }
         .background(BevelColors.canvas)
+        .sheet(isPresented: $showBioInfoSheet) {
+            MetricMethodologyInfoSheet(kind: .biologicalAge, onClose: { showBioInfoSheet = false })
+        }
+        .sheet(isPresented: $showShareBioSheet) {
+            ShareSummaryCardSheet(store: store, kind: .biologicalAge, onClose: { showShareBioSheet = false })
+        }
+        .sheet(isPresented: $showScaleSheet) {
+            ManualScaleLoggerSheet(store: store, onClose: { showScaleSheet = false })
+        }
+        .sheet(isPresented: $showLabScannerSheet) {
+            LabReportScannerSheet(store: store, onClose: { showLabScannerSheet = false })
+        }
     }
 
     private func bioCategoryCard<Content: View>(
@@ -322,9 +483,13 @@ struct BiologiaScreen: View {
                         TrendSparklineWithBand(optionalPoints: points, lineColor: lineColor, fillUnder: true, showGlowDot: true)
                             .frame(width: 82, height: 34)
                     }
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(BevelColors.textMuted)
                 }
                 .padding(16)
             }
         }
+        .buttonStyle(.plain)
     }
 }

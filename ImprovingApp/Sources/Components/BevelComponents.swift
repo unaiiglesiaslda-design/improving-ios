@@ -1156,16 +1156,86 @@ struct FloatingMetricAiCoachOverlay: View {
     }
 }
 
-// MARK: - 3x3 Quick Actions Sheet
+// MARK: - Unified Workout Sport Icon & Color Resolver (P5)
+
+enum WorkoutSportStyle {
+    struct Style {
+        let icon: String
+        let fg: Color
+        let bg: Color
+    }
+
+    static func resolve(title: String, category: String = "") -> Style {
+        let low = "\(title) \(category)".folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        if low.contains("bici") || low.contains("ciclism") || low.contains("cycl") || low.contains("spin") || low.contains("rodillo") {
+            return Style(icon: "bicycle", fg: Color(hex: 0x9B7BF8), bg: Color(hex: 0x2E2748))
+        }
+        if low.contains("fuerza") || low.contains("strength") || low.contains("pesas") || low.contains("gimnasio") || low.contains("gym") || low.contains("crossfit") || low.contains("funcional") || low.contains("hipertrofia") {
+            return Style(icon: "figure.strengthtraining.traditional", fg: BevelColors.amberStart, bg: Color(hex: 0x3D321E))
+        }
+        if low.contains("carrera") || low.contains("correr") || low.contains("run") || low.contains("trail") || low.contains("maraton") || low.contains("pista") || low.contains("trote") {
+            return Style(icon: "figure.run", fg: BevelColors.greenPrimary, bg: Color(hex: 0x1D3528))
+        }
+        if low.contains("nataci") || low.contains("nadar") || low.contains("swim") || low.contains("piscina") || low.contains("aguas abiertas") {
+            return Style(icon: "figure.pool.swim", fg: BevelColors.cyanBright, bg: Color(hex: 0x1A323D))
+        }
+        if low.contains("futbol") || low.contains("soccer") || low.contains("futsal") {
+            return Style(icon: "figure.soccer", fg: BevelColors.emeraldEnd, bg: Color(hex: 0x1C3629))
+        }
+        if low.contains("padel") || low.contains("tenis") || low.contains("tennis") || low.contains("squash") || low.contains("badminton") || low.contains("raqueta") {
+            return Style(icon: "figure.tennis", fg: BevelColors.limeStart, bg: Color(hex: 0x2F381E))
+        }
+        if low.contains("baloncesto") || low.contains("basket") {
+            return Style(icon: "figure.basketball", fg: BevelColors.orangeEnd, bg: Color(hex: 0x3D281D))
+        }
+        if low.contains("hiit") || low.contains("interval") || low.contains("circuito") || low.contains("metcon") {
+            return Style(icon: "figure.highintensity.intervaltraining", fg: BevelColors.coralHigh, bg: Color(hex: 0x3C2224))
+        }
+        if low.contains("yoga") || low.contains("pilates") || low.contains("estir") || low.contains("movilidad") || low.contains("flexibil") {
+            return Style(icon: "figure.yoga", fg: Color(hex: 0xC084FC), bg: Color(hex: 0x312340))
+        }
+        if low.contains("sender") || low.contains("hik") || low.contains("montan") || low.contains("trek") {
+            return Style(icon: "figure.hiking", fg: BevelColors.bioTeal, bg: Color(hex: 0x1B3532))
+        }
+        if low.contains("camin") || low.contains("walk") || low.contains("paseo") {
+            return Style(icon: "figure.walk", fg: BevelColors.tealLow, bg: Color(hex: 0x1B3434))
+        }
+        if low.contains("remo") || low.contains("row") || low.contains("kayak") || low.contains("piragua") {
+            return Style(icon: "figure.rower", fg: BevelColors.skyBlue, bg: Color(hex: 0x1E2E45))
+        }
+        if low.contains("boxeo") || low.contains("boxing") || low.contains("kick") || low.contains("mma") || low.contains("artes marciales") {
+            return Style(icon: "figure.boxing", fg: BevelColors.coralHigh, bg: Color(hex: 0x3A2125))
+        }
+        if low.contains("escalada") || low.contains("climb") || low.contains("boulder") {
+            return Style(icon: "figure.climbing", fg: BevelColors.amberStart, bg: Color(hex: 0x3A2F1E))
+        }
+        if low.contains("esqui") || low.contains("ski") || low.contains("snow") {
+            return Style(icon: "figure.skiing.downhill", fg: BevelColors.cyanBright, bg: Color(hex: 0x1C303D))
+        }
+        if low.contains("core") || low.contains("abdom") {
+            return Style(icon: "figure.core.training", fg: BevelColors.amberStart, bg: Color(hex: 0x392E1E))
+        }
+        return Style(icon: "figure.mixed.cardio", fg: BevelColors.skyBlue, bg: Color(hex: 0x1F2D46))
+    }
+}
+
+// MARK: - 3x3 Functional Quick Actions Sheet (P7 — Real 1-Tap Actions!)
 
 struct QuickActionsOverlaySheet: View {
+    let hydrationTodayMl: Int
     let onDismiss: () -> Void
-    let onOpenNutrition: () -> Void
+    let onCaptureFoodAI: () -> Void
+    let onScanBarcode: () -> Void
+    let onDescribeFoodAI: () -> Void
+    let onAddWater250ml: () -> Void
     let onOpenAskBevel: () -> Void
-    let onOpenFitness: () -> Void
-    let onOpenJournal: () -> Void
-    let onOpenSleep: () -> Void
+    let onQuickJournalNote: () -> Void
+    let onLogScale: () -> Void
+    let onLogWorkout: () -> Void
+    let onOpenWeeklyReview: () -> Void
     let onOpenDevices: () -> Void
+
+    @State private var waterAddedFlash: Bool = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -1183,21 +1253,61 @@ struct QuickActionsOverlaySheet: View {
                         Text("ACCIONES RÁPIDAS")
                             .font(ImprovingFont.microLabel(10.5))
                             .foregroundColor(BevelColors.textMuted)
-                        Text("Registrar o Consultar")
+                        Text("Registrar en 1 toque")
                             .font(ImprovingFont.sectionTitle(18))
                             .foregroundColor(BevelColors.textPrimary)
                     }
 
                     HStack {
-                        quickActionTile("Describir comida", icon: "square.and.pencil", action: onOpenNutrition)
+                        quickActionTile("Foto comida IA", icon: "camera.fill", badge: true, action: onCaptureFoodAI)
                         Spacer()
-                        quickActionTile("Importar foto", icon: "photo.on.rectangle", action: onOpenNutrition)
+                        quickActionTile("Código barras", icon: "barcode.viewfinder", action: onScanBarcode)
                         Spacer()
-                        quickActionTile("Capturar comida", icon: "camera.fill", badge: true, action: onOpenNutrition)
+                        quickActionTile("Describir comida", icon: "square.and.pencil", action: onDescribeFoodAI)
                     }
 
                     HStack(alignment: .center) {
-                        quickActionTile("Escanear código", icon: "qrcode.viewfinder", action: onOpenNutrition)
+                        Button {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            onAddWater250ml()
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.7)) {
+                                waterAddedFlash = true
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+                                withAnimation(.easeOut(duration: 0.25)) {
+                                    waterAddedFlash = false
+                                }
+                            }
+                        } label: {
+                            VStack(spacing: 7) {
+                                ZStack(alignment: .topTrailing) {
+                                    Circle()
+                                        .fill(waterAddedFlash ? BevelColors.skyBlue.opacity(0.28) : BevelColors.cardSubtle)
+                                        .frame(width: 50, height: 50)
+                                        .overlay(Circle().strokeBorder(waterAddedFlash ? BevelColors.skyBlue : BevelColors.cardBorder, lineWidth: 1.0))
+                                    Image(systemName: waterAddedFlash ? "checkmark" : "drop.fill")
+                                        .font(.system(size: 19, weight: .semibold))
+                                        .foregroundColor(BevelColors.skyBlue)
+                                        .frame(width: 50, height: 50)
+                                    if hydrationTodayMl > 0 {
+                                        Text("\(hydrationTodayMl / 1000).\(String(format: "%01d", (hydrationTodayMl % 1000) / 100))L")
+                                            .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 2)
+                                            .background(Capsule().fill(BevelColors.skyBlue))
+                                            .offset(x: 6, y: -2)
+                                    }
+                                }
+                                Text(waterAddedFlash ? "+250 ml ✓" : "+250 ml agua")
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(waterAddedFlash ? .bold : .regular)
+                                    .foregroundColor(waterAddedFlash ? BevelColors.skyBlue : BevelColors.textSecondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(width: 92)
+                        }
+
                         Spacer()
                         Button(action: onOpenAskBevel) {
                             VStack(spacing: 8) {
@@ -1210,15 +1320,15 @@ struct QuickActionsOverlaySheet: View {
                             .frame(width: 96)
                         }
                         Spacer()
-                        quickActionTile("Buscar alimento", icon: "magnifyingglass", action: onOpenNutrition)
+                        quickActionTile("Nota Diario", icon: "note.text.badge.plus", action: onQuickJournalNote)
                     }
 
                     HStack {
-                        quickActionTile("Generar rutinas", icon: "sparkles", action: onOpenFitness)
+                        quickActionTile("Báscula / Peso", icon: "scalemass.fill", action: onLogScale)
                         Spacer()
-                        quickActionTile("Ver plantillas", icon: "dumbbell.fill", action: onOpenFitness)
+                        quickActionTile("Registrar entreno", icon: "dumbbell.fill", action: onLogWorkout)
                         Spacer()
-                        quickActionTile("Sueño & Alarma", icon: "bed.double.fill", action: onOpenSleep)
+                        quickActionTile("Resumen 7 días", icon: "calendar.badge.checkmark", action: onOpenWeeklyReview)
                     }
 
                     Button(action: onOpenDevices) {

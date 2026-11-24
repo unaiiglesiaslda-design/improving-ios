@@ -1405,5 +1405,167 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.mealsByDate = [:]
         store.savedFoodsLibrary = []
         store.updateNutritionGoals(CustomNutritionGoals())
+        store.flushPersistenceNow()
+    }
+
+    func testOpenFoodFactsBarcodeParsingAndGramScaling() throws {
+        let json = """
+        {
+          "status": 1,
+          "product": {
+            "code": "8410076472106",
+            "product_name_es": "Yogur natural proteico",
+            "brands": "Hacendado, Mercadona",
+            "serving_size": "125 g",
+            "serving_quantity": 125,
+            "nutriscore_grade": "a",
+            "nova_group": 1,
+            "nutriments": {
+              "energy-kcal_100g": 62,
+              "proteins_100g": 10.0,
+              "carbohydrates_100g": 4.0,
+              "fat_100g": 0.4,
+              "sugars_100g": 3.8,
+              "salt_100g": 0.12,
+              "calcium_100g": 0.14
+            }
+          }
+        }
+        """
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let prod = try XCTUnwrap(OpenFoodFactsService.parseOpenFoodFactsResponse(data, fallbackBarcode: "8410076472106"))
+        XCTAssertEqual(prod.productName, "Yogur natural proteico")
+        XCTAssertEqual(prod.brand, "Hacendado")
+        XCTAssertEqual(prod.defaultGrams, 125.0, accuracy: 0.1)
+
+        let est200 = prod.toMealEstimate(grams: 200.0)
+        XCTAssertEqual(est200.kcal, 124)
+        XCTAssertEqual(est200.proteinG, 20)
+        XCTAssertEqual(est200.carbsG, 8)
+        XCTAssertGreaterThanOrEqual(est200.qualityScore, 90)
+        XCTAssertEqual(est200.calciumMg, 280.0, accuracy: 1.0)
+    }
+
+    func testGeminiLabReportJsonParsingAndLocalPdfExtractor() throws {
+        let raw = """
+        ```json
+        {
+          "title": "Analítica Synlab",
+          "date_iso": "2026-11-20",
+          "summary": "Buen perfil lipídico con vitamina D algo justa.",
+          "biomarkers": [
+            {"name": "Vitamina D (25-OH)", "value": 27.5, "unit": "ng/mL", "ref_min": 30, "ref_max": 100, "optimal_min": 40, "optimal_max": 70, "status": "low", "category": "Vitaminas"},
+            {"name": "Glucosa", "value": 84, "unit": "mg/dL", "ref_min": 70, "ref_max": 100, "optimal_min": 72, "optimal_max": 90, "status": "optimal", "category": "Metabolismo"}
+          ]
+        }
+        ```
+        """
+        let rep = try XCTUnwrap(GeminiCoachService.parseLabReportJson(raw, sourceLabel: "Gemini"))
+        XCTAssertEqual(rep.title, "Analítica Synlab")
+        XCTAssertEqual(rep.dateIso, "2026-11-20")
+        XCTAssertEqual(rep.biomarkers.count, 2)
+        XCTAssertEqual(rep.biomarkers[0].status, .low)
+        XCTAssertEqual(rep.biomarkers[1].status, .optimal)
+
+        let pdfText = "Resultados Laboratorio: Glucosa 88 mg/dL, Ferritina 92,5 ng/mL, Vitamina D 44 ng/mL, TSH 1,65 uUI/mL"
+        let localRep = try XCTUnwrap(GeminiCoachService.parseLabReportFromPlainTextLocally(pdfText))
+        XCTAssertGreaterThanOrEqual(localRep.biomarkers.count, 4)
+    }
+
+    func testWidgetSnapshotStoreAltStoreGroupResolutionAndWorkoutSportIcons() {
+        let altInfo: [String: Any] = [
+            "AppGroupIdentifier": "group.com.improving.health.ios",
+            "ALTAppGroups": ["group.com.improving.health.ios.9ABC123XYZ"]
+        ]
+        XCTAssertEqual(WidgetSnapshotStore.resolveSuiteName(infoDictionary: altInfo), "group.com.improving.health.ios.9ABC123XYZ")
+
+        let plainInfo: [String: Any] = ["AppGroupIdentifier": "group.com.improving.health.ios"]
+        XCTAssertEqual(WidgetSnapshotStore.resolveSuiteName(infoDictionary: plainInfo), "group.com.improving.health.ios")
+
+        XCTAssertEqual(WorkoutSportStyle.resolve(title: "Partido de fútbol 7", category: "Cardio").icon, "figure.soccer")
+        XCTAssertEqual(WorkoutSportStyle.resolve(title: "Pádel con amigos", category: "Cardio").icon, "figure.tennis")
+        XCTAssertEqual(WorkoutSportStyle.resolve(title: "Natación piscina", category: "Cardio").icon, "figure.pool.swim")
+        XCTAssertEqual(WorkoutSportStyle.resolve(title: "Carrera 10K", category: "Cardio").icon, "figure.run")
+    }
+
+    @MainActor
+    func testHomeLayoutWeeklyReviewScaleLabsAndCoachPersistenceRoundTrip() throws {
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+
+        // Populate 14 real days for weekly review comparison (recent 7d higher recovery than prev 7d!)
+        for back in 0..<14 {
+            let dt = cal.date(byAdding: .day, value: -back, to: today)!
+            let iso = store.isoFormatter.string(from: dt)
+            let isRecent = back < 7
+            store.realHistory[iso] = RealBiometricDaySummary(
+                dateIso: iso,
+                restingHrBpm: isRecent ? 49.0 : 53.0,
+                hrvMs: isRecent ? 78.0 : 64.0,
+                asleepMinutes: isRecent ? 465 : 420,
+                sleepPct: isRecent ? 88 : 76,
+                strain21: 12.0,
+                strainPct: 58,
+                recoveryPct: isRecent ? 82 : 66,
+                stepsCount: 9200
+            )
+        }
+
+        let weekly = store.computeWeeklyReview(anchorDate: today)
+        XCTAssertEqual(weekly.daysWithData, 7)
+        XCTAssertEqual(weekly.avgRecovery, 82)
+        XCTAssertEqual(weekly.recoveryDelta, 16)
+        XCTAssertEqual(weekly.avgHrv ?? 0, 78.0, accuracy: 0.2)
+        XCTAssertEqual(weekly.hrvDelta ?? 0, 14.0, accuracy: 0.2)
+
+        // Manual scale & blood pressure logging auto-computes lean mass!
+        store.logManualScaleReading(date: today, weightKg: 74.0, bodyFatPct: 15.0, leanMassKg: nil, systolicBp: 116, diastolicBp: 74)
+        XCTAssertEqual(store.latestBodyWeightKg ?? 0, 74.0, accuracy: 0.1)
+        XCTAssertEqual(store.latestBodyFatPct ?? 0, 15.0, accuracy: 0.1)
+        XCTAssertEqual(store.latestLeanMassKg ?? 0, 62.9, accuracy: 0.2)
+        XCTAssertEqual(store.latestBloodPressure?.sys, 116)
+        XCTAssertEqual(store.latestBloodPressure?.dia, 74)
+
+        // Home layout customization & health monitor toggle
+        store.moveHomeSection(.nutrition, direction: -1)
+        store.toggleHomeSection(.recentActivity)
+        XCTAssertFalse(store.homeLayout.isSectionVisible(.recentActivity))
+        store.toggleHealthMonitorMetric(.oxygenSaturation)
+        XCTAssertFalse(store.homeLayout.isHealthMetricVisible(.oxygenSaturation))
+
+        // Lab biomarker manual save
+        store.addManualBiomarker(LabBiomarkerItem(
+            id: "bio_vitd",
+            name: "Vitamina D",
+            value: 52.0,
+            unit: "ng/mL",
+            refMin: 30,
+            refMax: 100,
+            optimalMin: 40,
+            optimalMax: 70,
+            status: .optimal,
+            category: "Vitaminas"
+        ))
+        XCTAssertTrue(store.latestBiomarkersByName.contains(where: { $0.name == "Vitamina D" }))
+
+        // Share cards for Daily Overview, Biological Age, Weekly Review
+        XCTAssertEqual(ShareCardPayload.build(for: .dailyOverview, store: store).metrics.count, 4)
+        XCTAssertEqual(ShareCardPayload.build(for: .biologicalAge, store: store).metrics.count, 4)
+        XCTAssertEqual(ShareCardPayload.build(for: .weeklyReview(weekly), store: store).metrics.count, 4)
+
+        // Flush async persistence and verify reload
+        store.flushPersistenceNow()
+        let reloaded = ImprovingStore()
+        XCTAssertFalse(reloaded.homeLayout.isSectionVisible(.recentActivity))
+        XCTAssertTrue(reloaded.latestBiomarkersByName.contains(where: { $0.name == "Vitamina D" }))
+
+        // Clean up test state so disk stays clean
+        reloaded.resetHomeLayout()
+        reloaded.labReports = []
+        reloaded.realHistory = [:]
+        reloaded.hasImportedOrPairedRealData = false
+        reloaded.flushPersistenceNow()
     }
 }

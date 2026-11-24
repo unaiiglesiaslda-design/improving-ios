@@ -177,8 +177,9 @@ struct FitnessScreen: View {
                                 let letter = wdFmt.string(from: dt).uppercased()
                                 let iso = store.isoFormatter.string(from: dt)
                                 let dayWorkouts = store.activeHistory[iso]?.workouts ?? []
-                                let hasWorkout = !dayWorkouts.isEmpty
-                                let isCycling = dayWorkouts.contains { $0.title.localizedCaseInsensitiveContains("bici") }
+                                let primaryWorkout = dayWorkouts.max(by: { $0.durationMin < $1.durationMin })
+                                let hasWorkout = primaryWorkout != nil
+                                let sportStyle = primaryWorkout.map { WorkoutSportStyle.resolve(title: $0.title, category: $0.categoryLabel) }
 
                                 Button {
                                     if !isFuture { store.selectDayOffset(pastOffset) }
@@ -202,12 +203,12 @@ struct FitnessScreen: View {
 
                                             ZStack {
                                                 Circle()
-                                                    .fill(hasWorkout ? (isCycling ? Color(hex: 0x30264A) : Color(hex: 0x45341E)) : Color.white.opacity(0.05))
+                                                    .fill(sportStyle?.bg ?? Color.white.opacity(0.05))
                                                     .frame(width: 30, height: 30)
-                                                if hasWorkout {
-                                                    Image(systemName: isCycling ? "bicycle" : "figure.strengthtraining.traditional")
+                                                if let st = sportStyle, hasWorkout {
+                                                    Image(systemName: st.icon)
                                                         .font(.system(size: 13, weight: .bold))
-                                                        .foregroundColor(isCycling ? Color(hex: 0x9B7BF8) : BevelColors.amberStart)
+                                                        .foregroundColor(st.fg)
                                                 } else {
                                                     Image(systemName: "zzz")
                                                         .font(.system(size: 12, weight: .semibold))
@@ -783,23 +784,8 @@ struct FitnessActivityHistoryRow: View {
     var dateLabelOverride: String? = nil
 
     private var sportStyle: (icon: String, fg: Color, bg: Color) {
-        let low = "\(workout.title) \(workout.categoryLabel)".lowercased()
-        if low.contains("bici") || low.contains("ciclismo") || low.contains("cycl") {
-            return ("bicycle", Color(hex: 0x9B7BF8), Color(hex: 0x2E2748))
-        }
-        if low.contains("fuerza") || low.contains("strength") || low.contains("pesas") {
-            return ("figure.strengthtraining.traditional", BevelColors.amberStart, Color(hex: 0x3D321E))
-        }
-        if low.contains("carrera") || low.contains("run") {
-            return ("figure.run", BevelColors.greenPrimary, Color(hex: 0x1D3528))
-        }
-        if low.contains("nataci") || low.contains("swim") {
-            return ("figure.pool.swim", BevelColors.cyanBright, Color(hex: 0x1A323D))
-        }
-        if low.contains("caminat") || low.contains("walk") || low.contains("sender") {
-            return ("figure.walk", BevelColors.tealLow, Color(hex: 0x1B3434))
-        }
-        return ("figure.mixed.cardio", BevelColors.skyBlue, Color(hex: 0x1F2D46))
+        let s = WorkoutSportStyle.resolve(title: workout.title, category: workout.categoryLabel)
+        return (s.icon, s.fg, s.bg)
     }
 
     private var formattedTimestamp: String {
@@ -1089,16 +1075,15 @@ struct StrengthSessionLoggerSheet: View {
     }
 }
 
-// MARK: - Routines Library & Pin Manager Sheets (Exact Functionality for "Rutinas": Editar anclas + Ver todo >)
+// MARK: - Routines Library, Multi-Exercise Routine Builder & Pin Manager Sheets (P5!)
 
 private struct RoutinesLibrarySheet: View {
     @ObservedObject var store: ImprovingStore
     let onStartRoutine: (WorkoutRoutineTemplate) -> Void
     let onClose: () -> Void
 
-    @State private var newName: String = ""
-    @State private var newCategory: String = "Fuerza"
-    @State private var newMuscle: MuscleGroupKind = .pectorales
+    @State private var routineBeingEdited: WorkoutRoutineTemplate? = nil
+    @State private var showCreateBuilder: Bool = false
 
     private static let starterTemplates: [WorkoutRoutineTemplate] = [
         WorkoutRoutineTemplate(
@@ -1143,59 +1128,28 @@ private struct RoutinesLibrarySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    BevelCard(cornerRadius: 18) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("CREAR NUEVA RUTINA")
-                                .font(ImprovingFont.microLabel(10.5))
-                                .foregroundColor(BevelColors.textMuted)
-                            TextField("Nombre (ej. Torso Fuerza)", text: $newName)
-                                .font(ImprovingFont.body(14))
-                                .foregroundColor(BevelColors.textPrimary)
-                                .padding(10)
-                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
-                            HStack {
-                                Picker("Músculo", selection: $newMuscle) {
-                                    ForEach(MuscleGroupKind.allCases) { m in Text(m.rawValue).tag(m) }
-                                }
-                                .pickerStyle(.menu)
-                                .tint(BevelColors.skyBlue)
-                                Spacer()
-                                Button {
-                                    let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    guard !trimmed.isEmpty else { return }
-                                    let r = WorkoutRoutineTemplate(
-                                        id: UUID().uuidString,
-                                        name: trimmed,
-                                        category: newCategory,
-                                        iconName: "figure.strengthtraining.traditional",
-                                        isPinned: true,
-                                        exercises: [
-                                            WorkoutRoutineExercise(
-                                                id: UUID().uuidString,
-                                                name: trimmed,
-                                                targetSets: 3,
-                                                targetReps: 10,
-                                                defaultWeightKg: 50,
-                                                primaryMuscles: [newMuscle],
-                                                secondaryMuscles: []
-                                            )
-                                        ]
-                                    )
-                                    store.saveRoutine(r)
-                                    newName = ""
-                                } label: {
-                                    Text("Guardar y anclar")
-                                        .font(ImprovingFont.caption(12.5))
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 8)
-                                        .background(Capsule().fill(BevelColors.emeraldEnd))
-                                }
+                    Button {
+                        showCreateBuilder = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 18, weight: .bold))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Crear nueva rutina multi-ejercicio")
+                                    .font(ImprovingFont.cardTitle(15))
+                                Text("Añade varios ejercicios, series, repeticiones, peso y músculos")
+                                    .font(ImprovingFont.caption(12))
+                                    .opacity(0.85)
                             }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .bold))
                         }
-                        .padding(14)
+                        .foregroundColor(.white)
+                        .padding(16)
+                        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(BevelColors.emeraldEnd))
                     }
+                    .buttonStyle(.plain)
 
                     if !store.workoutRoutines.isEmpty {
                         Text("Tus rutinas")
@@ -1225,55 +1179,342 @@ private struct RoutinesLibrarySheet: View {
                     Button("Cerrar", action: onClose)
                 }
             }
+            .sheet(isPresented: $showCreateBuilder) {
+                RoutineEditorSheet(
+                    store: store,
+                    existingRoutine: nil,
+                    onClose: { showCreateBuilder = false }
+                )
+            }
+            .sheet(item: $routineBeingEdited) { r in
+                RoutineEditorSheet(
+                    store: store,
+                    existingRoutine: r,
+                    onClose: { routineBeingEdited = nil }
+                )
+            }
         }
     }
 
     private func routineCard(_ r: WorkoutRoutineTemplate, isSaved: Bool) -> some View {
-        BevelCard(cornerRadius: 18) {
-            HStack(spacing: 12) {
-                Image(systemName: r.iconName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(BevelColors.amberStart)
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(BevelColors.amberSoftBg))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(r.name)
-                        .font(ImprovingFont.cardTitle(14.5))
-                        .foregroundColor(BevelColors.textPrimary)
-                    Text("\(r.exercises.count) ejercicios · \(r.category)")
-                        .font(ImprovingFont.caption(12))
-                        .foregroundColor(BevelColors.textSecondary)
-                }
-                Spacer()
-                if isSaved {
-                    Button {
-                        store.toggleRoutinePin(r.id)
-                    } label: {
-                        Image(systemName: r.isPinned ? "pin.fill" : "pin")
-                            .font(.system(size: 13))
-                            .foregroundColor(r.isPinned ? BevelColors.amberStart : BevelColors.textMuted)
-                            .frame(width: 30, height: 30)
+        let previewExercises = r.exercises.prefix(3).map(\.name).joined(separator: " · ")
+        return BevelCard(cornerRadius: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: r.iconName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(BevelColors.amberStart)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(BevelColors.amberSoftBg))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(r.name)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text("\(r.exercises.count) ejercicio\(r.exercises.count == 1 ? "" : "s") · \(r.category)")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
                     }
-                } else {
-                    Button {
-                        store.saveRoutine(r)
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(BevelColors.skyBlue)
+                    Spacer()
+                    if isSaved {
+                        Button {
+                            routineBeingEdited = r
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .frame(width: 30, height: 30)
+                                .background(Circle().fill(BevelColors.cardSubtle))
+                        }
+                        Button {
+                            store.toggleRoutinePin(r.id)
+                        } label: {
+                            Image(systemName: r.isPinned ? "pin.fill" : "pin")
+                                .font(.system(size: 13))
+                                .foregroundColor(r.isPinned ? BevelColors.amberStart : BevelColors.textMuted)
+                                .frame(width: 30, height: 30)
+                        }
+                    } else {
+                        Button {
+                            var copy = r
+                            copy = WorkoutRoutineTemplate(
+                                id: UUID().uuidString,
+                                name: r.name,
+                                category: r.category,
+                                iconName: r.iconName,
+                                isPinned: true,
+                                exercises: r.exercises
+                            )
+                            store.saveRoutine(copy)
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(BevelColors.skyBlue)
+                        }
                     }
+                    Button("Iniciar") {
+                        onStartRoutine(r)
+                    }
+                    .font(ImprovingFont.caption(12))
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(BevelColors.indigoEnd))
                 }
-                Button("Iniciar") {
-                    onStartRoutine(r)
+
+                if !previewExercises.isEmpty {
+                    Text(previewExercises)
+                        .font(ImprovingFont.caption(11.5))
+                        .foregroundColor(BevelColors.textMuted)
+                        .lineLimit(1)
                 }
-                .font(ImprovingFont.caption(12))
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Capsule().fill(BevelColors.indigoEnd))
             }
             .padding(14)
+        }
+    }
+}
+
+private struct RoutineEditorSheet: View {
+    @ObservedObject var store: ImprovingStore
+    let existingRoutine: WorkoutRoutineTemplate?
+    let onClose: () -> Void
+
+    @State private var nameDraft: String = ""
+    @State private var categoryDraft: String = "Fuerza"
+    @State private var isPinnedDraft: Bool = true
+    @State private var exercisesDraft: [WorkoutRoutineExercise] = []
+
+    @State private var exName: String = ""
+    @State private var exSets: Int = 3
+    @State private var exReps: Int = 10
+    @State private var exWeight: Double = 40
+    @State private var exMuscle: MuscleGroupKind = .pectorales
+
+    private let categories = ["Fuerza", "Cardio", "Movilidad", "HIIT"]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 11) {
+                            Text("DATOS DE LA RUTINA")
+                                .font(ImprovingFont.microLabel(10.5))
+                                .foregroundColor(BevelColors.textMuted)
+
+                            TextField("Nombre (ej. Torso Fuerza A)", text: $nameDraft)
+                                .font(ImprovingFont.cardTitle(15))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .padding(10)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+
+                            Picker("Categoría", selection: $categoryDraft) {
+                                ForEach(categories, id: \.self) { c in Text(c).tag(c) }
+                            }
+                            .pickerStyle(.segmented)
+
+                            Toggle("Fijar en acceso rápido de Fitness", isOn: $isPinnedDraft)
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .tint(BevelColors.emeraldEnd)
+                        }
+                        .padding(14)
+                    }
+
+                    // Add exercise to routine
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("AÑADIR EJERCICIO A LA RUTINA")
+                                .font(ImprovingFont.microLabel(10.5))
+                                .foregroundColor(BevelColors.skyBlue)
+
+                            TextField("Ej: Press inclinado, Dominadas, Sentadilla…", text: $exName)
+                                .font(ImprovingFont.body(14))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .padding(10)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+
+                            HStack {
+                                Picker("Músculo", selection: $exMuscle) {
+                                    ForEach(MuscleGroupKind.allCases) { m in Text(m.rawValue).tag(m) }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(BevelColors.skyBlue)
+                                Spacer()
+                                Stepper("\(exSets) ser · \(exReps) rep", value: $exSets, in: 1...10)
+                                    .labelsHidden()
+                                Text("\(exSets) × \(exReps) · \(Int(exWeight)) kg")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.semibold)
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.textPrimary)
+                            }
+
+                            HStack(spacing: 8) {
+                                Button("-2 reps") { exReps = max(1, exReps - 2) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                                Button("+2 reps") { exReps = min(50, exReps + 2) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                                Button("-5 kg") { exWeight = max(0, exWeight - 5) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                                Button("+5 kg") { exWeight = min(350, exWeight + 5) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                                Spacer()
+                            }
+
+                            Button {
+                                let clean = exName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !clean.isEmpty else { return }
+                                exercisesDraft.append(
+                                    WorkoutRoutineExercise(
+                                        id: UUID().uuidString,
+                                        name: clean,
+                                        targetSets: exSets,
+                                        targetReps: exReps,
+                                        defaultWeightKg: exWeight,
+                                        primaryMuscles: [exMuscle],
+                                        secondaryMuscles: []
+                                    )
+                                )
+                                exName = ""
+                            } label: {
+                                Label("Añadir ejercicio", systemImage: "plus")
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Capsule().fill(BevelColors.indigoEnd))
+                            }
+                            .disabled(exName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .opacity(exName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1.0)
+                        }
+                        .padding(14)
+                    }
+
+                    // Exercises list inside routine
+                    Text("Ejercicios en esta rutina (\(exercisesDraft.count))")
+                        .font(ImprovingFont.sectionTitle(16.5))
+                        .foregroundColor(BevelColors.textPrimary)
+
+                    if exercisesDraft.isEmpty {
+                        BevelCard(cornerRadius: 16) {
+                            Text("Añade al menos un ejercicio arriba para guardar la rutina.")
+                                .font(ImprovingFont.body(13))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .padding(14)
+                        }
+                    } else {
+                        ForEach(Array(exercisesDraft.enumerated()), id: \.element.id) { idx, ex in
+                            BevelCard(cornerRadius: 16) {
+                                HStack(spacing: 10) {
+                                    VStack(spacing: 4) {
+                                        Button {
+                                            if idx > 0 { exercisesDraft.swapAt(idx, idx - 1) }
+                                        } label: {
+                                            Image(systemName: "chevron.up")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundColor(idx > 0 ? BevelColors.textSecondary : BevelColors.textMuted.opacity(0.3))
+                                        }
+                                        .disabled(idx == 0)
+                                        Button {
+                                            if idx < exercisesDraft.count - 1 { exercisesDraft.swapAt(idx, idx + 1) }
+                                        } label: {
+                                            Image(systemName: "chevron.down")
+                                                .font(.system(size: 11, weight: .bold))
+                                                .foregroundColor(idx < exercisesDraft.count - 1 ? BevelColors.textSecondary : BevelColors.textMuted.opacity(0.3))
+                                        }
+                                        .disabled(idx == exercisesDraft.count - 1)
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(ex.name)
+                                            .font(ImprovingFont.cardTitle(14.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("\(ex.targetSets) × \(ex.targetReps) reps · \(Int(ex.defaultWeightKg)) kg · \(ex.primaryMuscles.map(\.rawValue).joined(separator: ", "))")
+                                            .font(ImprovingFont.caption(12))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        exercisesDraft.removeAll { $0.id == ex.id }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(BevelColors.coralHigh)
+                                            .frame(width: 30, height: 30)
+                                    }
+                                }
+                                .padding(13)
+                            }
+                        }
+                    }
+
+                    Button {
+                        let cleanName = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !cleanName.isEmpty else { return }
+                        let finalExercises: [WorkoutRoutineExercise] = exercisesDraft.isEmpty
+                            ? [WorkoutRoutineExercise(id: UUID().uuidString, name: cleanName, targetSets: 3, targetReps: 10, defaultWeightKg: 40, primaryMuscles: [exMuscle], secondaryMuscles: [])]
+                            : exercisesDraft
+                        let icon = WorkoutSportStyle.resolve(title: cleanName, category: categoryDraft).icon
+                        let model = WorkoutRoutineTemplate(
+                            id: existingRoutine?.id ?? UUID().uuidString,
+                            name: cleanName,
+                            category: categoryDraft,
+                            iconName: icon,
+                            isPinned: isPinnedDraft,
+                            exercises: finalExercises
+                        )
+                        store.saveRoutine(model)
+                        onClose()
+                    } label: {
+                        Text(existingRoutine == nil ? "Guardar rutina" : "Guardar cambios")
+                            .font(ImprovingFont.cardTitle(15))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Capsule().fill(BevelColors.emeraldEnd))
+                    }
+                    .disabled(nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1.0)
+
+                    if let existing = existingRoutine {
+                        Button {
+                            store.deleteRoutine(existing.id)
+                            onClose()
+                        } label: {
+                            Label("Eliminar rutina", systemImage: "trash")
+                                .font(ImprovingFont.cardTitle(14))
+                                .foregroundColor(BevelColors.coralHigh)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Capsule().fill(BevelColors.coralHigh.opacity(0.12)))
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle(existingRoutine == nil ? "Nueva rutina" : "Editar rutina")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) }
+            }
+            .onAppear {
+                if let r = existingRoutine {
+                    nameDraft = r.name
+                    categoryDraft = r.category
+                    isPinnedDraft = r.isPinned
+                    exercisesDraft = r.exercises
+                }
+            }
         }
     }
 }

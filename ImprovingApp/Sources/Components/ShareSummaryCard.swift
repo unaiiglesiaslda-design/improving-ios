@@ -3,6 +3,9 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum ShareSummaryKind: Identifiable {
+    case dailyOverview
+    case biologicalAge
+    case weeklyReview(WeeklyReviewReport)
     case sleep
     case recovery
     case strain
@@ -13,6 +16,9 @@ enum ShareSummaryKind: Identifiable {
 
     var id: String {
         switch self {
+        case .dailyOverview: return "share_daily"
+        case .biologicalAge: return "share_bio_age"
+        case .weeklyReview(let r): return "share_weekly_\(r.weekKey)"
         case .sleep: return "share_sleep"
         case .recovery: return "share_recovery"
         case .strain: return "share_strain"
@@ -63,6 +69,92 @@ struct ShareCardPayload {
         let dateLine = userName.isEmpty ? store.dateLabel : "\(userName) · \(store.dateLabel)"
 
         switch kind {
+        case .dailyOverview:
+            let recTxt = avail.hasRecoveryData ? "\(store.recoveryPercent)%" : "--"
+            let slpTxt = avail.hasSleepData ? "\(store.sleepPercent)%" : "--"
+            let strTxt = avail.hasStrainData ? "\(store.strainPercent)%" : "--"
+            let engTxt = avail.hasEnergyData ? "\(store.energyPercent)%" : "--"
+            let heroPct = avail.hasRecoveryData ? store.recoveryPercent : (avail.hasSleepData ? store.sleepPercent : store.energyPercent)
+            let heroCaption = avail.hasRecoveryData ? "Recuperación \(store.recoveryStatusText)" : "Resumen diario"
+            return ShareCardPayload(
+                pillarBadge: "RESUMEN DIARIO",
+                title: "Estado de Hoy",
+                subtitle: dateLine,
+                progress: Double(heroPct) / 100.0,
+                centerValue: avail.hasRecoveryData ? "\(store.recoveryPercent)%" : (avail.hasEnergyData ? "\(store.energyPercent)%" : "--"),
+                centerCaption: heroCaption,
+                ringColors: [Color(hex: 0x3BD671), Color(hex: 0x6E95F5)],
+                backgroundColors: [Color(hex: 0x182B2E), Color(hex: 0x151A28), Color(hex: 0x0E1118)],
+                metrics: [
+                    ShareCardMetricTile(icon: "flame.fill", label: "Esfuerzo", value: strTxt),
+                    ShareCardMetricTile(icon: "leaf.fill", label: "Recuperación", value: recTxt),
+                    ShareCardMetricTile(icon: "bed.double.fill", label: "Sueño", value: slpTxt),
+                    ShareCardMetricTile(icon: "bolt.fill", label: "Batería", value: engTxt)
+                ]
+            )
+
+        case .biologicalAge:
+            let recent30 = store.trailingCalendarSummaries(days: 30)
+            let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
+            let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
+            let sleepVals = recent30.compactMap { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
+            let stepsVals = recent30.compactMap { $0.summary?.stepsCount }
+            let meanRhr = rhrVals.isEmpty ? nil : (rhrVals.reduce(0, +) / Double(rhrVals.count))
+            let meanHrv = hrvVals.isEmpty ? nil : (hrvVals.reduce(0, +) / Double(hrvVals.count))
+            let meanSleep = sleepVals.isEmpty ? nil : (sleepVals.reduce(0, +) / Double(sleepVals.count))
+            let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
+            let eval = WhoopPhysiologyEngine.computeBiologicalAge(
+                profile: store.userProfile,
+                meanRhr: meanRhr,
+                meanHrv: meanHrv,
+                meanSleepHours: meanSleep,
+                meanSteps: meanSteps,
+                vo2Max: store.latestVo2Max,
+                latestWeightKg: store.latestBodyWeightKg
+            )
+            let deltaTxt = eval.deltaYears <= -0.1
+                ? String(format: "%.1f años más joven", locale: Locale(identifier: "es_ES"), abs(eval.deltaYears))
+                : (eval.deltaYears >= 0.1 ? String(format: "+%.1f años sobre cron.", locale: Locale(identifier: "es_ES"), eval.deltaYears) : "En línea con tu edad")
+            let prog = min(max(0.75 - (eval.deltaYears / 20.0), 0.25), 0.96)
+            return ShareCardPayload(
+                pillarBadge: "BIOLOGÍA",
+                title: "Edad Biológica",
+                subtitle: dateLine,
+                progress: prog,
+                centerValue: String(format: "%.1f", locale: Locale(identifier: "es_ES"), eval.bioAgeYears),
+                centerCaption: deltaTxt,
+                ringColors: [Color(hex: 0x38D9B5), Color(hex: 0x22C55E)],
+                backgroundColors: [Color(hex: 0x15312D), Color(hex: 0x131F23), Color(hex: 0x0E1218)],
+                metrics: [
+                    ShareCardMetricTile(icon: "calendar", label: "Edad real", value: String(format: "%.1f años", locale: Locale(identifier: "es_ES"), eval.chronoAgeYears)),
+                    ShareCardMetricTile(icon: "waveform.path.ecg", label: "VFC 30d", value: meanHrv.map { String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), $0) } ?? "--"),
+                    ShareCardMetricTile(icon: "heart.fill", label: "FCR 30d", value: meanRhr.map { String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), $0) } ?? "--"),
+                    ShareCardMetricTile(icon: "lungs.fill", label: "VO₂ máx.", value: store.latestVo2Max.map { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) } ?? "--")
+                ]
+            )
+
+        case .weeklyReview(let rep):
+            let sleepTxt: String = {
+                guard let m = rep.avgSleepMinutes else { return "--" }
+                return "\(m / 60)h \(String(format: "%02d", m % 60))m"
+            }()
+            return ShareCardPayload(
+                pillarBadge: "RESUMEN SEMANAL",
+                title: "Últimos 7 Días",
+                subtitle: "\(userName.isEmpty ? "" : "\(userName) · ")\(rep.dateRangeLabel)",
+                progress: rep.avgRecovery.map { Double($0) / 100.0 } ?? 0.65,
+                centerValue: rep.avgRecovery.map { "\($0)%" } ?? "\(rep.daysWithData)d",
+                centerCaption: rep.avgRecovery != nil ? "Recuperación media" : "Días registrados",
+                ringColors: [Color(hex: 0x4ADE80), Color(hex: 0x818CF8)],
+                backgroundColors: [Color(hex: 0x1E2540), Color(hex: 0x171A2B), Color(hex: 0x0E1118)],
+                metrics: [
+                    ShareCardMetricTile(icon: "bed.double.fill", label: "Sueño medio", value: sleepTxt),
+                    ShareCardMetricTile(icon: "waveform.path.ecg", label: "VFC media", value: rep.avgHrv.map { String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), $0) } ?? "--"),
+                    ShareCardMetricTile(icon: "figure.run", label: "Entrenos", value: "\(rep.workoutsCount) (\(rep.totalWorkoutMinutes)m)"),
+                    ShareCardMetricTile(icon: "fork.knife", label: "Nutrición", value: rep.avgNutritionScore.map { "\($0)/100" } ?? "--")
+                ]
+            )
+
         case .sleep:
             let sess = store.currentDaySummary?.sleepSession
             let deepTxt = store.currentDaySummary?.deepMinutes.map { "\($0) min" } ?? "--"
