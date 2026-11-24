@@ -151,14 +151,14 @@ struct EffortTrendItem: Identifiable, Codable, Hashable {
 
 struct EffortEventItem: Identifiable, Codable, Hashable {
     let id: String
-    let title: String
-    let timeRange: String
-    let durationMin: Int
-    let avgHrBpm: Int // 0 means no HR recorded
-    let strainScore: Double
-    let strainPct: Int
-    let categoryLabel: String
-    let kcal: Int
+    var title: String
+    var timeRange: String
+    var durationMin: Int
+    var avgHrBpm: Int // 0 means no HR recorded
+    var strainScore: Double
+    var strainPct: Int
+    var categoryLabel: String
+    var kcal: Int
     var distanceKm: Double? = nil
     var elevationM: Double? = nil
     var dateIso: String? = nil
