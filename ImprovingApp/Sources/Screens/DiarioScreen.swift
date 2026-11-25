@@ -52,6 +52,12 @@ private struct AutoDiarioRow: Identifiable {
     let state: JournalCheckState
 }
 
+private struct DiarioTimeEditTarget: Identifiable {
+    let id: String
+    let emoji: String
+    let title: String
+}
+
 struct DiarioScreen: View {
     @ObservedObject var store: ImprovingStore
     let onNavigate: (OverlayRoute) -> Void
@@ -59,6 +65,7 @@ struct DiarioScreen: View {
     @State private var showMoodSheet: Bool = false
     @State private var showCalendarSheet: Bool = false
     @State private var showCustomizeSheet: Bool = false
+    @State private var editingTimeTarget: DiarioTimeEditTarget? = nil
     @State private var noteDraft: String = ""
     @State private var noteSavedFeedback: Bool = false
     @FocusState private var isNoteFocused: Bool
@@ -353,9 +360,18 @@ struct DiarioScreen: View {
                     ForEach(visibleDayEntries) { entry in
                         switch entry.kind {
                         case .triState(let hid):
-                            triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .unset) { next in
-                                store.setJournalCheck(habitId: hid, state: next)
-                            }
+                            triStateRow(
+                                emoji: entry.emoji,
+                                title: entry.title,
+                                state: dayMap[hid] ?? .unset,
+                                eventTime: store.journalEventTime(habitId: hid),
+                                onSelect: { next in
+                                    store.setJournalCheck(habitId: hid, state: next)
+                                },
+                                onTapTime: {
+                                    editingTimeTarget = DiarioTimeEditTarget(id: hid, emoji: entry.emoji, title: entry.title)
+                                }
+                            )
                         case .hydrationLink:
                             Button {
                                 store.selectedNutrientKey = "Hidratación"
@@ -423,9 +439,18 @@ struct DiarioScreen: View {
 
                     ForEach(visibleNightEntries) { entry in
                         if case .triState(let hid) = entry.kind {
-                            triStateRow(emoji: entry.emoji, title: entry.title, state: dayMap[hid] ?? .unset) { next in
-                                store.setJournalCheck(habitId: hid, state: next)
-                            }
+                            triStateRow(
+                                emoji: entry.emoji,
+                                title: entry.title,
+                                state: dayMap[hid] ?? .unset,
+                                eventTime: store.journalEventTime(habitId: hid),
+                                onSelect: { next in
+                                    store.setJournalCheck(habitId: hid, state: next)
+                                },
+                                onTapTime: {
+                                    editingTimeTarget = DiarioTimeEditTarget(id: hid, emoji: entry.emoji, title: entry.title)
+                                }
+                            )
                         }
                     }
 
@@ -510,6 +535,18 @@ struct DiarioScreen: View {
         .sheet(isPresented: $showCustomizeSheet) {
             JournalCustomizeSheet(store: store, onClose: { showCustomizeSheet = false })
         }
+        .sheet(item: $editingTimeTarget) { target in
+            JournalHabitTimePickerSheet(
+                emoji: target.emoji,
+                title: target.title,
+                initialTimeLabel: store.journalEventTime(habitId: target.id),
+                onSave: { newTime in
+                    store.setJournalEventTime(habitId: target.id, timeLabel: newTime)
+                    editingTimeTarget = nil
+                },
+                onClose: { editingTimeTarget = nil }
+            )
+        }
         .onAppear {
             noteDraft = store.journalNote()
             noteSavedFeedback = false
@@ -531,32 +568,75 @@ struct DiarioScreen: View {
         }
     }
 
-    private func triStateRow(emoji: String, title: String, state: JournalCheckState, onSelect: @escaping (JournalCheckState) -> Void) -> some View {
+    private func triStateRow(
+        emoji: String,
+        title: String,
+        state: JournalCheckState,
+        eventTime: String?,
+        onSelect: @escaping (JournalCheckState) -> Void,
+        onTapTime: @escaping () -> Void
+    ) -> some View {
         BevelCard(cornerRadius: 16) {
-            HStack(spacing: 10) {
-                Text(emoji).font(.system(size: 18))
-                Text(title)
-                    .font(ImprovingFont.cardTitle(14.5))
-                    .foregroundColor(BevelColors.textPrimary)
-                    .lineLimit(1)
-                Spacer()
-                HStack(spacing: 2) {
-                    triBtn(icon: "xmark", active: state == .no, activeFill: Color(hex: 0x7A3229), activeBorder: BevelColors.coralHigh) {
-                        UISelectionFeedbackGenerator().selectionChanged()
-                        onSelect(state == .no ? .unset : .no)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(emoji).font(.system(size: 18))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .lineLimit(1)
+
+                        if state == .yes {
+                            Button {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                onTapTime()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "clock")
+                                        .font(.system(size: 10, weight: .semibold))
+                                    if let t = eventTime {
+                                        Text(t)
+                                            .font(ImprovingFont.caption(11))
+                                            .fontWeight(.bold)
+                                            .monospacedDigit()
+                                    } else {
+                                        Text("+ Hora (opcional)")
+                                            .font(ImprovingFont.caption(10.5))
+                                            .fontWeight(.medium)
+                                    }
+                                }
+                                .foregroundColor(eventTime != nil ? BevelColors.bioTeal : BevelColors.textMuted)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule().fill(eventTime != nil ? BevelColors.bioTeal.opacity(0.14) : BevelColors.cardSubtle)
+                                )
+                                .overlay(
+                                    Capsule().strokeBorder(eventTime != nil ? BevelColors.bioTeal.opacity(0.35) : BevelColors.cardBorder, lineWidth: 0.7)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    triBtn(icon: "minus", active: state == .unset, activeFill: BevelColors.floatingDarkButton, activeBorder: Color.white.opacity(0.22)) {
-                        UISelectionFeedbackGenerator().selectionChanged()
-                        onSelect(.unset)
+                    Spacer()
+                    HStack(spacing: 2) {
+                        triBtn(icon: "xmark", active: state == .no, activeFill: Color(hex: 0x7A3229), activeBorder: BevelColors.coralHigh) {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onSelect(state == .no ? .unset : .no)
+                        }
+                        triBtn(icon: "minus", active: state == .unset, activeFill: BevelColors.floatingDarkButton, activeBorder: Color.white.opacity(0.22)) {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onSelect(.unset)
+                        }
+                        triBtn(icon: "checkmark", active: state == .yes, activeFill: Color(hex: 0x1E6B45), activeBorder: BevelColors.greenPrimary) {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            onSelect(state == .yes ? .unset : .yes)
+                        }
                     }
-                    triBtn(icon: "checkmark", active: state == .yes, activeFill: Color(hex: 0x1E6B45), activeBorder: BevelColors.greenPrimary) {
-                        UISelectionFeedbackGenerator().selectionChanged()
-                        onSelect(state == .yes ? .unset : .yes)
-                    }
+                    .padding(2)
+                    .background(RoundedRectangle(cornerRadius: 11).fill(BevelColors.cardSubtle))
+                    .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
                 }
-                .padding(2)
-                .background(RoundedRectangle(cornerRadius: 11).fill(BevelColors.cardSubtle))
-                .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
@@ -1193,6 +1273,160 @@ private struct JournalCustomizeSheet: View {
                     Button("Listo", action: onClose)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Optional Event Time Picker Sheet for Diario Habits
+
+private struct JournalHabitTimePickerSheet: View {
+    let emoji: String
+    let title: String
+    let initialTimeLabel: String?
+    let onSave: (String?) -> Void
+    let onClose: () -> Void
+
+    @State private var includeTime: Bool
+    @State private var pickedDate: Date
+
+    init(
+        emoji: String,
+        title: String,
+        initialTimeLabel: String?,
+        onSave: @escaping (String?) -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.emoji = emoji
+        self.title = title
+        self.initialTimeLabel = initialTimeLabel
+        self.onSave = onSave
+        self.onClose = onClose
+
+        let cal = Calendar.current
+        var base = Date()
+        if let raw = initialTimeLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           raw.contains(":") {
+            let comps = raw.split(separator: ":")
+            if comps.count >= 2, let h = Int(comps[0]), let m = Int(comps[1]),
+               (0...23).contains(h), (0...59).contains(m),
+               let d = cal.date(bySettingHour: h, minute: m, second: 0, of: base) {
+                base = d
+            }
+        }
+        _includeTime = State(initialValue: true)
+        _pickedDate = State(initialValue: base)
+    }
+
+    private func formattedHHmm(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: date)
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Capsule()
+                .fill(BevelColors.trackGroove)
+                .frame(width: 40, height: 4)
+                .padding(.top, 10)
+
+            HStack(spacing: 10) {
+                Text(emoji).font(.system(size: 22))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(ImprovingFont.sectionTitle(16.5))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .lineLimit(1)
+                    Text("Hora del evento (opcional)")
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textSecondary)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(BevelColors.textSecondary)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(BevelColors.card))
+                }
+            }
+
+            Toggle("Registrar hora del evento", isOn: $includeTime)
+                .font(ImprovingFont.cardTitle(14))
+                .foregroundColor(BevelColors.textPrimary)
+                .tint(BevelColors.bioTeal)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.card))
+
+            if includeTime {
+                HStack(spacing: 8) {
+                    quickTimeChip("Ahora") { pickedDate = Date() }
+                    quickTimeChip("-1 h") { pickedDate = Date().addingTimeInterval(-3600) }
+                    quickTimeChip("-2 h") { pickedDate = Date().addingTimeInterval(-7200) }
+                    Spacer()
+                }
+
+                DatePicker("", selection: $pickedDate, displayedComponents: .hourAndMinute)
+                    .datePickerStyle(.wheel)
+                    .labelsHidden()
+                    .frame(height: 125)
+                    .clipped()
+            } else {
+                Text("El hábito quedará marcado en tu Diario sin hora concreta.")
+                    .font(ImprovingFont.caption(12.5))
+                    .foregroundColor(BevelColors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            }
+
+            HStack(spacing: 10) {
+                if initialTimeLabel != nil {
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        onSave(nil)
+                    } label: {
+                        Text("Quitar hora")
+                            .font(ImprovingFont.cardTitle(13.5))
+                            .foregroundColor(BevelColors.coralHigh)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.coralHigh.opacity(0.14)))
+                    }
+                }
+
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onSave(includeTime ? formattedHHmm(pickedDate) : nil)
+                } label: {
+                    Text(includeTime ? "Guardar \(formattedHHmm(pickedDate))" : "Guardar sin hora")
+                        .font(ImprovingFont.cardTitle(14))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.indigoEnd))
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.bottom, 18)
+        .background(BevelColors.sheetHeaderBg.ignoresSafeArea())
+        .presentationDetents([.height(includeTime ? 385 : 240)])
+    }
+
+    private func quickTimeChip(_ label: String, action: @escaping () -> Void) -> some View {
+        Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            action()
+        } label: {
+            Text(label)
+                .font(ImprovingFont.caption(12))
+                .fontWeight(.semibold)
+                .foregroundColor(BevelColors.textPrimary)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(BevelColors.card))
+                .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
         }
     }
 }

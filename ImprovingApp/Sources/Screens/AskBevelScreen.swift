@@ -115,7 +115,7 @@ struct AskBevelScreen: View {
                             Text(userName == "tú" ? "Hola, ¿qué necesitas?" : "Hola, \(userName).")
                                 .font(ImprovingFont.displayLarge(28))
                                 .foregroundColor(BevelColors.textPrimary)
-                            Text("Pregúntame cualquier cosa o adjunta una foto de un plato, entrenamiento o analítica.")
+                            Text("Pregúntame lo que sea o pídeme registrar y editar comidas, horas, hábitos del diario, entrenos o peso.")
                                 .font(ImprovingFont.body(13.5))
                                 .foregroundColor(BevelColors.textSecondary)
                                 .multilineTextAlignment(.center)
@@ -172,6 +172,72 @@ struct AskBevelScreen: View {
                                                     .font(ImprovingFont.body(14.5))
                                                     .foregroundColor(BevelColors.textPrimary)
                                                     .fixedSize(horizontal: false, vertical: true)
+
+                                                if !msg.appliedActions.isEmpty {
+                                                    VStack(spacing: 7) {
+                                                        ForEach(msg.appliedActions) { act in
+                                                            let tint = act.isUndone ? BevelColors.textMuted : Color(hex: act.badgeColorHex)
+                                                            HStack(spacing: 10) {
+                                                                Image(systemName: act.isUndone ? "arrow.uturn.backward.circle" : act.icon)
+                                                                    .font(.system(size: 13.5, weight: .semibold))
+                                                                    .foregroundColor(tint)
+                                                                    .frame(width: 28, height: 28)
+                                                                    .background(Circle().fill(tint.opacity(0.16)))
+
+                                                                VStack(alignment: .leading, spacing: 1.5) {
+                                                                    Text(act.isUndone ? "\(act.title) · Deshecho" : act.title)
+                                                                        .font(ImprovingFont.caption(12))
+                                                                        .fontWeight(.bold)
+                                                                        .foregroundColor(act.isUndone ? BevelColors.textMuted : BevelColors.textPrimary)
+                                                                    Text(act.detail)
+                                                                        .font(ImprovingFont.caption(11.5))
+                                                                        .foregroundColor(BevelColors.textSecondary)
+                                                                        .lineLimit(2)
+                                                                }
+                                                                Spacer(minLength: 4)
+
+                                                                if act.undoPayload != nil {
+                                                                    if act.isUndone {
+                                                                        Text("Deshecho")
+                                                                            .font(ImprovingFont.caption(10.5))
+                                                                            .fontWeight(.semibold)
+                                                                            .foregroundColor(BevelColors.textMuted)
+                                                                            .padding(.horizontal, 8)
+                                                                            .padding(.vertical, 4)
+                                                                            .background(Capsule().fill(Color.white.opacity(0.05)))
+                                                                    } else {
+                                                                        Button {
+                                                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                                                store.undoCoachAction(messageId: msg.id, actionId: act.id)
+                                                                            }
+                                                                        } label: {
+                                                                            HStack(spacing: 3) {
+                                                                                Image(systemName: "arrow.uturn.backward")
+                                                                                    .font(.system(size: 10, weight: .bold))
+                                                                                Text("Deshacer")
+                                                                                    .font(ImprovingFont.caption(11))
+                                                                                    .fontWeight(.bold)
+                                                                            }
+                                                                            .foregroundColor(BevelColors.textPrimary)
+                                                                            .padding(.horizontal, 9)
+                                                                            .padding(.vertical, 5)
+                                                                            .background(Capsule().fill(Color.white.opacity(0.10)))
+                                                                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            .padding(.horizontal, 10)
+                                                            .padding(.vertical, 8)
+                                                            .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(BevelColors.cardSubtle))
+                                                            .overlay(
+                                                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                                                    .strokeBorder(tint.opacity(act.isUndone ? 0.14 : 0.32), lineWidth: 0.8)
+                                                            )
+                                                        }
+                                                    }
+                                                    .padding(.top, 2)
+                                                }
 
                                                 if !msg.bullets.isEmpty {
                                                     VStack(alignment: .leading, spacing: 6) {

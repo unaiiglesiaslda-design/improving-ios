@@ -812,7 +812,7 @@ struct SavedFoodLibraryItem: Identifiable, Codable, Equatable, Hashable {
     var qualityFactors: NutritionQualityFactors? = nil
 }
 
-struct CustomNutritionGoals: Codable, Equatable {
+struct CustomNutritionGoals: Codable, Equatable, Hashable {
     var caloriesKcal: Int? = nil
     var fatG: Int? = nil
     var carbsG: Int? = nil
@@ -892,6 +892,29 @@ struct SmartNotificationSettings: Codable, Equatable {
     }
 }
 
+enum CoachUndoPayload: Codable, Equatable, Hashable {
+    case deleteMeal(mealId: String, dateIso: String)
+    case restoreMeal(meal: NutritionMealItem, dateIso: String, removeFromDateIso: String?)
+    case restoreNutrientDay(dateIso: String, previousGlasses: Int?, previousManualMap: [String: Double]?)
+    case restoreNutritionGoals(goals: CustomNutritionGoals)
+    case restoreJournalHabit(dateIso: String, habitId: String, previousState: JournalCheckState?, previousTime: String?)
+    case restoreJournalNoteAndMood(dateIso: String, previousNote: String?, previousMood: Int?)
+    case deleteCustomHabit(habitId: String)
+    case deleteWorkout(workoutId: String, dateIso: String)
+    case restoreWorkout(workout: EffortEventItem, dateIso: String)
+    case restoreBodyMeasurement(dateIso: String, prevWeight: Double?, prevFat: Double?, prevLean: Double?, prevSys: Int?, prevDia: Int?)
+}
+
+struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    let icon: String
+    let badgeColorHex: UInt
+    let title: String
+    let detail: String
+    var isUndone: Bool = false
+    var undoPayload: CoachUndoPayload? = nil
+}
+
 struct CoachChatMessage: Identifiable, Codable, Hashable {
     let id: String
     let isUser: Bool
@@ -902,9 +925,10 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
     let isSuggestionChip: Bool
     var modelUsed: String? = nil
     var attachedPhotoFilename: String? = nil
+    var appliedActions: [CoachAppliedAction] = []
 
     enum CodingKeys: String, CodingKey {
-        case id, isUser, verdictTitle, text, bullets, timestampLabel, isSuggestionChip, modelUsed, attachedPhotoFilename
+        case id, isUser, verdictTitle, text, bullets, timestampLabel, isSuggestionChip, modelUsed, attachedPhotoFilename, appliedActions
     }
 
     init(
@@ -916,7 +940,8 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
         timestampLabel: String,
         isSuggestionChip: Bool,
         modelUsed: String? = nil,
-        attachedPhotoFilename: String? = nil
+        attachedPhotoFilename: String? = nil,
+        appliedActions: [CoachAppliedAction] = []
     ) {
         self.id = id
         self.isUser = isUser
@@ -927,6 +952,7 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
         self.isSuggestionChip = isSuggestionChip
         self.modelUsed = modelUsed
         self.attachedPhotoFilename = attachedPhotoFilename
+        self.appliedActions = appliedActions
     }
 
     init(from decoder: Decoder) throws {
@@ -940,6 +966,7 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
         isSuggestionChip = try c.decodeIfPresent(Bool.self, forKey: .isSuggestionChip) ?? false
         modelUsed = try c.decodeIfPresent(String.self, forKey: .modelUsed)
         attachedPhotoFilename = try c.decodeIfPresent(String.self, forKey: .attachedPhotoFilename)
+        appliedActions = try c.decodeIfPresent([CoachAppliedAction].self, forKey: .appliedActions) ?? []
     }
 }
 

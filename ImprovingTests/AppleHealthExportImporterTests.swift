@@ -1757,4 +1757,146 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.labReports = []
         store.flushPersistenceNow()
     }
+
+    @MainActor
+    func testOptionalDiarioHabitEventTimeSetEditClearAndPersistence() {
+        let store = ImprovingStore()
+        let iso = store.selectedDateIso
+        store.journalCheckinsByDate[iso] = [:]
+        store.journalEventTimesByDate[iso] = [:]
+
+        // 1. Marking habit Yes WITHOUT time keeps event time nil (100% optional!)
+        store.setJournalCheck(habitId: "caffeine", state: .yes)
+        XCTAssertEqual(store.journalCheckinsByDate[iso]?["caffeine"], .yes)
+        XCTAssertNil(store.journalEventTime(habitId: "caffeine"))
+
+        // 2. Optionally setting event time persists cleanly
+        store.setJournalEventTime(habitId: "caffeine", timeLabel: "16:30")
+        XCTAssertEqual(store.journalEventTime(habitId: "caffeine"), "16:30")
+        store.flushPersistenceNow()
+
+        let reloaded = ImprovingStore()
+        XCTAssertEqual(reloaded.journalEventTime(habitId: "caffeine", for: iso), "16:30")
+
+        // 3. Clearing event time keeps habit Yes while removing timestamp
+        reloaded.setJournalEventTime(habitId: "caffeine", timeLabel: nil, for: iso)
+        XCTAssertEqual(reloaded.journalCheckinsByDate[iso]?["caffeine"], .yes)
+        XCTAssertNil(reloaded.journalEventTime(habitId: "caffeine", for: iso))
+
+        // 4. Setting time then switching to .no automatically clears stale timestamp
+        reloaded.setJournalCheck(habitId: "caffeine", state: .yes, for: iso, eventTime: "17:15")
+        XCTAssertEqual(reloaded.journalEventTime(habitId: "caffeine", for: iso), "17:15")
+        reloaded.setJournalCheck(habitId: "caffeine", state: .no, for: iso)
+        XCTAssertNil(reloaded.journalEventTime(habitId: "caffeine", for: iso))
+
+        // Cleanup
+        reloaded.journalCheckinsByDate = [:]
+        reloaded.journalEventTimesByDate = [:]
+        reloaded.flushPersistenceNow()
+    }
+
+    @MainActor
+    func testAgenticCoachToolCallsAndOneTapUndoRoundTrip() throws {
+        XCTAssertEqual(GeminiCoachService.coachToolDeclarations.count, 11)
+
+        let store = ImprovingStore()
+        let todayIso = store.selectedDateIso
+        let cal = Calendar.current
+        let yesterdayIso = store.isoFormatter.string(from: cal.date(byAdding: .day, value: -1, to: store.selectedDate)!)
+        store.mealsByDate = [:]
+        store.journalCheckinsByDate = [:]
+        store.journalEventTimesByDate = [:]
+        store.journalNotesByDate = [:]
+        store.journalMoodByDate = [:]
+        store.coachMessages = []
+
+        // 1. log_meal with explicit time
+        let logRes = store.executeCoachToolCall(
+            name: "log_meal",
+            argsJson: #"{"title":"Pollo con arroz","emoji":"🍗","time_hhmm":"14:20","kcal":620,"protein_g":48,"carbs_g":65,"fat_g":14,"quality_score":91}"#
+        )
+        let logAct = try XCTUnwrap(logRes.appliedAction)
+        XCTAssertEqual(store.mealsToday.count, 1)
+        let meal = try XCTUnwrap(store.mealsToday.first)
+        XCTAssertEqual(meal.title, "Pollo con arroz")
+        XCTAssertEqual(meal.timeLabel, "14:20")
+        XCTAssertEqual(meal.kcal, 620)
+
+        // 2. edit_meal changing time AND moving to yesterday -> then Undo restores today at 14:20!
+        let editRes = store.executeCoachToolCall(
+            name: "edit_meal",
+            argsJson: "{\"meal_id\":\"\(meal.id)\",\"new_time_hhmm\":\"13:30\",\"new_date_iso\":\"\(yesterdayIso)\",\"kcal\":680}"
+        )
+        let editAct = try XCTUnwrap(editRes.appliedAction)
+        XCTAssertTrue(store.mealsToday.isEmpty)
+        XCTAssertEqual(store.mealsByDate[yesterdayIso]?.first?.timeLabel, "13:30")
+        XCTAssertEqual(store.mealsByDate[yesterdayIso]?.first?.kcal, 680)
+
+        // 3. set_journal_habit WITH optional time ("16:45") AND WITHOUT time ("creatine")
+        let cafRes = store.executeCoachToolCall(
+            name: "set_journal_habit",
+            argsJson: #"{"habit_id":"caffeine","state":"yes","event_time":"16:45"}"#
+        )
+        let cafAct = try XCTUnwrap(cafRes.appliedAction)
+        XCTAssertEqual(store.journalCheckinsByDate[todayIso]?["caffeine"], .yes)
+        XCTAssertEqual(store.journalEventTime(habitId: "caffeine"), "16:45")
+
+        let creaRes = store.executeCoachToolCall(
+            name: "set_journal_habit",
+            argsJson: #"{"habit_id":"Creatina","state":"yes"}"#
+        )
+        XCTAssertNotNil(creaRes.appliedAction)
+        XCTAssertEqual(store.journalCheckinsByDate[todayIso]?["creatine"], .yes)
+        XCTAssertNil(store.journalEventTime(habitId: "creatine"))
+
+        // 4. log_workout + log_body_measurement + update_nutrition_goals
+        let wkRes = store.executeCoachToolCall(
+            name: "log_workout",
+            argsJson: #"{"title":"Pádel","category":"Deporte","duration_min":60,"start_time_hhmm":"19:00","kcal":510}"#
+        )
+        let wkAct = try XCTUnwrap(wkRes.appliedAction)
+        XCTAssertTrue(store.workoutsToday.contains(where: { $0.title == "Pádel" && $0.timeRange == "19:00 - 20:00" }))
+
+        let bodyRes = store.executeCoachToolCall(
+            name: "log_body_measurement",
+            argsJson: #"{"weight_kg":73.4,"body_fat_pct":14.5}"#
+        )
+        XCTAssertNotNil(bodyRes.appliedAction)
+        XCTAssertEqual(store.latestBodyWeightKg ?? 0, 73.4, accuracy: 0.1)
+
+        // Attach actions to a Coach message and verify 1-tap Undo works for edit_meal, set_journal_habit, and log_workout!
+        let msgId = "msg_undo_test"
+        store.coachMessages.append(
+            CoachChatMessage(
+                id: msgId,
+                isUser: false,
+                text: "Cambios aplicados",
+                timestampLabel: "17:20",
+                isSuggestionChip: false,
+                appliedActions: [logAct, editAct, cafAct, wkAct]
+            )
+        )
+
+        store.undoCoachAction(messageId: msgId, actionId: editAct.id)
+        XCTAssertEqual(store.mealsByDate[todayIso]?.first?.timeLabel, "14:20")
+        XCTAssertEqual(store.mealsByDate[todayIso]?.first?.kcal, 620)
+        XCTAssertTrue(store.mealsByDate[yesterdayIso]?.isEmpty ?? true)
+
+        store.undoCoachAction(messageId: msgId, actionId: cafAct.id)
+        XCTAssertNil(store.journalCheckinsByDate[todayIso]?["caffeine"])
+        XCTAssertNil(store.journalEventTime(habitId: "caffeine"))
+
+        store.undoCoachAction(messageId: msgId, actionId: wkAct.id)
+        XCTAssertFalse(store.workoutsToday.contains(where: { $0.title == "Pádel" }))
+
+        // Cleanup disk state cleanly
+        store.mealsByDate = [:]
+        store.journalCheckinsByDate = [:]
+        store.journalEventTimesByDate = [:]
+        store.coachMessages = []
+        store.coachThreads = []
+        store.realHistory = [:]
+        store.simulatedHistory = [:]
+        store.flushPersistenceNow()
+    }
 }
