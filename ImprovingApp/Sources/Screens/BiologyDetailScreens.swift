@@ -674,6 +674,7 @@ struct LabReportScannerSheet: View {
 
 struct LabBiomarkerBarRow: View {
     let item: LabBiomarkerItem
+    var ageDeltaYears: Double? = nil
 
     private var pointerFraction: Double {
         if let lo = item.refMin, let hi = item.refMax, hi > lo {
@@ -688,6 +689,17 @@ struct LabBiomarkerBarRow: View {
         case .optimal: return 0.62
         case .high: return 0.86
         }
+    }
+
+    private func formattedDelta(_ d: Double) -> String {
+        if abs(d) < 0.05 { return "0,0 años" }
+        return String(format: "%+.1f años", locale: Locale(identifier: "es_ES"), d)
+    }
+
+    private func deltaTint(_ d: Double) -> Color {
+        if d <= -0.05 { return BevelColors.bioTeal }
+        if d >= 0.05 { return BevelColors.coralHigh }
+        return BevelColors.textMuted
     }
 
     var body: some View {
@@ -713,10 +725,22 @@ struct LabBiomarkerBarRow: View {
                         .font(ImprovingFont.cardTitle(14.5))
                         .monospacedDigit()
                         .foregroundColor(BevelColors.textPrimary)
-                    Text(item.status.rawValue)
-                        .font(ImprovingFont.caption(10.5))
-                        .fontWeight(.bold)
-                        .foregroundColor(item.status.color)
+                    HStack(spacing: 6) {
+                        Text(item.status.rawValue)
+                            .font(ImprovingFont.caption(10.5))
+                            .fontWeight(.bold)
+                            .foregroundColor(item.status.color)
+                        if let delta = ageDeltaYears {
+                            Text(formattedDelta(delta))
+                                .font(ImprovingFont.caption(10.5))
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundColor(deltaTint(delta))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(Capsule().fill(deltaTint(delta).opacity(0.14)))
+                        }
+                    }
                 }
             }
 

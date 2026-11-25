@@ -3582,6 +3582,19 @@ final class ImprovingStore: ObservableObject {
             ]
         }
 
+        let bioSnap = biologicalAgeSnapshot()
+        let edadBiologicaDict: [String: Any] = [
+            "edad_biologica_anos": bioSnap.hasData ? bioSnap.eval.bioAgeYears : bioSnap.eval.chronoAgeYears,
+            "edad_cronologica_anos": bioSnap.eval.chronoAgeYears,
+            "diferencia_total_anos": bioSnap.hasData ? bioSnap.eval.deltaYears : 0.0,
+            "impacto_sueno_anos": bioSnap.eval.sleepDelta,
+            "impacto_actividad_anos": bioSnap.eval.activityDelta,
+            "impacto_fitness_anos": bioSnap.eval.fitnessDelta,
+            "impacto_vfc_anos": bioSnap.eval.autonomicDelta,
+            "impacto_cuerpo_anos": bioSnap.eval.bodyDelta,
+            "impacto_analiticas_anos": bioSnap.eval.bloodLabsDelta
+        ]
+
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
         var payload: [String: Any] = [
@@ -3590,6 +3603,7 @@ final class ImprovingStore: ObservableObject {
             "origen_datos": hasImportedOrPairedRealData ? "Apple Health / Sensores reales" : "Modo vista previa",
             "perfil": perfil,
             "metricas_hoy": metricas,
+            "edad_biologica": edadBiologicaDict,
             "diario_hoy": diarioHoy,
             "nutricion_hoy": nutricionHoy
         ]
@@ -3934,6 +3948,44 @@ final class ImprovingStore: ObservableObject {
             if out.count >= limit { break }
         }
         return out
+    }
+
+    /// Unified 30-day Biological Age snapshot (Wearables + Body Composition + Blood Test Biomarkers).
+    func biologicalAgeSnapshot() -> (
+        eval: BiologicalAgeEvaluation,
+        hasData: Bool,
+        meanRhr: Double?,
+        meanHrv: Double?,
+        meanSleep: Double?,
+        meanSteps: Int?,
+        vo2Val: Double?
+    ) {
+        let recent30 = trailingCalendarSummaries(days: 30)
+        let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
+        let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
+        let sleepVals = recent30.compactMap { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
+        let stepsVals = recent30.compactMap { $0.summary?.stepsCount }
+        let vo2Val = latestVo2Max
+        let biomarkers = latestBiomarkersByName
+
+        let meanRhr = rhrVals.isEmpty ? nil : (rhrVals.reduce(0, +) / Double(rhrVals.count))
+        let meanHrv = hrvVals.isEmpty ? nil : (hrvVals.reduce(0, +) / Double(hrvVals.count))
+        let meanSleep = sleepVals.isEmpty ? nil : (sleepVals.reduce(0, +) / Double(sleepVals.count))
+        let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
+
+        let hasData = meanRhr != nil || meanHrv != nil || meanSleep != nil || meanSteps != nil || vo2Val != nil || !biomarkers.isEmpty
+        let eval = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: userProfile,
+            meanRhr: meanRhr,
+            meanHrv: meanHrv,
+            meanSleepHours: meanSleep,
+            meanSteps: meanSteps,
+            vo2Max: vo2Val,
+            latestWeightKg: latestBodyWeightKg,
+            latestBodyFatPct: latestBodyFatPct,
+            labBiomarkers: biomarkers
+        )
+        return (eval, hasData, meanRhr, meanHrv, meanSleep, meanSteps, vo2Val)
     }
 
     var latestBiomarkersByName: [LabBiomarkerItem] {

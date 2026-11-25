@@ -782,6 +782,7 @@ struct BioDotRangeSlider: View {
     let accentColor: Color
     var showMinMax: Bool = true
     var statusBadgeText: String? = nil
+    var deltaColor: Color? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -850,14 +851,14 @@ struct BioDotRangeSlider: View {
                         Text(deltaText)
                             .font(ImprovingFont.cardTitle(16))
                             .monospacedDigit()
-                            .foregroundColor(accentColor)
+                            .foregroundColor(deltaColor ?? accentColor)
                         if !deltaUnit.isEmpty {
                             Text(deltaUnit)
                                 .font(ImprovingFont.caption(11.5))
                                 .foregroundColor(BevelColors.textSecondary)
                         }
                     }
-                    .frame(minWidth: 44, alignment: .trailing)
+                    .frame(minWidth: 48, alignment: .trailing)
                 }
             }
         }

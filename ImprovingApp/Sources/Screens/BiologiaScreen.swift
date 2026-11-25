@@ -16,27 +16,15 @@ struct BiologiaScreen: View {
     var body: some View {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
         let recent30 = store.trailingCalendarSummaries(days: 30)
-        let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
-        let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
-        let sleepVals = recent30.compactMap { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
-        let stepsVals = recent30.compactMap { $0.summary?.stepsCount }
-        let vo2Val = store.latestVo2Max
+        let bioSnap = store.biologicalAgeSnapshot()
+        let bioEval = bioSnap.eval
+        let hasBioBase = bioSnap.hasData
+        let meanRhr = bioSnap.meanRhr
+        let meanHrv = bioSnap.meanHrv
+        let meanSleep = bioSnap.meanSleep
+        let meanSteps = bioSnap.meanSteps
+        let vo2Val = bioSnap.vo2Val
 
-        let hasBioBase = !rhrVals.isEmpty || !hrvVals.isEmpty || !sleepVals.isEmpty || vo2Val != nil
-        let meanRhr = rhrVals.isEmpty ? nil : (rhrVals.reduce(0, +) / Double(rhrVals.count))
-        let meanHrv = hrvVals.isEmpty ? nil : (hrvVals.reduce(0, +) / Double(hrvVals.count))
-        let meanSleep = sleepVals.isEmpty ? nil : (sleepVals.reduce(0, +) / Double(sleepVals.count))
-        let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
-
-        let bioEval = WhoopPhysiologyEngine.computeBiologicalAge(
-            profile: store.userProfile,
-            meanRhr: meanRhr,
-            meanHrv: meanHrv,
-            meanSleepHours: meanSleep,
-            meanSteps: meanSteps,
-            vo2Max: vo2Val,
-            latestWeightKg: store.latestBodyWeightKg
-        )
         let chronologicalAge = bioEval.chronoAgeYears
         let bioDelta = hasBioBase ? bioEval.deltaYears : 0.0
         let bioAge = hasBioBase ? bioEval.bioAgeYears : chronologicalAge
@@ -141,9 +129,22 @@ struct BiologiaScreen: View {
                         }
                     }
 
-                    Text("Biomarcadores de edad")
-                        .font(ImprovingFont.sectionTitle(18.5))
-                        .foregroundColor(BevelColors.textPrimary)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Biomarcadores de edad")
+                            .font(ImprovingFont.sectionTitle(18.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Spacer()
+                        if hasBioBase {
+                            Text(impactPillText(bioDelta))
+                                .font(ImprovingFont.caption(12))
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundColor(impactColor(bioDelta))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(Capsule().fill(impactColor(bioDelta).opacity(0.14)))
+                        }
+                    }
 
                     if let avgS = meanSleep {
                         let hrs = Int(avgS)
@@ -151,23 +152,25 @@ struct BiologiaScreen: View {
                         bioCategoryCard(
                             id: "sleep",
                             icon: "moon.fill",
-                            ringPrimary: BevelColors.bioTeal,
+                            ringPrimary: impactColor(bioEval.sleepDelta),
                             ringSecondary: BevelColors.trackGroove,
                             title: "Sueño",
                             subtitle: "\(hrs) h \(String(format: "%02d", mins)) min promedio",
-                            subtitleColor: BevelColors.bioTeal
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.sleepDelta
                         ) {
                             BioDotRangeSlider(
                                 title: "Duración media (30 d)",
                                 valueLabel: "\(hrs) h \(String(format: "%02d", mins)) min",
                                 minLabel: "5 h",
                                 maxLabel: "10 h",
-                                deltaText: "",
-                                deltaUnit: "",
+                                deltaText: sliderDeltaNumber(bioEval.sleepDelta),
+                                deltaUnit: "años",
                                 positionFrac: min(max((avgS - 5.0) / 5.0, 0.05), 0.95),
                                 fillStartFrac: min(max((norms.sleepLowHours - 5.0) / 5.0, 0.10), 0.70),
                                 fillEndFrac: min(max((norms.sleepHighHours - 5.0) / 5.0, 0.45), 0.96),
-                                accentColor: BevelColors.bioTeal
+                                accentColor: BevelColors.bioTeal,
+                                deltaColor: impactColor(bioEval.sleepDelta)
                             )
                         }
                     }
@@ -176,23 +179,25 @@ struct BiologiaScreen: View {
                         bioCategoryCard(
                             id: "activity",
                             icon: "figure.run",
-                            ringPrimary: BevelColors.bioTeal,
-                            ringSecondary: BevelColors.amberStart,
+                            ringPrimary: impactColor(bioEval.activityDelta),
+                            ringSecondary: BevelColors.trackGroove,
                             title: "Actividad",
                             subtitle: "\(avgSt) pasos/día (30 d)",
-                            subtitleColor: BevelColors.bioTeal
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.activityDelta
                         ) {
                             BioDotRangeSlider(
                                 title: "Número de pasos medio",
                                 valueLabel: String(format: "%.1fk", Double(avgSt) / 1000.0),
                                 minLabel: "0",
                                 maxLabel: "16k",
-                                deltaText: "",
-                                deltaUnit: "",
+                                deltaText: sliderDeltaNumber(bioEval.activityDelta),
+                                deltaUnit: "años",
                                 positionFrac: min(max(Double(avgSt) / 16000.0, 0.04), 0.96),
                                 fillStartFrac: min(max(Double(norms.dailyStepsGoal) / 16000.0, 0.25), 0.75),
                                 fillEndFrac: 0.90,
-                                accentColor: BevelColors.bioTeal
+                                accentColor: BevelColors.bioTeal,
+                                deltaColor: impactColor(bioEval.activityDelta)
                             )
                         }
                     }
@@ -201,11 +206,12 @@ struct BiologiaScreen: View {
                         bioCategoryCard(
                             id: "fitness",
                             icon: "heart.fill",
-                            ringPrimary: BevelColors.bioTeal,
-                            ringSecondary: BevelColors.amberStart,
-                            title: "Fitness",
+                            ringPrimary: impactColor(bioEval.fitnessDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Fitness cardiovascular",
                             subtitle: meanRhr.map { String(format: "FCR media %.1f ppm", locale: Locale(identifier: "es_ES"), $0) } ?? "VO₂ máx. registrado",
-                            subtitleColor: BevelColors.textSecondary
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.fitnessDelta
                         ) {
                             if let v = vo2Val {
                                 BioDotRangeSlider(
@@ -213,12 +219,13 @@ struct BiologiaScreen: View {
                                     valueLabel: String(format: "%.1f", locale: Locale(identifier: "es_ES"), v),
                                     minLabel: "20",
                                     maxLabel: "65",
-                                    deltaText: "",
-                                    deltaUnit: "",
+                                    deltaText: sliderDeltaNumber(bioEval.vo2Delta),
+                                    deltaUnit: "años",
                                     positionFrac: min(max((v - 20.0) / 45.0, 0.05), 0.95),
                                     fillStartFrac: min(max((norms.vo2GoodThreshold - 20.0) / 45.0, 0.10), 0.75),
                                     fillEndFrac: min(max((norms.vo2ExcellentThreshold - 20.0) / 45.0, 0.35), 0.95),
-                                    accentColor: BevelColors.amberStart
+                                    accentColor: BevelColors.amberStart,
+                                    deltaColor: impactColor(bioEval.vo2Delta)
                                 )
                             }
                             if let r = meanRhr {
@@ -228,94 +235,166 @@ struct BiologiaScreen: View {
                                     valueLabel: String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), r),
                                     minLabel: "40",
                                     maxLabel: "90",
-                                    deltaText: "",
-                                    deltaUnit: "",
+                                    deltaText: sliderDeltaNumber(bioEval.rhrDelta),
+                                    deltaUnit: "años",
                                     positionFrac: min(max((r - 40.0) / 50.0, 0.05), 0.95),
                                     fillStartFrac: min(max((norms.rhrLowBpm - 40.0) / 50.0, 0.04), 0.50),
                                     fillEndFrac: min(max((norms.rhrHighBpm - 40.0) / 50.0, 0.20), 0.80),
-                                    accentColor: BevelColors.bioTeal
+                                    accentColor: BevelColors.bioTeal,
+                                    deltaColor: impactColor(bioEval.rhrDelta)
                                 )
                             }
                         }
                     }
 
-                    // N6: Analíticas de Sangre y Biomarcadores Clínicos
-                    HStack {
-                        Text("Analíticas de sangre")
-                            .font(ImprovingFont.sectionTitle(18.5))
-                            .foregroundColor(BevelColors.textPrimary)
-                        Spacer()
-                        Button("+ Subir") { showLabScannerSheet = true }
-                            .font(ImprovingFont.caption(13))
-                            .fontWeight(.semibold)
-                            .foregroundColor(BevelColors.bioTeal)
+                    if let avgH = meanHrv, avgH > 2.0 {
+                        bioCategoryCard(
+                            id: "autonomic",
+                            icon: "waveform.path.ecg",
+                            ringPrimary: impactColor(bioEval.autonomicDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Sistema autónomo (VFC)",
+                            subtitle: String(format: "%.1f ms promedio (30 d)", locale: Locale(identifier: "es_ES"), avgH),
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.autonomicDelta
+                        ) {
+                            BioDotRangeSlider(
+                                title: "VFC media (30 d)",
+                                valueLabel: String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), avgH),
+                                minLabel: "20 ms",
+                                maxLabel: "130 ms",
+                                deltaText: sliderDeltaNumber(bioEval.autonomicDelta),
+                                deltaUnit: "años",
+                                positionFrac: min(max((avgH - 20.0) / 110.0, 0.04), 0.96),
+                                fillStartFrac: min(max((norms.hrvLowMs - 20.0) / 110.0, 0.12), 0.72),
+                                fillEndFrac: min(max((norms.hrvHighMs - 20.0) / 110.0, 0.35), 0.94),
+                                accentColor: BevelColors.greenPrimary,
+                                deltaColor: impactColor(bioEval.autonomicDelta)
+                            )
+                        }
                     }
-                    .padding(.top, 4)
 
+                    if bioEval.hasBody {
+                        let wNow = store.latestBodyWeightKg ?? store.userProfile.weightKg
+                        let hm = max(store.userProfile.heightCm / 100.0, 1.2)
+                        let bmiNow = wNow / (hm * hm)
+                        let bfOpt = store.latestBodyFatPct
+                        bioCategoryCard(
+                            id: "body",
+                            icon: "figure.stand",
+                            ringPrimary: impactColor(bioEval.bodyDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Composición corporal",
+                            subtitle: bfOpt.map { String(format: "Grasa %.1f%% · IMC %.1f", locale: Locale(identifier: "es_ES"), $0, bmiNow) }
+                                ?? String(format: "IMC %.1f · %.1f kg", locale: Locale(identifier: "es_ES"), bmiNow, wNow),
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.bodyDelta
+                        ) {
+                            if let bf = bfOpt {
+                                BioDotRangeSlider(
+                                    title: "Grasa corporal",
+                                    valueLabel: String(format: "%.1f%%", locale: Locale(identifier: "es_ES"), bf),
+                                    minLabel: "6%",
+                                    maxLabel: "38%",
+                                    deltaText: sliderDeltaNumber(bioEval.bodyDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max((bf - 6.0) / 32.0, 0.04), 0.96),
+                                    fillStartFrac: min(max((norms.optimalBodyFatLowPct - 6.0) / 32.0, 0.08), 0.65),
+                                    fillEndFrac: min(max((norms.optimalBodyFatHighPct - 6.0) / 32.0, 0.25), 0.85),
+                                    accentColor: BevelColors.skyBlue,
+                                    deltaColor: impactColor(bioEval.bodyDelta)
+                                )
+                            } else {
+                                BioDotRangeSlider(
+                                    title: "Índice de masa corporal (IMC)",
+                                    valueLabel: String(format: "%.1f", locale: Locale(identifier: "es_ES"), bmiNow),
+                                    minLabel: "16",
+                                    maxLabel: "34",
+                                    deltaText: sliderDeltaNumber(bioEval.bodyDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max((bmiNow - 16.0) / 18.0, 0.04), 0.96),
+                                    fillStartFrac: min(max((norms.bmiOptimalLow - 16.0) / 18.0, 0.10), 0.55),
+                                    fillEndFrac: min(max((norms.bmiOptimalHigh - 16.0) / 18.0, 0.30), 0.75),
+                                    accentColor: BevelColors.skyBlue,
+                                    deltaColor: impactColor(bioEval.bodyDelta)
+                                )
+                            }
+                        }
+                    }
+
+                    // Analíticas de Sangre (integradas directamente en la Edad Biológica con impacto por biomarcador!)
                     if latestBiomarkers.isEmpty {
                         Button { showLabScannerSheet = true } label: {
-                            BevelCard(cornerRadius: 20) {
-                                HStack(spacing: 12) {
+                            BevelCard(cornerRadius: 24) {
+                                HStack(spacing: 14) {
                                     Image(systemName: "cross.case.fill")
                                         .font(.system(size: 18))
                                         .foregroundColor(BevelColors.bioTeal)
-                                        .frame(width: 42, height: 42)
+                                        .frame(width: 48, height: 48)
                                         .background(Circle().fill(BevelColors.bioTeal.opacity(0.15)))
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text("Añade tu última analítica con Gemini IA")
-                                            .font(ImprovingFont.cardTitle(14.5))
+                                        Text("Analíticas de sangre")
+                                            .font(ImprovingFont.cardTitle(16))
                                             .foregroundColor(BevelColors.textPrimary)
-                                        Text("Foto o PDF · Extrae Vitamina D, Ferritina, Glucosa, Lípidos, TSH…")
+                                        Text("Sube tu PDF o foto para que ajusten tu Edad Biológica")
                                             .font(ImprovingFont.caption(12))
                                             .foregroundColor(BevelColors.textSecondary)
                                     }
                                     Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(BevelColors.textMuted)
+                                    Text("+ Subir")
+                                        .font(ImprovingFont.caption(12))
+                                        .fontWeight(.bold)
+                                        .foregroundColor(BevelColors.bioTeal)
                                 }
-                                .padding(15)
+                                .padding(16)
                             }
                         }
                         .buttonStyle(.plain)
                     } else {
-                        BevelCard(cornerRadius: 20) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                if let latestRep = store.labReports.first {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(latestRep.title)
-                                                .font(ImprovingFont.cardTitle(14.5))
-                                                .foregroundColor(BevelColors.textPrimary)
-                                            Text("\(latestRep.dateIso) · \(latestBiomarkers.count) biomarcadores activos")
-                                                .font(ImprovingFont.caption(11.5))
-                                                .foregroundColor(BevelColors.textSecondary)
-                                        }
-                                        Spacer()
-                                        Menu {
-                                            Button("Añadir nueva analítica / marcador", systemImage: "plus") {
-                                                showLabScannerSheet = true
-                                            }
-                                            Button("Eliminar último informe", systemImage: "trash", role: .destructive) {
-                                                store.deleteLabReport(id: latestRep.id)
-                                            }
-                                        } label: {
-                                            Image(systemName: "ellipsis.circle")
-                                                .font(.system(size: 16))
-                                                .foregroundColor(BevelColors.textMuted)
-                                        }
+                        let latestRep = store.labReports.first
+                        bioCategoryCard(
+                            id: "labs",
+                            icon: "cross.case.fill",
+                            ringPrimary: impactColor(bioEval.bloodLabsDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Analíticas de sangre",
+                            subtitle: "\(latestBiomarkers.count) biomarcadores\(latestRep.map { " · \($0.dateIso)" } ?? "")",
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.bloodLabsDelta
+                        ) {
+                            if let rep = latestRep {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(rep.title)
+                                            .font(ImprovingFont.cardTitle(14))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("Impacto clínico acumulado: \(impactDescription(bioEval.bloodLabsDelta))")
+                                            .font(ImprovingFont.caption(11.5))
+                                            .foregroundColor(impactColor(bioEval.bloodLabsDelta))
                                     }
+                                    Spacer()
+                                    Menu {
+                                        Button("Añadir nueva analítica / marcador", systemImage: "plus") {
+                                            showLabScannerSheet = true
+                                        }
+                                        Button("Eliminar último informe", systemImage: "trash", role: .destructive) {
+                                            store.deleteLabReport(id: rep.id)
+                                        }
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle")
+                                            .font(.system(size: 16))
+                                            .foregroundColor(BevelColors.textMuted)
+                                    }
+                                }
+                                Divider().background(BevelColors.divider)
+                            }
+
+                            ForEach(Array(bioEval.labImpacts.enumerated()), id: \.element.id) { idx, impact in
+                                LabBiomarkerBarRow(item: impact.biomarker, ageDeltaYears: impact.deltaYears)
+                                if idx < bioEval.labImpacts.count - 1 {
                                     Divider().background(BevelColors.divider)
                                 }
-
-                                ForEach(Array(latestBiomarkers.prefix(10).enumerated()), id: \.element.id) { idx, b in
-                                    LabBiomarkerBarRow(item: b)
-                                    if idx < min(latestBiomarkers.count, 10) - 1 {
-                                        Divider().background(BevelColors.divider)
-                                    }
-                                }
                             }
-                            .padding(16)
                         }
                     }
 
@@ -407,6 +486,32 @@ struct BiologiaScreen: View {
         }
     }
 
+    private func impactColor(_ deltaYears: Double) -> Color {
+        if deltaYears <= -0.05 { return BevelColors.bioTeal }
+        if deltaYears >= 0.05 { return BevelColors.coralHigh }
+        return BevelColors.textSecondary
+    }
+
+    private func impactPillText(_ deltaYears: Double) -> String {
+        if abs(deltaYears) < 0.05 { return "0,0 años" }
+        return String(format: "%+.1f años", locale: Locale(identifier: "es_ES"), deltaYears)
+    }
+
+    private func sliderDeltaNumber(_ deltaYears: Double) -> String {
+        if abs(deltaYears) < 0.05 { return "0,0" }
+        return String(format: "%+.1f", locale: Locale(identifier: "es_ES"), deltaYears)
+    }
+
+    private func impactDescription(_ deltaYears: Double) -> String {
+        if deltaYears <= -0.05 {
+            return String(format: "resta %.1f años", locale: Locale(identifier: "es_ES"), abs(deltaYears))
+        }
+        if deltaYears >= 0.05 {
+            return String(format: "suma %.1f años", locale: Locale(identifier: "es_ES"), deltaYears)
+        }
+        return "efecto neutro (0,0 años)"
+    }
+
     private func bioCategoryCard<Content: View>(
         id: String,
         icon: String,
@@ -415,9 +520,11 @@ struct BiologiaScreen: View {
         title: String,
         subtitle: String,
         subtitleColor: Color,
+        deltaYears: Double,
         @ViewBuilder details: @escaping () -> Content
     ) -> some View {
         let isExpanded = expandedCategoryId == id
+        let deltaCol = impactColor(deltaYears)
         return BevelCard(cornerRadius: 24) {
             VStack(alignment: .leading, spacing: 10) {
                 Button {
@@ -425,7 +532,7 @@ struct BiologiaScreen: View {
                         expandedCategoryId = isExpanded ? nil : id
                     }
                 } label: {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         ZStack {
                             Canvas { ctx, sz in
                                 let center = CGPoint(x: sz.width / 2, y: sz.height / 2)
@@ -444,15 +551,25 @@ struct BiologiaScreen: View {
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(title)
-                                .font(ImprovingFont.cardTitle(16))
+                                .font(ImprovingFont.cardTitle(15.5))
                                 .foregroundColor(BevelColors.textPrimary)
+                                .lineLimit(1)
                             Text(subtitle)
-                                .font(ImprovingFont.cardTitle(14))
+                                .font(ImprovingFont.caption(12.5))
                                 .foregroundColor(subtitleColor)
+                                .lineLimit(1)
                         }
-                        Spacer()
+                        Spacer(minLength: 6)
+                        Text(impactPillText(deltaYears))
+                            .font(ImprovingFont.caption(12))
+                            .fontWeight(.bold)
+                            .monospacedDigit()
+                            .foregroundColor(deltaCol)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(deltaCol.opacity(0.14)))
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundColor(BevelColors.textMuted)
                     }
                 }

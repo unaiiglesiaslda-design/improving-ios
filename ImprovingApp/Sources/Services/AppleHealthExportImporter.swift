@@ -41,6 +41,7 @@ enum AppleHealthExportImporter {
         var respSamples: [(Int64, Double)] = []
         var spo2Samples: [(Int64, Double)] = []
         var tempCelsiusValues: [Double] = []
+        var tempDeltaValues: [Double] = []
         var vo2Values: [Double] = []
         var hrrValues: [Double] = []
         var glucoseMgDlValues: [Double] = []
@@ -568,10 +569,21 @@ enum AppleHealthExportImporter {
             let sysBp = mean(raw.systolicValues).map { Int($0.rounded()) }
             let diaBp = mean(raw.diastolicValues).map { Int($0.rounded()) }
 
-            let dayTempAbs = median(raw.tempCelsiusValues).map(round1)
+            let rawTempAbs = median(raw.tempCelsiusValues).map(round1)
+            let directTempDelta = median(raw.tempDeltaValues).map { round1(min(max($0, -2.5), 2.5)) }
             let tempDelta: Double? = {
-                guard let d = dayTempAbs, let m = medianTemp else { return nil }
-                return round1(min(max(d - m, -2.5), 2.5))
+                if let d = rawTempAbs, let m = medianTemp {
+                    return round1(min(max(d - m, -2.5), 2.5))
+                }
+                return directTempDelta
+            }()
+            let dayTempAbs: Double? = {
+                if let d = rawTempAbs { return d }
+                if let td = directTempDelta {
+                    let base = medianTemp ?? 35.8
+                    return round1(base + td)
+                }
+                return nil
             }()
 
             // 4. Bevel-Calibrated Sleep Score (only from measured components, personalized to user's age & sex!)
@@ -1620,8 +1632,14 @@ enum AppleHealthExportImporter {
                 let pct = num <= 1.05 ? num * 100.0 : num
                 if (60.0...100.0).contains(pct) { day.spo2Samples.append((endEp, pct)) }
             case "HKQuantityTypeIdentifierAppleSleepingWristTemperature", "HKQuantityTypeIdentifierBodyTemperature":
-                let celsius = (unitStr.localizedCaseInsensitiveContains("degF") || unitStr.contains("F")) ? (num - 32.0) * 5.0 / 9.0 : num
-                if (28.0...42.0).contains(celsius) { day.tempCelsiusValues.append(celsius) }
+                let isF = unitStr.localizedCaseInsensitiveContains("degF") || unitStr.contains("F")
+                if (-4.5...4.5).contains(num) {
+                    let deltaC = isF ? (num * 5.0 / 9.0) : num
+                    day.tempDeltaValues.append(deltaC)
+                } else {
+                    let celsius = (isF || (num > 60.0 && num < 115.0)) ? (num - 32.0) * 5.0 / 9.0 : num
+                    if (28.0...42.0).contains(celsius) { day.tempCelsiusValues.append(celsius) }
+                }
             case "HKQuantityTypeIdentifierVO2Max":
                 if (15.0...90.0).contains(num) { day.vo2Values.append(num) }
             case "HKQuantityTypeIdentifierHeartRateRecoveryOneMinute":

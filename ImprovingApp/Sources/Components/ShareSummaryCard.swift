@@ -94,28 +94,25 @@ struct ShareCardPayload {
             )
 
         case .biologicalAge:
-            let recent30 = store.trailingCalendarSummaries(days: 30)
-            let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
-            let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
-            let sleepVals = recent30.compactMap { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
-            let stepsVals = recent30.compactMap { $0.summary?.stepsCount }
-            let meanRhr = rhrVals.isEmpty ? nil : (rhrVals.reduce(0, +) / Double(rhrVals.count))
-            let meanHrv = hrvVals.isEmpty ? nil : (hrvVals.reduce(0, +) / Double(hrvVals.count))
-            let meanSleep = sleepVals.isEmpty ? nil : (sleepVals.reduce(0, +) / Double(sleepVals.count))
-            let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
-            let eval = WhoopPhysiologyEngine.computeBiologicalAge(
-                profile: store.userProfile,
-                meanRhr: meanRhr,
-                meanHrv: meanHrv,
-                meanSleepHours: meanSleep,
-                meanSteps: meanSteps,
-                vo2Max: store.latestVo2Max,
-                latestWeightKg: store.latestBodyWeightKg
-            )
+            let bioSnap = store.biologicalAgeSnapshot()
+            let eval = bioSnap.eval
+            let meanHrv = bioSnap.meanHrv
+            let meanRhr = bioSnap.meanRhr
             let deltaTxt = eval.deltaYears <= -0.1
                 ? String(format: "%.1f años más joven", locale: Locale(identifier: "es_ES"), abs(eval.deltaYears))
                 : (eval.deltaYears >= 0.1 ? String(format: "+%.1f años sobre cron.", locale: Locale(identifier: "es_ES"), eval.deltaYears) : "En línea con tu edad")
             let prog = min(max(0.75 - (eval.deltaYears / 20.0), 0.25), 0.96)
+            let fourthTile: ShareCardMetricTile = eval.hasBloodLabs
+                ? ShareCardMetricTile(
+                    icon: "cross.case.fill",
+                    label: "Analíticas",
+                    value: abs(eval.bloodLabsDelta) < 0.05 ? "0,0 años" : String(format: "%+.1f años", locale: Locale(identifier: "es_ES"), eval.bloodLabsDelta)
+                )
+                : ShareCardMetricTile(
+                    icon: "lungs.fill",
+                    label: "VO₂ máx.",
+                    value: store.latestVo2Max.map { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) } ?? "--"
+                )
             return ShareCardPayload(
                 pillarBadge: "BIOLOGÍA",
                 title: "Edad Biológica",
@@ -129,7 +126,7 @@ struct ShareCardPayload {
                     ShareCardMetricTile(icon: "calendar", label: "Edad real", value: String(format: "%.1f años", locale: Locale(identifier: "es_ES"), eval.chronoAgeYears)),
                     ShareCardMetricTile(icon: "waveform.path.ecg", label: "VFC 30d", value: meanHrv.map { String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), $0) } ?? "--"),
                     ShareCardMetricTile(icon: "heart.fill", label: "FCR 30d", value: meanRhr.map { String(format: "%.1f ppm", locale: Locale(identifier: "es_ES"), $0) } ?? "--"),
-                    ShareCardMetricTile(icon: "lungs.fill", label: "VO₂ máx.", value: store.latestVo2Max.map { String(format: "%.1f", locale: Locale(identifier: "es_ES"), $0) } ?? "--")
+                    fourthTile
                 ]
             )
 

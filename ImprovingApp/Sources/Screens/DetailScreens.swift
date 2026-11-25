@@ -102,7 +102,7 @@ enum PillarInfoKind: String, Identifiable {
         case .energy:
             return "Integra una curva continua de 24 horas entre días: se recarga durante el sueño reparador (incluso si el Apple Watch está en modo ahorro) y se descarga en función del estrés sostenido, el esfuerzo y los entrenamientos."
         case .biologicalAge:
-            return "Compara tu media real de 30 días en FC en reposo, VFC, duración del sueño, pasos diarios, VO₂ máx. y composición corporal frente a referencias fisiológicas ajustadas a tu edad cronológica y sexo."
+            return "Integra tus promedios reales de 30 días (sueño, actividad, VO₂ máx., FC en reposo, VFC y composición corporal) junto con tus analíticas de sangre frente a referencias clínicas ajustadas a tu edad cronológica y sexo."
         }
     }
 
@@ -140,9 +140,9 @@ enum PillarInfoKind: String, Identifiable {
             ]
         case .biologicalAge:
             return [
-                ("heart.circle.fill", "Marcadores clave", "VO₂ máx., FC en reposo y VFC son los predictores fisiológicos con mayor peso."),
-                ("scalemass.fill", "Actualización viva", "Mejora progresivamente al sostener 30+ días de buen sueño, pasos y carga cardiovascular."),
-                ("cross.case.fill", "Complemento clínico", "Combínalo con tus analíticas de sangre en Biología para una visión completa.")
+                ("heart.circle.fill", "Impacto transparente por apartado", "Cada sección muestra exactamente cuántos años resta (−) o suma (+) a tu edad cronológica."),
+                ("cross.case.fill", "Analíticas de sangre (tipo PhenoAge)", "Marcadores como HbA1c, glucosa, PCR, lípidos (HDL/LDL/ApoB), ferritina, vitamina D o función renal/hepática ajustan hasta −3,5 / +4,5 años."),
+                ("scalemass.fill", "Actualización viva", "Mejora progresivamente al sostener 30+ días de buen sueño, pasos, VFC, VO₂ máx. y biomarcadores óptimos.")
             ]
         }
     }

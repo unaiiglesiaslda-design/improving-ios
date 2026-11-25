@@ -1642,4 +1642,119 @@ final class AppleHealthExportImporterTests: XCTestCase {
         )
         XCTAssertEqual(candidates.first, "group.com.improving.health.ios.TEAM99XYZ")
     }
+
+    func testShortcutsWristTemperatureAbsoluteCelsiusFahrenheitRelativeDeltaUnicodeMinusAndEndDate() throws {
+        // 1. Absolute Celsius with End Date (morning wake-up) + bare Fahrenheit without "°F"
+        let jsonAbs = """
+        {
+          "temp_values": "36,1 °C\\n96.8",
+          "temp_ends": "25 nov 2026, 7:30\\n24 nov 2026, 7:15"
+        }
+        """
+        let resAbs = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(jsonAbs.data(using: .utf8)))
+        XCTAssertNil(resAbs.errorMessage)
+        let d25 = try XCTUnwrap(resAbs.days["2026-11-25"])
+        let d24 = try XCTUnwrap(resAbs.days["2026-11-24"])
+        XCTAssertEqual(d25.wristTempAbsoluteC ?? 0, 36.1, accuracy: 0.1)
+        XCTAssertEqual(d24.wristTempAbsoluteC ?? 0, 36.0, accuracy: 0.1)
+
+        // 2. Relative baseline deltas with Unicode minus ("−0,4 °C") and plus ("+0,3 °C") + bedtime Start Date shifting to wake-up morning!
+        let jsonDelta = """
+        {
+          "wrist_temp_values": "−0,4 °C\\n+0,3 °C",
+          "wrist_temp_dates": "24 nov 2026, 23:20\\n23 nov 2026, 23:10"
+        }
+        """
+        let resDelta = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(jsonDelta.data(using: .utf8)))
+        XCTAssertNil(resDelta.errorMessage)
+        // 24 nov 23:20 bedtime reading MUST shift to wake-up morning 2026-11-25!
+        let shifted25 = try XCTUnwrap(resDelta.days["2026-11-25"])
+        let shifted24 = try XCTUnwrap(resDelta.days["2026-11-24"])
+        XCTAssertEqual(shifted25.wristTempDeltaC ?? 0, -0.4, accuracy: 0.05)
+        XCTAssertEqual(shifted24.wristTempDeltaC ?? 0, 0.3, accuracy: 0.05)
+        XCTAssertNotNil(shifted25.wristTempAbsoluteC)
+        XCTAssertEqual(shifted25.wristTempAbsoluteC ?? 0, 35.4, accuracy: 0.1)
+    }
+
+    @MainActor
+    func testBloodTestsAdjustBiologicalAgeAndExposePerSectionDeltas() {
+        var profile = UserPhysiologyProfile()
+        profile.ageYears = 30
+        profile.birthDateIso = nil
+        profile.sex = .male
+        profile.heightCm = 178
+        profile.weightKg = 74
+
+        let baseline = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: profile,
+            meanRhr: 54,
+            meanHrv: 72,
+            meanSleepHours: 7.8,
+            meanSteps: 9500,
+            vo2Max: 47,
+            latestWeightKg: 74,
+            labBiomarkers: []
+        )
+        XCTAssertFalse(baseline.hasBloodLabs)
+        XCTAssertEqual(baseline.bloodLabsDelta, 0.0, accuracy: 0.01)
+
+        // Optimal longevity blood panel -> reduces biological age (negative bloodLabsDelta!)
+        let optimalLabs: [LabBiomarkerItem] = [
+            LabBiomarkerItem(id: "l1", name: "HbA1c", value: 4.9, unit: "%", refMin: 4.0, refMax: 5.6, optimalMin: 4.5, optimalMax: 5.2, status: .optimal, category: "Metabolismo"),
+            LabBiomarkerItem(id: "l2", name: "Glucosa", value: 82, unit: "mg/dL", refMin: 70, refMax: 100, optimalMin: 72, optimalMax: 90, status: .optimal, category: "Metabolismo"),
+            LabBiomarkerItem(id: "l3", name: "PCR ultrasensible", value: 0.3, unit: "mg/L", refMin: 0.0, refMax: 3.0, optimalMin: 0.0, optimalMax: 1.0, status: .optimal, category: "Inflamación"),
+            LabBiomarkerItem(id: "l4", name: "Colesterol HDL", value: 74, unit: "mg/dL", refMin: 40, refMax: 90, optimalMin: 55, optimalMax: 90, status: .optimal, category: "Lípidos"),
+            LabBiomarkerItem(id: "l5", name: "Vitamina D (25-OH)", value: 56, unit: "ng/mL", refMin: 30, refMax: 100, optimalMin: 40, optimalMax: 70, status: .optimal, category: "Vitaminas y Minerales")
+        ]
+        let withOptimal = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: profile,
+            meanRhr: 54,
+            meanHrv: 72,
+            meanSleepHours: 7.8,
+            meanSteps: 9500,
+            vo2Max: 47,
+            latestWeightKg: 74,
+            labBiomarkers: optimalLabs
+        )
+        XCTAssertTrue(withOptimal.hasBloodLabs)
+        XCTAssertLessThan(withOptimal.bloodLabsDelta, -1.0)
+        XCTAssertLessThan(withOptimal.bioAgeYears, baseline.bioAgeYears)
+        XCTAssertEqual(withOptimal.labImpacts.count, 5)
+        XCTAssertTrue(withOptimal.labImpacts.allSatisfy { $0.deltaYears < 0 })
+
+        // Out-of-range high-risk blood panel -> increases biological age (positive bloodLabsDelta!)
+        let riskLabs: [LabBiomarkerItem] = [
+            LabBiomarkerItem(id: "r1", name: "HbA1c", value: 6.7, unit: "%", refMin: 4.0, refMax: 5.6, optimalMin: 4.5, optimalMax: 5.2, status: .high, category: "Metabolismo"),
+            LabBiomarkerItem(id: "r2", name: "PCR ultrasensible", value: 8.5, unit: "mg/L", refMin: 0.0, refMax: 3.0, optimalMin: 0.0, optimalMax: 1.0, status: .high, category: "Inflamación"),
+            LabBiomarkerItem(id: "r3", name: "Colesterol LDL", value: 195, unit: "mg/dL", refMin: 50, refMax: 130, optimalMin: 60, optimalMax: 100, status: .high, category: "Lípidos"),
+            LabBiomarkerItem(id: "r4", name: "Triglicéridos", value: 240, unit: "mg/dL", refMin: 35, refMax: 150, optimalMin: 40, optimalMax: 100, status: .high, category: "Lípidos"),
+            LabBiomarkerItem(id: "r5", name: "Vitamina D (25-OH)", value: 14, unit: "ng/mL", refMin: 30, refMax: 100, optimalMin: 40, optimalMax: 70, status: .low, category: "Vitaminas y Minerales")
+        ]
+        let withRisk = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: profile,
+            meanRhr: 54,
+            meanHrv: 72,
+            meanSleepHours: 7.8,
+            meanSteps: 9500,
+            vo2Max: 47,
+            latestWeightKg: 74,
+            labBiomarkers: riskLabs
+        )
+        XCTAssertGreaterThan(withRisk.bloodLabsDelta, 1.5)
+        XCTAssertGreaterThan(withRisk.bioAgeYears, baseline.bioAgeYears)
+        XCTAssertEqual(withRisk.fitnessDelta, AppleHealthExportImporter.round1(withRisk.vo2Delta + withRisk.rhrDelta), accuracy: 0.05)
+
+        // Store-level biologicalAgeSnapshot() activates even from blood tests alone!
+        let store = ImprovingStore()
+        store.realHistory = [:]
+        store.labReports = [
+            LabReportRecord(id: "rep_bio", dateIso: "2026-11-25", title: "Analítica", sourceLabel: "Test", summary: "Test", biomarkers: optimalLabs)
+        ]
+        let snap = store.biologicalAgeSnapshot()
+        XCTAssertTrue(snap.hasData)
+        XCTAssertTrue(snap.eval.hasBloodLabs)
+        XCTAssertLessThan(snap.eval.bloodLabsDelta, -1.0)
+        store.labReports = []
+        store.flushPersistenceNow()
+    }
 }

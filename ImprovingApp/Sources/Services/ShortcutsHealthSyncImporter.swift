@@ -21,6 +21,7 @@ struct ShortcutsSyncEnvelope: Codable {
     var spo2Dates: [String]? = nil
     var tempValues: [String]? = nil
     var tempDates: [String]? = nil
+    var tempEnds: [String]? = nil
     var stepsValues: [String]? = nil
     var stepsDates: [String]? = nil
     var kcalValues: [String]? = nil
@@ -149,8 +150,8 @@ enum ShortcutsHealthSyncImporter {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let mtimeMs = Int64((((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0) * 1000.0).rounded())
         let sz = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        // v10 prefix ensures instant re-parse with unified 18-metric shortcut & HR exercise bout detection
-        return "v10#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
+        // v11 prefix ensures instant re-parse with Wrist Temperature (absolute °C/°F + relative delta + End Date)
+        return "v11#\(url.lastPathComponent)#\(sz)#\(mtimeMs)"
     }
 
     static func fileModificationDate(for url: URL) -> Date? {
@@ -273,7 +274,8 @@ enum ShortcutsHealthSyncImporter {
         ingestParallelSeries(kind: .rhr, values: env.rhrValues, dates: env.rhrDates, into: &days)
         ingestParallelSeries(kind: .resp, values: env.respValues, dates: env.respDates, into: &days)
         ingestParallelSeries(kind: .spo2, values: env.spo2Values, dates: env.spo2Dates, into: &days)
-        ingestParallelSeries(kind: .temp, values: env.tempValues, dates: env.tempDates, into: &days)
+        let tempDateSeries = (env.tempEnds?.isEmpty == false) ? env.tempEnds : env.tempDates
+        ingestParallelSeries(kind: .temp, values: env.tempValues, dates: tempDateSeries, usedEndDates: (env.tempEnds?.isEmpty == false), into: &days)
         ingestParallelSeries(kind: .steps, values: env.stepsValues, dates: env.stepsDates, into: &days)
         ingestParallelSeries(kind: .kcal, values: env.kcalValues, dates: env.kcalDates, into: &days)
         ingestParallelSeries(kind: .vo2, values: env.vo2Values, dates: env.vo2Dates, into: &days)
@@ -410,6 +412,7 @@ enum ShortcutsHealthSyncImporter {
         kind: SyncMetricKind,
         values rawVals: [String]?,
         dates rawDates: [String]?,
+        usedEndDates: Bool = false,
         into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
     ) {
         let vals = expandParallelLines(rawVals)
@@ -424,12 +427,18 @@ enum ShortcutsHealthSyncImporter {
 
         for idx in 0..<vals.count {
             guard let num = parseLocalizedNumber(vals[idx], allowDotThousands: allowDotThousands) else { continue }
-            let parsed: (date: Date, wall: (iso: String, minuteOfDay: Int))
+            var parsed: (date: Date, wall: (iso: String, minuteOfDay: Int))
             if !dates.isEmpty {
                 let rawDateStr = idx < dates.count ? dates[idx] : ""
                 // Never collapse unparseable multi-day dates onto `today` (prevents summing 3 days of kcal onto today!)
                 guard let ok = parseFlexibleDate(rawDateStr) else { continue }
                 parsed = ok
+                // Apple Watch sleeping wrist temperature starts at bedtime (e.g. 22:30–23:59) and ends at morning wake-up.
+                // If a Shortcut sent Start Date instead of End Date, shift late-evening readings (>= 20:00) to the wake-up morning!
+                if kind == .temp && !usedEndDates && parsed.wall.minuteOfDay >= 20 * 60,
+                   let nextMorning = Calendar.current.date(byAdding: .hour, value: 8, to: parsed.date) {
+                    parsed = (nextMorning, wallClock(for: nextMorning))
+                }
             } else {
                 parsed = (fallbackNow, wallClock(for: fallbackNow))
             }
@@ -512,6 +521,9 @@ enum ShortcutsHealthSyncImporter {
             ("resp", .resp), ("fr", .resp),
             ("spo2", .spo2),
             ("temp", .temp),
+            ("wrist_temp", .temp), ("wristtemp", .temp), ("sleeping_wrist_temp", .temp),
+            ("apple_sleeping_wrist_temperature", .temp), ("body_temp", .temp),
+            ("temperatura", .temp), ("temp_muneca", .temp), ("temperatura_muneca", .temp),
             ("steps", .steps), ("pasos", .steps),
             ("kcal", .kcal), ("active_kcal", .kcal), ("calories", .kcal),
             ("vo2", .vo2),
@@ -529,9 +541,12 @@ enum ShortcutsHealthSyncImporter {
         ]
         for (p, kind) in parallelPrefixes {
             let vList = extractStringList(dict["\(p)_values"] ?? dict["\(p)Values"])
-            let dList = extractStringList(dict["\(p)_dates"] ?? dict["\(p)Dates"])
+            let endList = extractStringList(dict["\(p)_ends"] ?? dict["\(p)Ends"])
+            let dateList = extractStringList(dict["\(p)_dates"] ?? dict["\(p)Dates"] ?? dict["\(p)_starts"] ?? dict["\(p)Starts"])
+            let useEnds = (kind == .temp && !endList.isEmpty)
+            let dList = useEnds ? endList : (dateList.isEmpty ? endList : dateList)
             if !vList.isEmpty {
-                ingestParallelSeries(kind: kind, values: vList, dates: dList, into: &days)
+                ingestParallelSeries(kind: kind, values: vList, dates: dList, usedEndDates: useEnds, into: &days)
             }
         }
         let slVals = extractStringList(dict["sleep_values"] ?? dict["sleepValues"])
@@ -935,9 +950,19 @@ enum ShortcutsHealthSyncImporter {
                 day.spo2Samples.append((ep, pct))
             }
         case .temp:
-            let celsius = (lowUnit.contains("f") && num > 60.0) ? (num - 32.0) * 5.0 / 9.0 : num
-            if (28.0...42.0).contains(celsius) {
-                day.tempCelsiusValues.append(celsius)
+            // Supports ALL 3 Apple Watch / Shortcuts formats:
+            // 1) Relative baseline deviation ("+0,2 °C", "−0,3 °C", "-0.4", "+0.5 °F") -> tempDeltaValues
+            // 2) Absolute Fahrenheit (with OR without "°F" unit label, e.g. "96.6") -> convert to °C
+            // 3) Absolute Celsius (e.g. "35,9 °C", "36.1") -> tempCelsiusValues
+            if (-4.5...4.5).contains(num) {
+                let deltaC = lowUnit.contains("f") ? (num * 5.0 / 9.0) : num
+                day.tempDeltaValues.append(deltaC)
+            } else {
+                let isFahrenheit = lowUnit.contains("f") || (num > 60.0 && num < 115.0)
+                let celsius = isFahrenheit ? (num - 32.0) * 5.0 / 9.0 : num
+                if (28.0...42.0).contains(celsius) {
+                    day.tempCelsiusValues.append(celsius)
+                }
             }
         case .steps:
             if (0.0...120_000.0).contains(num) {
@@ -1239,11 +1264,17 @@ enum ShortcutsHealthSyncImporter {
     }
 
     static func parseLocalizedNumber(_ raw: String, allowDotThousands: Bool = false) -> Double? {
-        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Normalize Unicode minus/en-dash/em-dash ("−0,3 °C") to ASCII "-" so negative wrist-temp deltas never lose their sign!
+        let s = raw
+            .replacingOccurrences(of: "\u{2212}", with: "-")
+            .replacingOccurrences(of: "\u{2013}", with: "-")
+            .replacingOccurrences(of: "\u{2014}", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
-        // Extract first numeric token (supports "68,4 ms", "1.245", "5.420 pasos", "97.5%", "-0,2 °C")
-        guard let range = s.range(of: #"-?\d+(?:[.,]\d+)*"#, options: .regularExpression) else { return nil }
+        // Extract first numeric token (supports "68,4 ms", "1.245", "5.420 pasos", "97.5%", "+0,2 °C", "-0,3 °C")
+        guard let range = s.range(of: #"[+-]?\d+(?:[.,]\d+)*"#, options: .regularExpression) else { return nil }
         var token = String(s[range])
+        if token.hasPrefix("+") { token.removeFirst() }
         let low = s.lowercased()
 
         // Both '.' and ',' present -> whichever appears last is the decimal separator

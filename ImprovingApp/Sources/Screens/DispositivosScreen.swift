@@ -939,19 +939,19 @@ private struct ShortcutsAutomationGuideSheet: View {
                     step: "1",
                     title: "Un único atajo limpio: «Sync Improving»",
                     lines: [
-                        "Elimina cualquier atajo anterior e importa únicamente el nuevo «Sync Improving».",
-                        "Envía los 13 bloques clave de Apple Salud directamente por URL codificada sin usar el portapapeles, así no vuelve a salir el aviso «Permitir pegar desde Atajos».",
+                        "Elimina cualquier atajo anterior e importa el nuevo «Sync Improving».",
+                        "Envía los 14 bloques clave de Apple Salud (incluyendo Temperatura de la muñeca nocturna) por URL codificada sin usar el portapapeles, evitando el aviso «Permitir pegar desde Atajos».",
                         "Si habías creado alguna Automatización «Al abrir Improving» en Atajos, bórrala para evitar que iOS reabra la app al cerrarla."
                     ]
                 )
 
                 guideCard(
                     step: "2",
-                    title: "Sincronización fluida bajo tu control",
+                    title: "Sincronización fluida y permisos de Salud",
                     lines: [
                         "Para actualizar al momento, pulsa «Ejecutar Atajo» aquí o toca «Sync Improving» desde tu pantalla de inicio.",
-                        "También puedes deslizar hacia abajo a fondo en Hoy cuando quieras refrescar sin vibraciones ni recargas molestas.",
-                        "En Ajustes → Privacidad y seguridad → Salud → Atajos, asegúrate de tener todo activado."
+                        "En Ajustes → Privacidad y seguridad → Salud → Atajos, activa todos los permisos (en especial Temperatura de la muñeca, VFC, Sueño y Oxígeno en sangre).",
+                        "Recuerda que Apple Watch Series 8/9/10/Ultra registra la temperatura de la muñeca al dormir con el Enfoque Descanso activo (necesita 5 noches para crear tu línea base)."
                     ]
                 )
 

@@ -123,39 +123,40 @@ def dict_text_item(key: str, output_uuid: str, output_name: str) -> dict:
 
 def build_all_health_actions(variant: str = "final"):
     """
-    13 fast, 100% classic Apple Shortcuts HealthKit queries (~2s runtime, compact JSON):
-      - Proven 8 Vitals/Sleep/Activity metrics (exact labels that already ran cleanly on iPhone!)
+    14 fast, 100% classic Apple Shortcuts HealthKit queries (~2s runtime, compact JSON):
+      - Proven 9 Vitals/Sleep/Activity metrics (including Apple Watch Wrist Temperature using End Date = wake-up day!)
       - Full Fitness & Body metrics (VO2 Max, Walk/Run Distance, Cycling Distance, Flights/Elevation, Weight)
       - Auto-detected HR workouts & 1-min post-effort HRR computed directly from real Heart Rate samples!
     """
-    # (key_prefix, exact ActionKit English picker label, days_back, include_end_date, group_by)
+    # (key_prefix, exact ActionKit English picker label, days_back, include_end_date, group_by, date_prop)
     metrics = [
-        ("hr", "Heart Rate", 2, False, None),
-        ("hrv", "Heart Rate Variability", 14, False, None),
-        ("rhr", "Resting Heart Rate", 14, False, None),
-        ("sleep", "Sleep", 5, True, None),
-        ("resp", "Respiratory Rate", 14, False, None),
-        ("spo2", "Blood Oxygen", 14, False, None),
-        ("steps", "Steps", 30, False, "Day"),
-        ("kcal", "Active Calories", 30, False, "Day"),
-        ("vo2", "VO2 Max", 90, False, None),
-        ("distance", "Walking + Running Distance", 30, False, "Day"),
-        ("cycling_distance", "Cycling Distance", 30, False, "Day"),
-        ("flights", "Flights Climbed", 30, False, "Day"),
-        ("weight", "Weight", 30, False, None),
+        ("hr", "Heart Rate", 2, False, None, "Start Date"),
+        ("hrv", "Heart Rate Variability", 14, False, None, "Start Date"),
+        ("rhr", "Resting Heart Rate", 14, False, None, "Start Date"),
+        ("sleep", "Sleep", 5, True, None, "Start Date"),
+        ("resp", "Respiratory Rate", 14, False, None, "Start Date"),
+        ("spo2", "Blood Oxygen", 14, False, None, "Start Date"),
+        ("temp", "Wrist Temperature", 30, False, None, "End Date"),
+        ("steps", "Steps", 30, False, "Day", "Start Date"),
+        ("kcal", "Active Calories", 30, False, "Day", "Start Date"),
+        ("vo2", "VO2 Max", 90, False, None, "Start Date"),
+        ("distance", "Walking + Running Distance", 30, False, "Day", "Start Date"),
+        ("cycling_distance", "Cycling Distance", 30, False, "Day", "Start Date"),
+        ("flights", "Flights Climbed", 30, False, "Day", "Start Date"),
+        ("weight", "Weight", 30, False, None, "Start Date"),
     ]
 
     actions = []
     dict_items = []
 
-    for prefix, label, days, include_end, group_by in metrics:
+    for prefix, label, days, include_end, group_by, date_prop in metrics:
         find_id = make_uuid(f"{variant}.{prefix}.find")
         val_id = make_uuid(f"{variant}.{prefix}.val")
         start_id = make_uuid(f"{variant}.{prefix}.start")
 
         actions.append(find_health_samples_action(find_id, label, days, group_by=group_by))
         actions.append(get_health_detail_action(val_id, find_id, "Value"))
-        actions.append(get_health_detail_action(start_id, find_id, "Start Date"))
+        actions.append(get_health_detail_action(start_id, find_id, date_prop))
 
         dict_items.append(dict_text_item(f"{prefix}_values", val_id, "Value"))
         if include_end:
@@ -164,7 +165,8 @@ def build_all_health_actions(variant: str = "final"):
             dict_items.append(dict_text_item(f"{prefix}_starts", start_id, "Start Date"))
             dict_items.append(dict_text_item(f"{prefix}_ends", end_id, "End Date"))
         else:
-            dict_items.append(dict_text_item(f"{prefix}_dates", start_id, "Start Date"))
+            key_name = f"{prefix}_ends" if date_prop == "End Date" else f"{prefix}_dates"
+            dict_items.append(dict_text_item(key_name, start_id, date_prop))
 
     dict_id = make_uuid(f"{variant}.dictionary")
     actions.append(
@@ -269,6 +271,14 @@ def main():
     xml_path = out_dir / "Sync-Improving.xml"
     with open(xml_path, "wb") as f:
         plistlib.dump(wf, f, fmt=plistlib.FMT_XML, sort_keys=True)
+
+    # Also write binary `.shortcut` files directly so local & mirrored unsigned shortcuts stay 100% in sync!
+    signed_dir = base_dir / "signed"
+    signed_dir.mkdir(parents=True, exist_ok=True)
+    for bin_path in (signed_dir / "Sync-Improving-unsigned.shortcut", base_dir.parent / "Sync-Improving-unsigned.shortcut"):
+        with open(bin_path, "wb") as f:
+            plistlib.dump(wf, f, fmt=plistlib.FMT_BINARY, sort_keys=True)
+
     print(f"Generated: {xml_path} ({xml_path.stat().st_size} bytes, {len(wf['WFWorkflowActions'])} actions)")
 
 

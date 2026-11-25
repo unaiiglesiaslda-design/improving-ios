@@ -55,6 +55,12 @@ struct PersonalizedPhysiologyNorms: Equatable {
     let caffeineLimitMg: Double
 }
 
+struct LabBiomarkerAgeImpact: Identifiable, Equatable {
+    let id: String
+    let biomarker: LabBiomarkerItem
+    let deltaYears: Double // negative = resta edad biológica, positive = suma edad biológica
+}
+
 struct BiologicalAgeEvaluation: Equatable {
     let chronoAgeYears: Double
     let bioAgeYears: Double
@@ -62,8 +68,19 @@ struct BiologicalAgeEvaluation: Equatable {
     let sleepDelta: Double
     let activityDelta: Double
     let fitnessDelta: Double
+    let vo2Delta: Double
+    let rhrDelta: Double
     let autonomicDelta: Double
     let bodyDelta: Double
+    let bloodLabsDelta: Double
+    let labImpacts: [LabBiomarkerAgeImpact]
+    let hasSleep: Bool
+    let hasActivity: Bool
+    let hasVo2: Bool
+    let hasRhr: Bool
+    let hasHrv: Bool
+    let hasBody: Bool
+    let hasBloodLabs: Bool
 }
 
 struct PersonalBaselineStats: Equatable {
@@ -312,8 +329,137 @@ enum WhoopPhysiologyEngine {
         )
     }
 
+    /// Evaluates clinical blood test biomarkers (PhenoAge / cardiometabolic longevity weighting)
+    /// into individual and aggregate biological-age adjustments (negative = younger, positive = older).
+    static func computeBloodLabsAgeImpact(
+        biomarkers: [LabBiomarkerItem]
+    ) -> (totalDelta: Double, impacts: [LabBiomarkerAgeImpact]) {
+        guard !biomarkers.isEmpty else { return (0.0, []) }
+
+        var rawEntries: [(item: LabBiomarkerItem, rawDelta: Double)] = []
+        rawEntries.reserveCapacity(biomarkers.count)
+
+        for item in biomarkers {
+            let key = item.name
+                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let cat = item.category
+                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+
+            // 1. Clinical longevity weighting (PhenoAge + cardiometabolic core = 1.0, endocrine/vitamins = 0.70, other = 0.45)
+            let isHdl = key.contains("hdl")
+            let isVitD = key.contains("vitamina d") || key.contains("25-oh") || key.contains("vitamin d")
+            let isLowerIsBetter = key.contains("pcr") || key.contains("crp") || key.contains("hba1c") ||
+                key.contains("glicosilada") || key.contains("ldl") || key.contains("apob") ||
+                key.contains("lp(a)") || key.contains("triglicer") || key.contains("insulina") ||
+                key.contains("homa") || key.contains("homociste") || key.contains("acido urico") ||
+                key.contains("ggt") || key.contains("alt") || key.contains("gpt") || key.contains("ast") || key.contains("got")
+
+            let isHighImpact = isLowerIsBetter || isHdl || key.contains("glucosa") || key.contains("glucose") ||
+                key.contains("colesterol") || key.contains("albumina") || key.contains("creatinina") ||
+                key.contains("egfr") || key.contains("filtrado") || key.contains("rdw") || key.contains("ade") ||
+                key.contains("vcm") || key.contains("leucocit") || key.contains("linfocit") ||
+                key.contains("fosfatasa alcalina") || cat.contains("metabol") || cat.contains("lipid") || cat.contains("inflam")
+
+            let isModerateImpact = isVitD || key.contains("ferritin") || key.contains("b12") ||
+                key.contains("folic") || key.contains("folato") || key.contains("hierro") ||
+                key.contains("magnesio") || key.contains("zinc") || key.contains("omega") ||
+                key.contains("tsh") || key.contains("t4") || key.contains("t3") ||
+                key.contains("testosteron") || key.contains("cortisol") || key.contains("dhea") ||
+                key.contains("hemoglobina") || key.contains("hematocrito") || key.contains("plaquet") ||
+                cat.contains("hormon") || cat.contains("vitamin") || cat.contains("hematol")
+
+            let weight: Double = isHighImpact ? 1.0 : (isModerateImpact ? 0.70 : 0.45)
+
+            // Severity multiplier (1.0 .. 1.75) when outside laboratory reference bounds
+            func outOfRangeSeverity(isHigh: Bool) -> Double {
+                guard let lo = item.refMin, let hi = item.refMax, hi > lo else { return 1.15 }
+                let span = max(hi - lo, 0.001)
+                let overshoot = isHigh ? max(item.value - hi, 0.0) : max(lo - item.value, 0.0)
+                let frac = overshoot / span
+                return min(max(1.0 + frac * 1.1, 1.0), 1.75)
+            }
+
+            let rawDelta: Double
+            switch item.status {
+            case .optimal:
+                if let oLo = item.optimalMin, let oHi = item.optimalMax, oHi > oLo,
+                   item.value >= oLo, item.value <= oHi {
+                    rawDelta = -0.38 * weight
+                } else {
+                    rawDelta = -0.32 * weight
+                }
+
+            case .normal:
+                if let oLo = item.optimalMin, let oHi = item.optimalMax, oHi > oLo,
+                   item.value >= oLo, item.value <= oHi {
+                    rawDelta = -0.24 * weight
+                } else if let rLo = item.refMin, let rHi = item.refMax, rHi > rLo {
+                    let frac = (item.value - rLo) / (rHi - rLo)
+                    if isHdl {
+                        rawDelta = frac >= 0.55 ? -0.18 * weight : 0.04 * weight
+                    } else if isLowerIsBetter {
+                        rawDelta = frac <= 0.45 ? -0.16 * weight : (frac >= 0.85 ? 0.08 * weight : -0.02 * weight)
+                    } else {
+                        rawDelta = (frac >= 0.20 && frac <= 0.80) ? -0.08 * weight : 0.04 * weight
+                    }
+                } else {
+                    rawDelta = -0.06 * weight
+                }
+
+            case .high:
+                if isHdl {
+                    // High HDL is cardioprotective -> subtracts biological age!
+                    rawDelta = -0.32 * weight
+                } else if isVitD && item.value <= 100.0 {
+                    rawDelta = -0.12 * weight
+                } else {
+                    let sev = outOfRangeSeverity(isHigh: true)
+                    let highBase = isLowerIsBetter ? 0.56 : 0.46
+                    rawDelta = highBase * weight * sev
+                }
+
+            case .low:
+                if isLowerIsBetter && !key.contains("glucosa") && !key.contains("glucose") {
+                    // Low LDL/ApoB/PCR/Triglycerides is protective rather than aging
+                    rawDelta = -0.18 * weight
+                } else {
+                    let sev = outOfRangeSeverity(isHigh: false)
+                    let lowBase = isHdl ? 0.56 : 0.46
+                    rawDelta = lowBase * weight * sev
+                }
+            }
+
+            rawEntries.append((item, rawDelta))
+        }
+
+        let rawSum = rawEntries.reduce(0.0) { $0 + $1.rawDelta }
+        let capNeg = -3.5
+        let capPos = 4.5
+        let scale: Double = {
+            if rawSum < capNeg { return abs(capNeg / rawSum) }
+            if rawSum > capPos { return capPos / rawSum }
+            return 1.0
+        }()
+
+        let impacts = rawEntries
+            .map { entry -> LabBiomarkerAgeImpact in
+                let scaled = AppleHealthExportImporter.round1(entry.rawDelta * scale)
+                return LabBiomarkerAgeImpact(
+                    id: entry.item.id,
+                    biomarker: entry.item,
+                    deltaYears: scaled
+                )
+            }
+            .sorted { abs($0.deltaYears) > abs($1.deltaYears) }
+
+        let totalDelta = AppleHealthExportImporter.round1(min(max(rawSum, capNeg), capPos))
+        return (totalDelta, impacts)
+    }
+
     /// Computes Biological Age calibrated strictly against the user's OWN age, sex, height, and weight norms
-    /// (so a 62-year-old is evaluated against 62-year-old clinical norms, NOT 24-year-old norms!).
+    /// (so a 62-year-old is evaluated against 62-year-old clinical norms, NOT 24-year-old norms!),
+    /// incorporating real blood-test biomarkers when uploaded in Biología.
     static func computeBiologicalAge(
         profile: UserPhysiologyProfile,
         meanRhr: Double?,
@@ -321,7 +467,9 @@ enum WhoopPhysiologyEngine {
         meanSleepHours: Double?,
         meanSteps: Int?,
         vo2Max: Double?,
-        latestWeightKg: Double? = nil
+        latestWeightKg: Double? = nil,
+        latestBodyFatPct: Double? = nil,
+        labBiomarkers: [LabBiomarkerItem] = []
     ) -> BiologicalAgeEvaluation {
         let norms = computePersonalizedNorms(profile: profile)
         let chrono = profile.effectiveAgeYears
@@ -341,13 +489,15 @@ enum WhoopPhysiologyEngine {
             activityDelta = min(max((1.0 - ratio) * 1.8, -1.6), 2.0)
         }
 
-        var fitnessDelta = 0.0
+        var vo2Delta = 0.0
         if let v = vo2Max {
-            fitnessDelta += min(max((norms.vo2GoodThreshold - v) * 0.18, -2.5), 2.8)
+            vo2Delta = min(max((norms.vo2GoodThreshold - v) * 0.18, -2.5), 2.8)
         }
+        var rhrDelta = 0.0
         if let r = meanRhr {
-            fitnessDelta += min(max((r - norms.restingHrExpected) * 0.14, -1.8), 2.2)
+            rhrDelta = min(max((r - norms.restingHrExpected) * 0.14, -1.8), 2.2)
         }
+        let fitnessDelta = vo2Delta + rhrDelta
 
         var autonomicDelta = 0.0
         if let h = meanHrv, h > 2.0 {
@@ -355,29 +505,64 @@ enum WhoopPhysiologyEngine {
             autonomicDelta = min(max(lnDiff * 2.2, -1.8), 2.2)
         }
 
+        let hasBody = latestWeightKg != nil || latestBodyFatPct != nil || profile.profileSetupVersion >= 2
         var bodyDelta = 0.0
-        let w = latestWeightKg ?? profile.weightKg
-        let hm = max(profile.heightCm / 100.0, 1.2)
-        let curBmi = w / (hm * hm)
-        if curBmi > norms.bmiOptimalHigh {
-            bodyDelta = min((curBmi - norms.bmiOptimalHigh) * 0.25, 2.2)
-        } else if curBmi < norms.bmiOptimalLow {
-            bodyDelta = min((norms.bmiOptimalLow - curBmi) * 0.22, 1.4)
+        if let bf = latestBodyFatPct {
+            if bf > norms.optimalBodyFatHighPct {
+                bodyDelta = min((bf - norms.optimalBodyFatHighPct) * 0.18, 2.2)
+            } else if bf < norms.optimalBodyFatLowPct {
+                bodyDelta = min((norms.optimalBodyFatLowPct - bf) * 0.16, 1.2)
+            } else {
+                bodyDelta = -0.4
+            }
+        } else {
+            let w = latestWeightKg ?? profile.weightKg
+            let hm = max(profile.heightCm / 100.0, 1.2)
+            let curBmi = w / (hm * hm)
+            if curBmi > norms.bmiOptimalHigh {
+                bodyDelta = min((curBmi - norms.bmiOptimalHigh) * 0.25, 2.2)
+            } else if curBmi < norms.bmiOptimalLow {
+                bodyDelta = min((norms.bmiOptimalLow - curBmi) * 0.22, 1.4)
+            } else if latestWeightKg != nil {
+                bodyDelta = -0.3
+            }
         }
 
-        let rawTotal = sleepDelta + activityDelta + fitnessDelta + autonomicDelta + bodyDelta
-        let clampedDelta = AppleHealthExportImporter.round1(min(max(rawTotal, -7.5), 7.5))
+        let labsEval = computeBloodLabsAgeImpact(biomarkers: labBiomarkers)
+        let bloodLabsDelta = labsEval.totalDelta
+
+        let rSleep = AppleHealthExportImporter.round1(sleepDelta)
+        let rActivity = AppleHealthExportImporter.round1(activityDelta)
+        let rVo2 = AppleHealthExportImporter.round1(vo2Delta)
+        let rRhr = AppleHealthExportImporter.round1(rhrDelta)
+        let rFitness = AppleHealthExportImporter.round1(rVo2 + rRhr)
+        let rAutonomic = AppleHealthExportImporter.round1(autonomicDelta)
+        let rBody = AppleHealthExportImporter.round1(bodyDelta)
+
+        let rawTotal = rSleep + rActivity + rFitness + rAutonomic + rBody + bloodLabsDelta
+        let clampedDelta = AppleHealthExportImporter.round1(min(max(rawTotal, -9.5), 9.5))
         let bioAge = AppleHealthExportImporter.round1(max(14.0, chrono + clampedDelta))
 
         return BiologicalAgeEvaluation(
             chronoAgeYears: AppleHealthExportImporter.round1(chrono),
             bioAgeYears: bioAge,
             deltaYears: clampedDelta,
-            sleepDelta: AppleHealthExportImporter.round1(sleepDelta),
-            activityDelta: AppleHealthExportImporter.round1(activityDelta),
-            fitnessDelta: AppleHealthExportImporter.round1(fitnessDelta),
-            autonomicDelta: AppleHealthExportImporter.round1(autonomicDelta),
-            bodyDelta: AppleHealthExportImporter.round1(bodyDelta)
+            sleepDelta: rSleep,
+            activityDelta: rActivity,
+            fitnessDelta: rFitness,
+            vo2Delta: rVo2,
+            rhrDelta: rRhr,
+            autonomicDelta: rAutonomic,
+            bodyDelta: rBody,
+            bloodLabsDelta: bloodLabsDelta,
+            labImpacts: labsEval.impacts,
+            hasSleep: meanSleepHours != nil,
+            hasActivity: meanSteps != nil,
+            hasVo2: vo2Max != nil,
+            hasRhr: meanRhr != nil,
+            hasHrv: (meanHrv ?? 0) > 2.0,
+            hasBody: hasBody,
+            hasBloodLabs: !labBiomarkers.isEmpty
         )
     }
 
