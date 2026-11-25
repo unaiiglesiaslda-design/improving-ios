@@ -15,6 +15,7 @@ struct DispositivosScreen: View {
     @State private var shortcutNameDraft: String = "Sync Improving"
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
+    @State private var widgetSyncToast: String? = nil
     @State private var aiTestResult: (ok: Bool, text: String)? = nil
     @State private var testingAi: Bool = false
     @State private var profileSavedBanner: Bool = false
@@ -602,6 +603,82 @@ struct DispositivosScreen: View {
                             .font(ImprovingFont.caption(12.5))
                             .fontWeight(.semibold)
                             .foregroundColor(BevelColors.skyBlue)
+                        }
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
+
+                // Smart Local Notifications & Wake Alarm Hub Card
+                BevelCard {
+                    let widgetDiag = WidgetSnapshotStore.diagnosticStatus()
+                    VStack(alignment: .leading, spacing: 11) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "rectangle.grid.2x2.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(BevelColors.skyBlue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("WIDGETS EN PANTALLA DE INICIO Y BLOQUEO")
+                                    .font(ImprovingFont.microLabel(11))
+                                    .foregroundColor(BevelColors.skyBlue)
+                                Text("Se sincronizan automáticamente al abrir, actualizar o cerrar la app")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            Image(systemName: widgetDiag.sharedContainerAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .foregroundColor(widgetDiag.sharedContainerAvailable ? BevelColors.greenPrimary : BevelColors.amberStart)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(widgetDiag.sharedContainerAvailable
+                                    ? "Contenedor compartido activo (\(widgetDiag.resolvedGroup))"
+                                    : "App Group sin provisionar en la firma (\(widgetDiag.resolvedGroup))")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(widgetDiag.sharedContainerAvailable ? BevelColors.greenPrimary : BevelColors.amberStart)
+                                if !widgetDiag.sharedContainerAvailable {
+                                    Text("Si usas Sideloadly/AltStore/SideStore, asegúrate de firmar conservando App Groups para que el widget pueda leer los datos.")
+                                        .font(ImprovingFont.caption(10.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                } else if let updated = widgetDiag.lastUpdatedAt {
+                                    let fmt: DateFormatter = {
+                                        let f = DateFormatter()
+                                        f.dateFormat = "HH:mm:ss"
+                                        return f
+                                    }()
+                                    Text("Última publicación en vivo: \(fmt.string(from: updated))")
+                                        .font(ImprovingFont.caption(11))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+
+                        HStack(spacing: 10) {
+                            Button {
+                                store.publishWidgetSnapshot(triggerReload: true, forceReload: true)
+                                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                let fmt = DateFormatter()
+                                fmt.dateFormat = "HH:mm:ss"
+                                widgetSyncToast = "✓ Widgets actualizados (\(fmt.string(from: Date())))"
+                            } label: {
+                                Label("Actualizar Widgets ahora", systemImage: "arrow.triangle.2.circlepath")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 9)
+                                    .background(Capsule().fill(BevelColors.indigoEnd))
+                            }
+
+                            if let toast = widgetSyncToast {
+                                Text(toast)
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.greenPrimary)
+                            }
                         }
                     }
                     .padding(16)

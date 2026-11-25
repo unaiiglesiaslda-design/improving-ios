@@ -1568,4 +1568,71 @@ final class AppleHealthExportImporterTests: XCTestCase {
         reloaded.hasImportedOrPairedRealData = false
         reloaded.flushPersistenceNow()
     }
+
+    @MainActor
+    func testZeroStrainAlwaysComputesOptimalRangeAndShowsSinEsfuerzo() {
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        let iso = store.selectedDateIso
+        // Day with recovery & sleep but ZERO workouts/active kcal/strain!
+        store.realHistory[iso] = RealBiometricDaySummary(
+            dateIso: iso,
+            restingHrBpm: 50.0,
+            hrvMs: 74.0,
+            asleepMinutes: 460,
+            sleepPct: 86,
+            strain21: nil,
+            strainPct: nil,
+            recoveryPct: 80
+        )
+
+        XCTAssertFalse(store.dataAvailability.hasStrainData)
+        XCTAssertEqual(store.strainPercent, 0)
+        XCTAssertEqual(store.strainStatusText, "Sin esfuerzo")
+        XCTAssertNotEqual(store.effortTargetRangeText, "--")
+        XCTAssertTrue(store.effortTargetRangeText.contains("–"))
+        XCTAssertGreaterThan(store.optimalEffortRange.upperBound, store.optimalEffortRange.lowerBound)
+
+        // Even when recovery is ALSO missing today, optimal range MUST still be computed (never "--")!
+        store.realHistory[iso] = RealBiometricDaySummary(dateIso: iso)
+        XCTAssertEqual(store.strainStatusText, "Sin esfuerzo")
+        XCTAssertNotEqual(store.effortTargetRangeText, "--")
+
+        // Share card for 0% strain renders "0%" and optimal zone instead of "--%"
+        let shareCard = ShareCardPayload.build(for: .strain, store: store)
+        XCTAssertEqual(shareCard.centerValue, "0%")
+        XCTAssertTrue(shareCard.centerCaption.contains("Sin esfuerzo"))
+
+        store.realHistory = [:]
+        store.hasImportedOrPairedRealData = false
+        store.flushPersistenceNow()
+    }
+
+    func testMobileProvisionAppGroupExtractionPrioritizesSignedEntitlements() throws {
+        let fakeProvision = """
+        binary-cms-header-bytes-here
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Entitlements</key>
+            <dict>
+                <key>com.apple.security.application-groups</key>
+                <array>
+                    <string>group.com.improving.health.ios.TEAM99XYZ</string>
+                </array>
+            </dict>
+        </dict>
+        </plist>
+        trailing-cms-signature-bytes
+        """
+        let extracted = WidgetSnapshotStore.extractAppGroupsFromMobileProvision(data: try XCTUnwrap(fakeProvision.data(using: .isoLatin1)))
+        XCTAssertEqual(extracted, ["group.com.improving.health.ios.TEAM99XYZ"])
+
+        let candidates = WidgetSnapshotStore.candidateSuiteNames(
+            infoDictionary: ["AppGroupIdentifier": "group.com.improving.health.ios"],
+            provisionedOverride: extracted
+        )
+        XCTAssertEqual(candidates.first, "group.com.improving.health.ios.TEAM99XYZ")
+    }
 }

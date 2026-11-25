@@ -72,7 +72,7 @@ struct ShareCardPayload {
         case .dailyOverview:
             let recTxt = avail.hasRecoveryData ? "\(store.recoveryPercent)%" : "--"
             let slpTxt = avail.hasSleepData ? "\(store.sleepPercent)%" : "--"
-            let strTxt = avail.hasStrainData ? "\(store.strainPercent)%" : "--"
+            let strTxt = "\(avail.hasStrainData ? store.strainPercent : 0)%"
             let engTxt = avail.hasEnergyData ? "\(store.energyPercent)%" : "--"
             let heroPct = avail.hasRecoveryData ? store.recoveryPercent : (avail.hasSleepData ? store.sleepPercent : store.energyPercent)
             let heroCaption = avail.hasRecoveryData ? "Recuperación \(store.recoveryStatusText)" : "Resumen diario"
@@ -197,15 +197,18 @@ struct ShareCardPayload {
 
         case .strain:
             let totalMin = store.workoutsToday.reduce(0) { $0 + $1.durationMin }
-            let kcalTxt = store.currentDaySummary?.activeKcal.map { "\($0) kcal" } ?? "--"
+            let kcalTxt = store.currentDaySummary?.activeKcal.map { "\($0) kcal" } ?? "0 kcal"
             let stepsTxt = store.stepsCount.map { "\($0)" } ?? "--"
+            let effectiveStrainPct = avail.hasStrainData ? store.strainPercent : 0
             return ShareCardPayload(
                 pillarBadge: "ESFUERZO",
                 title: "Carga Diaria",
                 subtitle: dateLine,
-                progress: avail.hasStrainData ? Double(store.strainPercent) / 100.0 : 0.0,
-                centerValue: avail.hasStrainData ? "\(store.strainPercent)%" : "--",
-                centerCaption: avail.hasStrainData ? String(format: "Strain %.1f / 21", locale: Locale(identifier: "es_ES"), store.strain21) : "Sin datos",
+                progress: effectiveStrainPct > 0 ? Double(effectiveStrainPct) / 100.0 : 0.02,
+                centerValue: "\(effectiveStrainPct)%",
+                centerCaption: effectiveStrainPct > 0
+                    ? String(format: "Strain %.1f / 21", locale: Locale(identifier: "es_ES"), store.strain21)
+                    : "Sin esfuerzo · Obj. \(store.effortTargetRangeText)",
                 ringColors: [Color(hex: 0xFBBF24), Color(hex: 0xF97316)],
                 backgroundColors: [Color(hex: 0x3D2516), Color(hex: 0x221814), Color(hex: 0x101217)],
                 metrics: [

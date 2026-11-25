@@ -105,11 +105,20 @@ struct BevelRecessedRingGauge: View {
     var centerSubtitle: String? = nil
     var targetRange: ClosedRange<Double>? = nil
     var hasData: Bool = true
+    /// When true (used for Esfuerzo), 0% / no-activity still renders the ring with `0%`,
+    /// a tiny starting progress nub at 12 o'clock, and the hatched optimal target zone.
+    var showZeroBaselineArc: Bool = false
+
+    private var effectiveHasVisualValue: Bool {
+        hasData || showZeroBaselineArc
+    }
 
     private var targetProgress: Double {
-        guard hasData else { return 0 }
         let clamped = min(max(progress, 0), 1)
-        return clamped > 0 ? max(clamped, 0.02) : 0
+        if hasData && clamped > 0 {
+            return max(clamped, 0.02)
+        }
+        return showZeroBaselineArc ? 0.018 : 0
     }
 
     private var overreachFraction: Double {
@@ -158,7 +167,7 @@ struct BevelRecessedRingGauge: View {
                     context.fill(innerDish, with: .color(BevelColors.isDarkMode ? Color(hex: 0x2C2F38, alpha: 0.85) : Color.white))
                     context.stroke(innerDish, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.08 : 0.4)), lineWidth: 0.9)
 
-                    if hasData, let tr = targetRange {
+                    if effectiveHasVisualValue, let tr = targetRange {
                         let startDeg = -90.0 + tr.lowerBound * 360.0
                         let endDeg = -90.0 + tr.upperBound * 360.0
                         var bandPath = Path()
@@ -199,7 +208,7 @@ struct BevelRecessedRingGauge: View {
                 }
 
                 // Always-visible white boundary ticks for optimal effort range
-                if hasData, let tr = targetRange {
+                if effectiveHasVisualValue, let tr = targetRange {
                     Canvas { context, canvasSize in
                         let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
                         let radius = ringDiameter / 2
@@ -226,12 +235,12 @@ struct BevelRecessedRingGauge: View {
                 }
 
                 VStack(spacing: 1) {
-                    Text(hasData ? centerText : "--%")
+                    Text(effectiveHasVisualValue ? centerText : "--%")
                         .font(ImprovingFont.metricHero(size >= 140 ? 38 : (size >= 100 ? 26 : 19)))
-                        .foregroundColor(hasData ? BevelColors.textPrimary : BevelColors.textMuted)
+                        .foregroundColor(effectiveHasVisualValue ? BevelColors.textPrimary : BevelColors.textMuted)
                         .monospacedDigit()
                     if let cSub = centerSubtitle {
-                        Text(hasData ? cSub : "Sin datos")
+                        Text(effectiveHasVisualValue ? cSub : "Sin datos")
                             .font(ImprovingFont.caption(size >= 140 ? 13.5 : 10.5))
                             .foregroundColor(BevelColors.textSecondary)
                     }

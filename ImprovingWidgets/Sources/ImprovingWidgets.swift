@@ -6,24 +6,29 @@ import SwiftUI
 struct ImprovingWidgetEntry: TimelineEntry {
     let date: Date
     let snapshot: ImprovingWidgetSnapshot
+    let hasLiveSnapshot: Bool
 }
 
 struct ImprovingWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> ImprovingWidgetEntry {
-        ImprovingWidgetEntry(date: Date(), snapshot: .placeholder)
+        ImprovingWidgetEntry(date: Date(), snapshot: .placeholder, hasLiveSnapshot: true)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (ImprovingWidgetEntry) -> Void) {
-        let snap = WidgetSnapshotStore.load() ?? .placeholder
-        completion(ImprovingWidgetEntry(date: Date(), snapshot: snap))
+        if let loaded = WidgetSnapshotStore.load() {
+            completion(ImprovingWidgetEntry(date: Date(), snapshot: loaded, hasLiveSnapshot: true))
+        } else {
+            completion(ImprovingWidgetEntry(date: Date(), snapshot: .placeholder, hasLiveSnapshot: !context.isPreview))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ImprovingWidgetEntry>) -> Void) {
         let now = Date()
-        let snap = WidgetSnapshotStore.load() ?? ImprovingWidgetSnapshot(
+        let loaded = WidgetSnapshotStore.load()
+        let snap = loaded ?? ImprovingWidgetSnapshot(
             dateIso: "",
             dateLabel: "Hoy",
-            strainPct: nil,
+            strainPct: 0,
             recoveryPct: nil,
             sleepPct: nil,
             energyPct: nil,
@@ -38,10 +43,12 @@ struct ImprovingWidgetProvider: TimelineProvider {
             carbsG: 0,
             fatG: 0,
             stepsCount: nil,
+            optimalStrainLowPct: 42,
+            optimalStrainHighPct: 64,
             updatedAt: now
         )
-        let entry = ImprovingWidgetEntry(date: now, snapshot: snap)
-        let nextRefresh = Calendar.current.date(byAdding: .minute, value: 20, to: now) ?? now.addingTimeInterval(1200)
+        let entry = ImprovingWidgetEntry(date: now, snapshot: snap, hasLiveSnapshot: loaded != nil)
+        let nextRefresh = Calendar.current.date(byAdding: .minute, value: 15, to: now) ?? now.addingTimeInterval(900)
         completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
     }
 }
@@ -68,14 +75,33 @@ private struct StaticWidgetRing: View {
     let color: Color
     let diameter: CGFloat
     let lineWidth: CGFloat
+    var showZeroNub: Bool = false
+    var optimalRange: ClosedRange<Double>? = nil
 
     var body: some View {
-        let progress = value.map { min(max(Double($0) / 100.0, 0.03), 1.0) } ?? 0.0
+        let effectiveVal: Int? = value ?? (showZeroNub ? 0 : nil)
+        let progress: Double = {
+            if let v = effectiveVal {
+                if v <= 0 { return showZeroNub ? 0.028 : 0.0 }
+                return min(max(Double(v) / 100.0, 0.03), 1.0)
+            }
+            return 0.0
+        }()
+
         VStack(spacing: 3) {
             ZStack {
                 Circle()
                     .stroke(Color.white.opacity(0.11), lineWidth: lineWidth)
                     .frame(width: diameter, height: diameter)
+
+                if let range = optimalRange, range.upperBound > range.lowerBound {
+                    Circle()
+                        .trim(from: CGFloat(range.lowerBound), to: CGFloat(range.upperBound))
+                        .stroke(Color.white.opacity(0.24), style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: diameter, height: diameter)
+                }
+
                 if progress > 0 {
                     Circle()
                         .trim(from: 0, to: CGFloat(progress))
@@ -83,10 +109,11 @@ private struct StaticWidgetRing: View {
                         .rotationEffect(.degrees(-90))
                         .frame(width: diameter, height: diameter)
                 }
-                Text(value.map { "\($0)" } ?? "--")
+
+                Text(effectiveVal.map { "\($0)" } ?? "--")
                     .font(.system(size: diameter * 0.28, weight: .bold, design: .rounded))
                     .monospacedDigit()
-                    .foregroundColor(.white)
+                    .foregroundColor(effectiveVal != nil ? .white : .white.opacity(0.45))
             }
             Text(label)
                 .font(.system(size: 9, weight: .semibold, design: .rounded))
@@ -103,19 +130,34 @@ struct ImprovingResumenWidgetView: View {
     @Environment(\.widgetRenderingMode) private var renderingMode
     let entry: ImprovingWidgetEntry
 
+    private var strainOptimalRange: ClosedRange<Double>? {
+        let s = entry.snapshot
+        guard let lo = s.optimalStrainLowPct, let hi = s.optimalStrainHighPct, hi > lo else { return nil }
+        return (Double(lo) / 100.0)...(Double(hi) / 100.0)
+    }
+
+    private var syncTimeLabel: String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: entry.snapshot.updatedAt)
+    }
+
     var body: some View {
-        switch family {
-        case .systemSmall:
-            smallHomeView
-        case .systemMedium:
-            mediumHomeView
-        case .accessoryCircular:
-            lockScreenCircular
-        case .accessoryRectangular:
-            lockScreenRectangular
-        default:
-            smallHomeView
+        Group {
+            switch family {
+            case .systemSmall:
+                smallHomeView
+            case .systemMedium:
+                mediumHomeView
+            case .accessoryCircular:
+                lockScreenCircular
+            case .accessoryRectangular:
+                lockScreenRectangular
+            default:
+                smallHomeView
+            }
         }
+        .widgetURL(URL(string: "improving://open"))
     }
 
     private var smallHomeView: some View {
@@ -128,14 +170,23 @@ struct ImprovingResumenWidgetView: View {
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                 Spacer()
-                Text(s.dateLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundColor(.white.opacity(0.6))
+                Text(entry.hasLiveSnapshot ? s.dateLabel : "Abrir app")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white.opacity(0.62))
+                    .lineLimit(1)
             }
 
             HStack(spacing: 6) {
-                StaticWidgetRing(value: s.strainPct, label: "Esf.", color: WidgetPalette.strain, diameter: 38, lineWidth: 4.5)
-                    .frame(maxWidth: .infinity)
+                StaticWidgetRing(
+                    value: s.strainPct,
+                    label: "Esf.",
+                    color: WidgetPalette.strain,
+                    diameter: 38,
+                    lineWidth: 4.5,
+                    showZeroNub: true,
+                    optimalRange: strainOptimalRange
+                )
+                .frame(maxWidth: .infinity)
                 StaticWidgetRing(value: s.recoveryPct, label: "Rec.", color: WidgetPalette.recovery, diameter: 38, lineWidth: 4.5)
                     .frame(maxWidth: .infinity)
                 StaticWidgetRing(value: s.sleepPct, label: "Sueño", color: WidgetPalette.sleep, diameter: 38, lineWidth: 4.5)
@@ -185,14 +236,23 @@ struct ImprovingResumenWidgetView: View {
         return HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 5) {
-                    Circle().fill(WidgetPalette.recovery).frame(width: 7, height: 7)
-                    Text("Improving · \(s.dateLabel)")
-                        .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                    Circle().fill(entry.hasLiveSnapshot ? WidgetPalette.recovery : WidgetPalette.strain).frame(width: 7, height: 7)
+                    Text(entry.hasLiveSnapshot ? "Improving · \(s.dateLabel) · \(syncTimeLabel)" : "Abre Improving para sincronizar")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
+                        .lineLimit(1)
                 }
 
                 HStack(spacing: 8) {
-                    StaticWidgetRing(value: s.strainPct, label: "Esfuerzo", color: WidgetPalette.strain, diameter: 48, lineWidth: 5.5)
+                    StaticWidgetRing(
+                        value: s.strainPct,
+                        label: "Esfuerzo",
+                        color: WidgetPalette.strain,
+                        diameter: 48,
+                        lineWidth: 5.5,
+                        showZeroNub: true,
+                        optimalRange: strainOptimalRange
+                    )
                     StaticWidgetRing(value: s.recoveryPct, label: "Recup.", color: WidgetPalette.recovery, diameter: 48, lineWidth: 5.5)
                     StaticWidgetRing(value: s.sleepPct, label: "Sueño", color: WidgetPalette.sleep, diameter: 48, lineWidth: 5.5)
                 }
@@ -282,6 +342,7 @@ struct ImprovingResumenWidgetView: View {
 
     private var lockScreenRectangular: some View {
         let s = entry.snapshot
+        let strainDisplay = "\(s.strainPct ?? 0)%"
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Image(systemName: "waveform.path.ecg")
@@ -298,7 +359,7 @@ struct ImprovingResumenWidgetView: View {
             HStack(spacing: 10) {
                 Text("Rec \(s.recoveryPct.map { "\($0)%" } ?? "--")")
                 Text("Sue \(s.sleepPct.map { "\($0)%" } ?? "--")")
-                Text("Esf \(s.strainPct.map { "\($0)%" } ?? "--")")
+                Text("Esf \(strainDisplay)")
             }
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .monospacedDigit()
@@ -364,12 +425,13 @@ struct ImprovingNutricionWidgetView: View {
             Spacer(minLength: 0)
 
             let rem = max(s.caloriesGoal - s.caloriesToday, 0)
-            Text(s.caloriesToday == 0 ? "Sin comidas hoy" : "Faltan \(rem) kcal")
+            Text(!entry.hasLiveSnapshot ? "Abre Improving" : (s.caloriesToday == 0 ? "Sin comidas hoy" : "Faltan \(rem) kcal"))
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundColor(.white.opacity(0.68))
                 .lineLimit(1)
         }
         .padding(2)
+        .widgetURL(URL(string: "improving://open"))
         .containerBackground(for: .widget) {
             LinearGradient(colors: [Color(red: 0.14, green: 0.14, blue: 0.21), WidgetPalette.bgBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
         }

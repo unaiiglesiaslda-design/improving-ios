@@ -191,7 +191,7 @@ final class ImprovingStore: ObservableObject {
         _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
         scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
         refreshSmartNotificationSchedules(promptPermission: false)
-        publishWidgetSnapshot(triggerReload: false)
+        publishWidgetSnapshot(triggerReload: true, forceReload: true)
     }
 
     deinit {
@@ -813,12 +813,13 @@ final class ImprovingStore: ObservableObject {
     }
 
     var strainStatusText: String {
-        guard dataAvailability.hasStrainData else { return "Sin datos" }
+        guard dataAvailability.hasStrainData && strainPercent > 0 else { return "Sin esfuerzo" }
         let target = optimalEffortRange
         let frac = Double(strainPercent) / 100.0
         if frac > target.upperBound { return "Sobrecarga" }
         if strainPercent >= 75 { return "Alto" }
         if frac >= target.lowerBound { return "Óptimo" }
+        if strainPercent < 15 { return "Ligero" }
         return "Moderado"
     }
 
@@ -841,14 +842,20 @@ final class ImprovingStore: ObservableObject {
     }
 
     var optimalEffortRange: ClosedRange<Double> {
-        WhoopPhysiologyEngine.optimalTargetRange(
-            for: dataAvailability.hasRecoveryData ? recoveryPercent : 65,
+        let recBasis: Int = {
+            if dataAvailability.hasRecoveryData { return recoveryPercent }
+            if let recentRec = trailingCalendarSummaries(days: 7).compactMap({ $0.summary?.recoveryPct }).last {
+                return recentRec
+            }
+            return 65
+        }()
+        return WhoopPhysiologyEngine.optimalTargetRange(
+            for: recBasis,
             profile: userProfile
         )
     }
 
     var effortTargetRangeText: String {
-        guard dataAvailability.hasRecoveryData else { return "--" }
         let r = optimalEffortRange
         return "\(Int((r.lowerBound * 100).rounded()))%–\(Int((r.upperBound * 100).rounded()))%"
     }
@@ -2569,6 +2576,7 @@ final class ImprovingStore: ObservableObject {
         )
         self.dataRevision += 1
         self.persistState()
+        self.publishWidgetSnapshot(triggerReload: true, forceReload: true)
         self.refreshSmartNotificationSchedules(promptPermission: false)
     }
 
@@ -2868,8 +2876,12 @@ final class ImprovingStore: ObservableObject {
             return
         }
 
-        // 2. Custom URL Scheme: improving://sync[?from=shortcut_ok | ?source=clipboard | ?data=... | ?payload=...]
+        // 2. Custom URL Scheme: improving://open or improving://sync[?from=shortcut_ok | ?source=clipboard | ?data=... | ?payload=...]
         guard url.scheme?.lowercased() == "improving" else { return }
+        if url.host?.lowercased() == "open" {
+            publishWidgetSnapshot(triggerReload: true, forceReload: true)
+            return
+        }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let items = comps?.queryItems ?? []
         let fromParam = items.first(where: { $0.name.lowercased() == "from" })?.value?.lowercased()
@@ -4108,28 +4120,52 @@ final class ImprovingStore: ObservableObject {
 
     // MARK: - WidgetKit Shared Snapshot Bridge (N7)
 
-    func publishWidgetSnapshot(triggerReload: Bool = true) {
-        let todayIso = isoFormatter.string(from: Date())
-        let todayDay = activeHistory[todayIso] ?? currentDaySummary
+    func publishWidgetSnapshot(triggerReload: Bool = true, forceReload: Bool = false) {
+        let cal = Calendar.current
+        let todayStart = cal.startOfDay(for: Date())
+        let todayIso = isoFormatter.string(from: todayStart)
+        let yesterdayIso = cal.date(byAdding: .day, value: -1, to: todayStart).map { isoFormatter.string(from: $0) } ?? ""
+
+        let targetDay: RealBiometricDaySummary? = activeHistory[todayIso] ?? latestAvailableDay ?? currentDaySummary
+        let targetIso = targetDay?.dateIso ?? todayIso
+        let dateLbl: String = {
+            if targetIso == todayIso { return "Hoy" }
+            if targetIso == yesterdayIso { return "Ayer" }
+            if let dt = isoFormatter.date(from: targetIso) {
+                let fmt = DateFormatter()
+                fmt.locale = Locale(identifier: "es_ES")
+                fmt.dateFormat = "d MMM"
+                return fmt.string(from: dt).replacingOccurrences(of: ".", with: "")
+            }
+            return "Hoy"
+        }()
+
         let nutTotals = nutritionDayTotals(for: todayIso)
         let goals = effectiveNutritionGoals
         let sleepDur: String = {
-            if let m = todayDay?.asleepMinutes, m > 0 {
+            if let m = targetDay?.asleepMinutes, m > 0 {
                 return "\(m / 60)h \(String(format: "%02d", m % 60))m"
             }
             return "--"
         }()
 
+        let recForTarget: Int = targetDay?.recoveryPct
+            ?? trailingCalendarSummaries(days: 7).compactMap({ $0.summary?.recoveryPct }).last
+            ?? 65
+        let optRange = WhoopPhysiologyEngine.optimalTargetRange(for: recForTarget, profile: userProfile)
+        let optLo = Int((optRange.lowerBound * 100.0).rounded())
+        let optHi = Int((optRange.upperBound * 100.0).rounded())
+
         let snap = ImprovingWidgetSnapshot(
-            dateIso: todayIso,
-            dateLabel: "Hoy",
-            strainPct: todayDay?.strainPct,
-            recoveryPct: todayDay?.recoveryPct,
-            sleepPct: todayDay?.sleepPct,
-            energyPct: todayDay?.energyBankPercent,
-            stressScore: todayDay?.stressSamples5m.last.map { Int($0.value.rounded()) } ?? todayDay?.stressScore,
-            hrvMs: todayDay?.hrvMs,
-            restingHrBpm: todayDay?.restingHrBpm,
+            dateIso: targetIso,
+            dateLabel: dateLbl,
+            strainPct: targetDay?.strainPct ?? 0,
+            recoveryPct: targetDay?.recoveryPct,
+            sleepPct: targetDay?.sleepPct,
+            energyPct: targetDay?.energyBankPercent,
+            stressScore: targetDay?.stressSamples5m.last.map { Int($0.value.rounded()) } ?? targetDay?.stressScore,
+            hrvMs: targetDay?.hrvMs,
+            restingHrBpm: targetDay?.restingHrBpm,
             sleepDurationText: sleepDur,
             nutritionScore: nutTotals.score,
             caloriesToday: nutTotals.kcal,
@@ -4137,10 +4173,12 @@ final class ImprovingStore: ObservableObject {
             proteinG: Int(nutTotals.proteinG.rounded()),
             carbsG: Int(nutTotals.carbsG.rounded()),
             fatG: Int(nutTotals.fatG.rounded()),
-            stepsCount: todayDay?.stepsCount,
+            stepsCount: targetDay?.stepsCount,
+            optimalStrainLowPct: optLo,
+            optimalStrainHighPct: optHi,
             updatedAt: Date()
         )
-        WidgetSnapshotStore.save(snap, triggerReload: triggerReload)
+        WidgetSnapshotStore.save(snap, triggerReload: triggerReload, forceReload: forceReload)
     }
 
     func updateGeminiConfig(apiKey: String, model: String) {

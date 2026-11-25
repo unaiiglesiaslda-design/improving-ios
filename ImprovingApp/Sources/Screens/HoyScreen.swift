@@ -311,14 +311,15 @@ struct HoyScreen: View {
                     HStack(alignment: .top, spacing: 0) {
                         Button { onNavigate(.esfuerzo) } label: {
                             BevelRecessedRingGauge(
-                                progress: Double(store.strainPercent) / 100.0,
-                                centerText: "\(store.strainPercent)%",
+                                progress: avail.hasStrainData ? Double(store.strainPercent) / 100.0 : 0.0,
+                                centerText: "\(avail.hasStrainData ? store.strainPercent : 0)%",
                                 label: "Esfuerzo",
                                 kind: .strain,
                                 size: 92,
                                 strokeWidth: 9.5,
-                                targetRange: avail.hasRecoveryData ? store.optimalEffortRange : nil,
-                                hasData: avail.hasStrainData
+                                targetRange: store.optimalEffortRange,
+                                hasData: avail.hasStrainData,
+                                showZeroBaselineArc: true
                             )
                         }
                         .frame(maxWidth: .infinity)

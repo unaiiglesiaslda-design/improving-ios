@@ -242,16 +242,17 @@ struct EsfuerzoScreen: View {
                     onRightSecondary: { showInfoSheet = true }
                 ) {
                     BevelRecessedRingGauge(
-                        progress: Double(store.strainPercent) / 100.0,
-                        centerText: "\(store.strainPercent)%",
+                        progress: avail.hasStrainData ? Double(store.strainPercent) / 100.0 : 0.0,
+                        centerText: "\(avail.hasStrainData ? store.strainPercent : 0)%",
                         label: "",
                         kind: .strain,
                         size: 170,
                         strokeWidth: 16,
-                        subLabel: avail.hasRecoveryData ? "Objetivo: \(store.effortTargetRangeText)" : nil,
+                        subLabel: "Objetivo: \(store.effortTargetRangeText)",
                         centerSubtitle: store.strainStatusText,
-                        targetRange: avail.hasRecoveryData ? store.optimalEffortRange : nil,
-                        hasData: avail.hasStrainData
+                        targetRange: store.optimalEffortRange,
+                        hasData: avail.hasStrainData,
+                        showZeroBaselineArc: true
                     )
                 }
 
@@ -260,9 +261,9 @@ struct EsfuerzoScreen: View {
                         HeaderedMetricCard(
                             icon: "flame.fill",
                             title: "Strain (0–21)",
-                            value: avail.hasStrainData ? String(format: "%.1f", locale: Locale(identifier: "es_ES"), store.strain21) : "--"
+                            value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), avail.hasStrainData ? store.strain21 : 0.0)
                         )
-                        HeaderedMetricCard(icon: "clock.fill", title: "Tiempo activo", value: activeTimeText)
+                        HeaderedMetricCard(icon: "clock.fill", title: "Tiempo activo", value: totalActiveMin > 0 ? activeTimeText : "0 min")
                     }
 
                     LiveAiCoachingCard(section: .esfuerzo, store: store)
@@ -279,7 +280,7 @@ struct EsfuerzoScreen: View {
                     BevelCard(cornerRadius: 20) {
                         VStack(spacing: 14) {
                             if store.workoutsToday.isEmpty {
-                                Text("No hay entrenamientos registrados este día.")
+                                Text("Sin esfuerzo registrado todavía · Tu rango óptimo hoy es \(store.effortTargetRangeText).")
                                     .font(ImprovingFont.body(13.5))
                                     .foregroundColor(BevelColors.textSecondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)

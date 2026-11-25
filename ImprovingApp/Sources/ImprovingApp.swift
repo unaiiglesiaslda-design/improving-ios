@@ -16,9 +16,9 @@ struct ImprovingApp: App {
                     switch newPhase {
                     case .active:
                         store.handleAppBecameActive()
-                        store.publishWidgetSnapshot(triggerReload: true)
+                        store.publishWidgetSnapshot(triggerReload: true, forceReload: true)
                     case .inactive, .background:
-                        store.publishWidgetSnapshot(triggerReload: true)
+                        store.publishWidgetSnapshot(triggerReload: true, forceReload: true)
                         store.flushPersistenceNow()
                     @unknown default:
                         break
