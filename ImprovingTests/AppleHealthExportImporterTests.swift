@@ -1899,4 +1899,79 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.simulatedHistory = [:]
         store.flushPersistenceNow()
     }
+
+    @MainActor
+    func testPersonalizedContinuousTargetStrainBaselineFatigueAndSleepDebt() {
+        var young = UserPhysiologyProfile()
+        young.ageYears = 22
+        young.birthDateIso = nil
+
+        var mid = UserPhysiologyProfile()
+        mid.ageYears = 34
+        mid.birthDateIso = nil
+
+        // 1. Continuous recovery curve: NO staircase jump between 69% and 70%, strictly monotonic 40% < 70% < 95%
+        let r40 = WhoopPhysiologyEngine.optimalTargetRange(for: 40, profile: young)
+        let r69 = WhoopPhysiologyEngine.optimalTargetRange(for: 69, profile: young)
+        let r70 = WhoopPhysiologyEngine.optimalTargetRange(for: 70, profile: young)
+        let r95 = WhoopPhysiologyEngine.optimalTargetRange(for: 95, profile: young)
+        XCTAssertLessThanOrEqual(r70.upperBound - r69.upperBound, 0.025)
+        XCTAssertLessThan(r40.upperBound, r70.upperBound)
+        XCTAssertLessThan(r70.upperBound, r95.upperBound)
+
+        // 2. Personal 28-day baseline anchoring: moderate 35% baseline vs high-volume 68% athlete at same 78% recovery
+        let moderateUser = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 78, profile: young, baselineStrainPct: 35.0, baselineSampleCount: 20
+        )
+        let highVolAthlete = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 78, profile: young, baselineStrainPct: 68.0, baselineSampleCount: 20
+        )
+        XCTAssertLessThan(moderateUser.upperBound, highVolAthlete.upperBound - 0.12)
+        XCTAssertLessThanOrEqual(moderateUser.upperBound, 0.62)
+
+        // 3. Fatigue modulation: EWMA Fatigued / Overtraining & Sleep Debt lower the target range cleanly
+        let fresh = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 76, profile: young, baselineStrainPct: 48.0, baselineSampleCount: 20, cardioLoadState: .productive, sleepDebtMinutes: 0
+        )
+        let fatigued = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 76, profile: young, baselineStrainPct: 48.0, baselineSampleCount: 20, cardioLoadState: .fatigued, sleepDebtMinutes: 0
+        )
+        let overtrainedWithDebt = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 76, profile: young, baselineStrainPct: 48.0, baselineSampleCount: 20, cardioLoadState: .overtraining, sleepDebtMinutes: 85
+        )
+        XCTAssertLessThan(fatigued.upperBound, fresh.upperBound)
+        XCTAssertLessThan(overtrainedWithDebt.upperBound, fatigued.upperBound)
+
+        // 4. Age prior fades out completely at 14+ real history days (real biology overrides generic age rule!)
+        let youngWithHistory = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 78, profile: young, baselineStrainPct: 42.0, baselineSampleCount: 18
+        )
+        let midWithHistory = WhoopPhysiologyEngine.optimalTargetRange(
+            for: 78, profile: mid, baselineStrainPct: 42.0, baselineSampleCount: 18
+        )
+        XCTAssertEqual(youngWithHistory.lowerBound, midWithHistory.lowerBound, accuracy: 0.001)
+        XCTAssertEqual(youngWithHistory.upperBound, midWithHistory.upperBound, accuracy: 0.001)
+
+        // 5. Store integration: 20 prior moderate days (34% strain) calibrate today's optimalEffortRange lower than fixed table!
+        let store = ImprovingStore()
+        store.hasImportedOrPairedRealData = true
+        store.realHistory = [:]
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: store.selectedDate)
+        for back in 1...20 {
+            let dt = cal.date(byAdding: .day, value: -back, to: today)!
+            let iso = store.isoFormatter.string(from: dt)
+            store.realHistory[iso] = RealBiometricDaySummary(dateIso: iso, strain21: 9.2, strainPct: 34, recoveryPct: 75)
+        }
+        let todayIso = store.selectedDateIso
+        store.realHistory[todayIso] = RealBiometricDaySummary(dateIso: todayIso, sleepDebtMinutes: 60, recoveryPct: 76)
+        let storeRange = store.optimalEffortRange
+        XCTAssertLessThanOrEqual(storeRange.upperBound, 0.60)
+        XCTAssertTrue(store.effortTargetCalibrationCaption.contains("media 28 d 34%"))
+        XCTAssertTrue(store.effortTargetCalibrationCaption.contains("deuda sueño 60 min"))
+
+        store.realHistory = [:]
+        store.hasImportedOrPairedRealData = false
+        store.flushPersistenceNow()
+    }
 }

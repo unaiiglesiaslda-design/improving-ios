@@ -1165,24 +1165,90 @@ enum WhoopPhysiologyEngine {
         return min(max(Int(finalScore.rounded()), 10), 100)
     }
 
-    static func optimalTargetRange(for recoveryPct: Int, profile: UserPhysiologyProfile? = nil) -> ClosedRange<Double> {
-        let base: ClosedRange<Double> = switch recoveryPct {
-        case 70...100: 0.62...0.84
-        case 45..<70: 0.42...0.65
-        default: 0.22...0.45
+    /// Computes a personalized, continuous daily Optimal Strain target range (0..1):
+    /// 1. Smooth continuous curve driven by exact Recovery % (zero staircase jumps at 45%/70%).
+    /// 2. Anchored to the user's real trailing 28-day daily Strain baseline (blended with a healthy floor so
+    ///    sedentary weeks never spiral to zero while respecting each athlete's real training volume).
+    /// 3. Modulated downward by accumulated Cardio Training Load fatigue (EWMA), 3-day strain spikes, and sleep debt.
+    /// 4. Uses age only as an initial prior that smoothly fades out once 14+ days of real user history exist.
+    static func optimalTargetRange(
+        for recoveryPct: Int,
+        profile: UserPhysiologyProfile? = nil,
+        baselineStrainPct: Double? = nil,
+        baselineSampleCount: Int = 0,
+        cardioLoadState: TrainingLoadState? = nil,
+        sleepDebtMinutes: Int? = nil,
+        recent3DayAvgStrainPct: Double? = nil
+    ) -> ClosedRange<Double> {
+        let r = min(max(Double(recoveryPct), 0.0), 100.0) / 100.0
+
+        // 1. Continuous physiological recovery midpoint (18% at 0% rec -> 52% at 70% -> 68% at 100%)
+        let recoveryMid = 0.18 + 0.50 * pow(r, 1.08)
+
+        // 2. Personal 28-day strain baseline blend (ramps smoothly to 65% personal weight at 14+ real days)
+        var mid = recoveryMid
+        if let rawBase = baselineStrainPct, rawBase.isFinite, baselineSampleCount >= 3 {
+            let historyWeight = min(Double(baselineSampleCount) / 14.0, 1.0) * 0.65
+            // Gentle floor (24%) prevents a sick/sedentary week from collapsing healthy targets to near zero
+            let effectiveBase = min(max(rawBase / 100.0, 0.24), 0.78)
+            // Recovery multiplier scales around 1.0x at ~60% recovery (0.58x at 0% -> 1.28x at 100%)
+            let recMultiplier = 0.58 + 0.70 * r
+            // Safety ceiling ensures red recovery days never ask for excessive strain even for high-volume athletes
+            let recoveryCeiling = 0.32 + 0.54 * r
+            let personalMid = min(max(effectiveBase * recMultiplier, 0.16), recoveryCeiling)
+            mid = (1.0 - historyWeight) * recoveryMid + historyWeight * personalMid
         }
-        guard let p = profile else { return base }
-        let age = p.effectiveAgeYears
-        // Gentle age-calibrated training capacity shift (younger adults tolerate slightly higher ceiling; 55+ protects autonomic reserve)
-        let shift: Double = {
-            if age < 25.0 { return 0.03 }
-            if age <= 45.0 { return 0.0 }
-            if age < 60.0 { return -0.04 }
-            return -0.08
-        }()
-        let lo = min(max(base.lowerBound + shift, 0.14), 0.78)
-        let hi = min(max(base.upperBound + shift, lo + 0.16), 0.92)
-        return lo...hi
+
+        // 3. Cumulative fatigue modulation (EWMA Cardio Load + 3-day acute spike + Sleep Debt)
+        if let state = cardioLoadState {
+            switch state {
+            case .overtraining:
+                mid -= 0.14
+            case .fatigued:
+                mid -= 0.08
+            case .productive, .calibrating:
+                break
+            case .maintaining:
+                mid += 0.01
+            case .peaking:
+                if recoveryPct >= 60 { mid += 0.03 }
+            case .detraining:
+                if recoveryPct >= 55 { mid += 0.04 }
+            }
+        }
+
+        if let r3 = recent3DayAvgStrainPct, let base = baselineStrainPct, r3 > base + 12.0 {
+            let spikePenalty = min(((r3 - base) - 12.0) * 0.003, 0.06)
+            mid -= spikePenalty
+        }
+
+        if let debt = sleepDebtMinutes, debt > 30 {
+            let debtPenalty = min(Double(debt - 30) / 600.0, 0.08)
+            mid -= debtPenalty
+        }
+
+        // 4. Age acts ONLY as a gentle calibration prior when history is sparse (fades to 0 at 14+ days!)
+        if let p = profile {
+            let agePriorWeight = max(0.0, 1.0 - Double(baselineSampleCount) / 14.0)
+            if agePriorWeight > 0.01 {
+                let age = p.effectiveAgeYears
+                let ageShift: Double = {
+                    if age < 25.0 { return 0.015 }
+                    if age <= 45.0 { return 0.0 }
+                    if age < 60.0 { return -0.03 }
+                    return -0.06
+                }()
+                mid += ageShift * agePriorWeight
+            }
+        }
+
+        // Dynamic band width: slightly narrower on low recovery (±9%), wider on high recovery (±12%)
+        let halfWidth = 0.09 + 0.03 * r
+        let rawLo = min(max(mid - halfWidth, 0.12), 0.72)
+        let rawHi = min(max(mid + halfWidth, rawLo + 0.16), 0.88)
+        let lo = (rawLo * 100.0).rounded() / 100.0
+        let hi = max((rawHi * 100.0).rounded() / 100.0, lo + 0.16)
+        return lo...min(hi, 0.90)
     }
 
     // MARK: - Preview Simulator (ONLY used before user imports Apple Health or connects a device; continuous energy!)

@@ -843,23 +843,92 @@ final class ImprovingStore: ObservableObject {
         !activeHistory.isEmpty
     }
 
-    var optimalEffortRange: ClosedRange<Double> {
-        let recBasis: Int = {
-            if dataAvailability.hasRecoveryData { return recoveryPercent }
-            if let recentRec = trailingCalendarSummaries(days: 7).compactMap({ $0.summary?.recoveryPct }).last {
-                return recentRec
+    /// Strictly causal personalized optimal Strain target for `dateIso` (combining exact continuous Recovery %,
+    /// trailing 28-day personal Strain baseline, 3-day acute spike check, EWMA Cardio Load state, and sleep debt).
+    func personalizedEffortTarget(for dateIso: String? = nil, includeCardioLoad: Bool = true) -> (
+        range: ClosedRange<Double>,
+        baselineStrainPct: Double?,
+        sampleCount: Int,
+        cardioState: TrainingLoadState?,
+        sleepDebtMin: Int?,
+        recBasis: Int
+    ) {
+        let targetIso = dateIso ?? selectedDateIso
+        let anchorDate = isoFormatter.date(from: targetIso) ?? selectedDate
+        let cal = Calendar.current
+        let anchorStart = cal.startOfDay(for: anchorDate)
+
+        var prior28Strains: [Double] = []
+        var recent3Strains: [Double] = []
+        var recent7Rec: Int? = nil
+
+        for back in 1...28 {
+            guard let dt = cal.date(byAdding: .day, value: -back, to: anchorStart) else { continue }
+            let iso = isoFormatter.string(from: dt)
+            guard let day = activeHistory[iso] else { continue }
+            if let st = day.strainPct, st > 0 {
+                prior28Strains.append(Double(st))
+                if back <= 3 { recent3Strains.append(Double(st)) }
             }
-            return 65
+            if back <= 7, recent7Rec == nil, let r = day.recoveryPct {
+                recent7Rec = r
+            }
+        }
+
+        let targetDay = activeHistory[targetIso]
+        let recBasis: Int = targetDay?.recoveryPct ?? recent7Rec ?? 65
+        let baseMean: Double? = prior28Strains.isEmpty ? nil : (prior28Strains.reduce(0, +) / Double(prior28Strains.count))
+        let r3Mean: Double? = recent3Strains.isEmpty ? nil : (recent3Strains.reduce(0, +) / Double(recent3Strains.count))
+
+        let cardioState: TrainingLoadState? = {
+            guard includeCardioLoad else { return nil }
+            let analysis = trainingLoadAnalysis(tab: .cardio, spanDays: 30, windowPageOffset: 0)
+            guard analysis.hasAnyData else { return nil }
+            if targetIso == selectedDateIso {
+                return analysis.currentState == .calibrating ? nil : analysis.currentState
+            }
+            if let pt = analysis.points.first(where: { $0.dateIso == targetIso }) {
+                return pt.state == .calibrating ? nil : pt.state
+            }
+            return nil
         }()
-        return WhoopPhysiologyEngine.optimalTargetRange(
+
+        let debtMin = targetDay?.sleepDebtMinutes
+        let range = WhoopPhysiologyEngine.optimalTargetRange(
             for: recBasis,
-            profile: userProfile
+            profile: userProfile,
+            baselineStrainPct: baseMean,
+            baselineSampleCount: prior28Strains.count,
+            cardioLoadState: cardioState,
+            sleepDebtMinutes: debtMin,
+            recent3DayAvgStrainPct: r3Mean
         )
+        return (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
+    }
+
+    var optimalEffortRange: ClosedRange<Double> {
+        personalizedEffortTarget(for: selectedDateIso).range
     }
 
     var effortTargetRangeText: String {
         let r = optimalEffortRange
         return "\(Int((r.lowerBound * 100).rounded()))%–\(Int((r.upperBound * 100).rounded()))%"
+    }
+
+    /// Transparent 1-line physiological explanation of today's personalized Optimal Strain range.
+    var effortTargetCalibrationCaption: String {
+        let info = personalizedEffortTarget(for: selectedDateIso)
+        var parts: [String] = ["Rec. \(info.recBasis)%"]
+        if let base = info.baselineStrainPct, info.sampleCount >= 3 {
+            parts.append("media 28 d \(Int(base.rounded()))%")
+        }
+        if let st = info.cardioState {
+            parts.append("carga \(st.rawValue.lowercased())")
+        }
+        if let debt = info.sleepDebtMin, debt > 30 {
+            parts.append("deuda sueño \(debt) min")
+        }
+        return "Calibrado a ti · " + parts.joined(separator: " · ")
     }
 
     // MARK: - 4-Hour Time-Aware Section Coaching Engine
@@ -1217,8 +1286,8 @@ final class ImprovingStore: ObservableObject {
                 currentValue: perfDeltaToday,
                 valueFormatter: { String(format: "%+.0f", $0) }, unitText: "%",
                 series: window.map { item in
-                    guard let st = item.summary?.strainPct, let rec = item.summary?.recoveryPct else { return nil }
-                    let r = WhoopPhysiologyEngine.optimalTargetRange(for: rec)
+                    guard let st = item.summary?.strainPct, item.summary?.recoveryPct != nil else { return nil }
+                    let r = personalizedEffortTarget(for: item.iso, includeCardioLoad: false).range
                     return Double(st) - (r.lowerBound + r.upperBound) * 50.0
                 },
                 bandLow: -12, bandHigh: 14, lineColorHex: 0x7FA8F8,
@@ -1428,9 +1497,9 @@ final class ImprovingStore: ObservableObject {
         case "t_steps":
             return { $0.stepsCount.map { Double($0) } }
         case "t_perf":
-            return { d in
+            return { [weak self] d in
                 guard let st = d.strainPct, let rec = d.recoveryPct else { return nil }
-                let r = WhoopPhysiologyEngine.optimalTargetRange(for: rec)
+                let r = self?.personalizedEffortTarget(for: d.dateIso, includeCardioLoad: false).range ?? WhoopPhysiologyEngine.optimalTargetRange(for: rec)
                 return Double(st) - (r.lowerBound + r.upperBound) * 50.0
             }
         case "r_rec":
@@ -1718,8 +1787,8 @@ final class ImprovingStore: ObservableObject {
             guard let st = d.stressScore else { return .unset }
             return st >= 50 ? .yes : .no
         case "a_strain":
-            guard let st = d.strainPct, let rec = d.recoveryPct else { return .unset }
-            let upper = WhoopPhysiologyEngine.optimalTargetRange(for: rec).upperBound * 100.0
+            guard let st = d.strainPct, d.recoveryPct != nil else { return .unset }
+            let upper = personalizedEffortTarget(for: d.dateIso, includeCardioLoad: false).range.upperBound * 100.0
             return Double(st) > upper ? .yes : .no
         case "a_noise":
             guard let n = d.sleepNoiseOver50Db else { return .unset }
@@ -4925,10 +4994,7 @@ final class ImprovingStore: ObservableObject {
             return "--"
         }()
 
-        let recForTarget: Int = targetDay?.recoveryPct
-            ?? trailingCalendarSummaries(days: 7).compactMap({ $0.summary?.recoveryPct }).last
-            ?? 65
-        let optRange = WhoopPhysiologyEngine.optimalTargetRange(for: recForTarget, profile: userProfile)
+        let optRange = personalizedEffortTarget(for: targetIso).range
         let optLo = Int((optRange.lowerBound * 100.0).rounded())
         let optHi = Int((optRange.upperBound * 100.0).rounded())
 

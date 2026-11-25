@@ -110,7 +110,7 @@ enum PillarInfoKind: String, Identifiable {
         switch self {
         case .strain:
             return [
-                ("target", "Zona óptima dinámica", "El rango objetivo cambia cada mañana según tu Recuperación para evitar sobrecargas."),
+                ("target", "Zona óptima personalizada y continua", "Combina de forma continua tu Recuperación de hoy con tu media real de Esfuerzo de 28 días, tu Carga Cardíaca (EWMA) y tu deuda de sueño."),
                 ("heart.fill", "Zonas Z1–Z5", "Los minutos en zonas altas (Z4–Z5) suman exponencialmente más carga que actividad ligera."),
                 ("dumbbell.fill", "Fuerza + Cardio", "Combina sesiones de gimnasio, volumen en kg y carga cardiovascular.")
             ]
@@ -265,6 +265,21 @@ struct EsfuerzoScreen: View {
                         )
                         HeaderedMetricCard(icon: "clock.fill", title: "Tiempo activo", value: totalActiveMin > 0 ? activeTimeText : "0 min")
                     }
+
+                    HStack(spacing: 7) {
+                        Image(systemName: "scope")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(BevelColors.amberStart)
+                        Text(store.effortTargetCalibrationCaption)
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(BevelColors.card))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(BevelColors.cardBorder, lineWidth: 0.7))
 
                     LiveAiCoachingCard(section: .esfuerzo, store: store)
 
