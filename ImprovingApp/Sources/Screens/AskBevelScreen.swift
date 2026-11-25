@@ -129,192 +129,8 @@ struct AskBevelScreen: View {
                         ScrollView {
                             VStack(spacing: 14) {
                                 ForEach(store.coachMessages) { msg in
-                                    if msg.isUser {
-                                        HStack {
-                                            Spacer(minLength: 44)
-                                            VStack(alignment: .trailing, spacing: 6) {
-                                                if let photoImg = MealPhotoStorage.loadImage(filename: msg.attachedPhotoFilename) {
-                                                    Image(uiImage: photoImg)
-                                                        .resizable()
-                                                        .scaledToFill()
-                                                        .frame(width: 170, height: 120)
-                                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                                        .overlay(
-                                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8)
-                                                        )
-                                                }
-                                                Text(msg.text)
-                                                    .font(ImprovingFont.body(14.5))
-                                                    .foregroundColor(.white)
-                                                    .padding(.horizontal, 15)
-                                                    .padding(.vertical, 11)
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                                            .fill(BevelColors.indigoEnd)
-                                                    )
-                                            }
-                                        }
+                                    coachMessageRow(msg)
                                         .id(msg.id)
-                                    } else {
-                                        HStack(alignment: .top, spacing: 10) {
-                                            BevelMascotOrb(size: 28)
-                                                .padding(.top, 4)
-
-                                            VStack(alignment: .leading, spacing: 9) {
-                                                if let title = msg.verdictTitle, !title.isEmpty {
-                                                    Text(title)
-                                                        .font(ImprovingFont.microLabel(11))
-                                                        .foregroundColor(BevelColors.greenPrimary)
-                                                }
-
-                                                Text(msg.text)
-                                                    .font(ImprovingFont.body(14.5))
-                                                    .foregroundColor(BevelColors.textPrimary)
-                                                    .fixedSize(horizontal: false, vertical: true)
-
-                                                if !msg.appliedActions.isEmpty {
-                                                    VStack(spacing: 7) {
-                                                        ForEach(msg.appliedActions) { act in
-                                                            let tint = act.isUndone ? BevelColors.textMuted : Color(hex: act.badgeColorHex)
-                                                            HStack(spacing: 10) {
-                                                                Image(systemName: act.isUndone ? "arrow.uturn.backward.circle" : act.icon)
-                                                                    .font(.system(size: 13.5, weight: .semibold))
-                                                                    .foregroundColor(tint)
-                                                                    .frame(width: 28, height: 28)
-                                                                    .background(Circle().fill(tint.opacity(0.16)))
-
-                                                                VStack(alignment: .leading, spacing: 1.5) {
-                                                                    Text(act.isUndone ? "\(act.title) · Deshecho" : act.title)
-                                                                        .font(ImprovingFont.caption(12))
-                                                                        .fontWeight(.bold)
-                                                                        .foregroundColor(act.isUndone ? BevelColors.textMuted : BevelColors.textPrimary)
-                                                                    Text(act.detail)
-                                                                        .font(ImprovingFont.caption(11.5))
-                                                                        .foregroundColor(BevelColors.textSecondary)
-                                                                        .lineLimit(2)
-                                                                }
-                                                                Spacer(minLength: 4)
-
-                                                                if act.undoPayload != nil {
-                                                                    if act.isUndone {
-                                                                        Text("Deshecho")
-                                                                            .font(ImprovingFont.caption(10.5))
-                                                                            .fontWeight(.semibold)
-                                                                            .foregroundColor(BevelColors.textMuted)
-                                                                            .padding(.horizontal, 8)
-                                                                            .padding(.vertical, 4)
-                                                                            .background(Capsule().fill(Color.white.opacity(0.05)))
-                                                                    } else {
-                                                                        Button {
-                                                                            withAnimation(.easeInOut(duration: 0.2)) {
-                                                                                store.undoCoachAction(messageId: msg.id, actionId: act.id)
-                                                                            }
-                                                                        } label: {
-                                                                            HStack(spacing: 3) {
-                                                                                Image(systemName: "arrow.uturn.backward")
-                                                                                    .font(.system(size: 10, weight: .bold))
-                                                                                Text("Deshacer")
-                                                                                    .font(ImprovingFont.caption(11))
-                                                                                    .fontWeight(.bold)
-                                                                            }
-                                                                            .foregroundColor(BevelColors.textPrimary)
-                                                                            .padding(.horizontal, 9)
-                                                                            .padding(.vertical, 5)
-                                                                            .background(Capsule().fill(Color.white.opacity(0.10)))
-                                                                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            .padding(.horizontal, 10)
-                                                            .padding(.vertical, 8)
-                                                            .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(BevelColors.cardSubtle))
-                                                            .overlay(
-                                                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                                                    .strokeBorder(tint.opacity(act.isUndone ? 0.14 : 0.32), lineWidth: 0.8)
-                                                            )
-                                                        }
-                                                    }
-                                                    .padding(.top, 2)
-                                                }
-
-                                                if !msg.bullets.isEmpty {
-                                                    VStack(alignment: .leading, spacing: 6) {
-                                                        ForEach(msg.bullets, id: \.self) { b in
-                                                            HStack(alignment: .top, spacing: 7) {
-                                                                Circle()
-                                                                    .fill(BevelColors.periwinkleStart)
-                                                                    .frame(width: 5, height: 5)
-                                                                    .padding(.top, 7)
-                                                                Text(b)
-                                                                    .font(ImprovingFont.caption(13))
-                                                                    .foregroundColor(BevelColors.textSecondary)
-                                                                    .fixedSize(horizontal: false, vertical: true)
-                                                            }
-                                                        }
-                                                    }
-                                                    .padding(.top, 2)
-                                                }
-
-                                                HStack(spacing: 8) {
-                                                    if let model = msg.modelUsed, !model.isEmpty {
-                                                        Text("\(msg.timestampLabel) · \(model)")
-                                                            .font(ImprovingFont.caption(10.5))
-                                                            .foregroundColor(BevelColors.textMuted)
-                                                    } else {
-                                                        Text(msg.timestampLabel)
-                                                            .font(ImprovingFont.caption(10.5))
-                                                            .foregroundColor(BevelColors.textMuted)
-                                                    }
-                                                    Spacer()
-                                                    Button {
-                                                        var full = msg.text
-                                                        if !msg.bullets.isEmpty {
-                                                            full += "\n" + msg.bullets.map { "• \($0)" }.joined(separator: "\n")
-                                                        }
-                                                        UIPasteboard.general.string = full
-                                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                                            copiedMessageId = msg.id
-                                                        }
-                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                                                            if copiedMessageId == msg.id {
-                                                                withAnimation(.easeOut(duration: 0.2)) {
-                                                                    copiedMessageId = nil
-                                                                }
-                                                            }
-                                                        }
-                                                    } label: {
-                                                        HStack(spacing: 4) {
-                                                            Image(systemName: copiedMessageId == msg.id ? "checkmark" : "doc.on.doc")
-                                                                .font(.system(size: 10.5, weight: .semibold))
-                                                            Text(copiedMessageId == msg.id ? "Copiado" : "Copiar")
-                                                                .font(ImprovingFont.caption(10.5))
-                                                                .fontWeight(.semibold)
-                                                        }
-                                                        .foregroundColor(copiedMessageId == msg.id ? BevelColors.greenPrimary : BevelColors.textMuted)
-                                                        .padding(.horizontal, 8)
-                                                        .padding(.vertical, 4)
-                                                        .background(Capsule().fill(Color.white.opacity(0.06)))
-                                                    }
-                                                }
-                                                .padding(.top, 2)
-                                            }
-                                            .padding(.horizontal, 15)
-                                            .padding(.vertical, 13)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                                    .fill(BevelColors.card)
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                                    .strokeBorder(BevelColors.cardBorder, lineWidth: 0.8)
-                                            )
-                                            Spacer(minLength: 16)
-                                        }
-                                        .id(msg.id)
-                                    }
                                 }
 
                                 if store.isCoachThinking {
@@ -494,6 +310,211 @@ struct AskBevelScreen: View {
                 onClose: { showHistorySheet = false }
             )
         }
+    }
+
+    @ViewBuilder
+    private func coachMessageRow(_ msg: CoachChatMessage) -> some View {
+        if msg.isUser {
+            userMessageBubble(msg)
+        } else {
+            assistantMessageBubble(msg)
+        }
+    }
+
+    private func userMessageBubble(_ msg: CoachChatMessage) -> some View {
+        HStack {
+            Spacer(minLength: 44)
+            VStack(alignment: .trailing, spacing: 6) {
+                if let photoImg = MealPhotoStorage.loadImage(filename: msg.attachedPhotoFilename) {
+                    Image(uiImage: photoImg)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 170, height: 120)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.8)
+                        )
+                }
+                Text(msg.text)
+                    .font(ImprovingFont.body(14.5))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 15)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(BevelColors.indigoEnd)
+                    )
+            }
+        }
+    }
+
+    private func assistantMessageBubble(_ msg: CoachChatMessage) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            BevelMascotOrb(size: 28)
+                .padding(.top, 4)
+
+            VStack(alignment: .leading, spacing: 9) {
+                if let title = msg.verdictTitle, !title.isEmpty {
+                    Text(title)
+                        .font(ImprovingFont.microLabel(11))
+                        .foregroundColor(BevelColors.greenPrimary)
+                }
+
+                Text(msg.text)
+                    .font(ImprovingFont.body(14.5))
+                    .foregroundColor(BevelColors.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !msg.appliedActions.isEmpty {
+                    VStack(spacing: 7) {
+                        ForEach(msg.appliedActions) { act in
+                            appliedActionRow(act, messageId: msg.id)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+
+                if !msg.bullets.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(msg.bullets, id: \.self) { b in
+                            HStack(alignment: .top, spacing: 7) {
+                                Circle()
+                                    .fill(BevelColors.periwinkleStart)
+                                    .frame(width: 5, height: 5)
+                                    .padding(.top, 7)
+                                Text(b)
+                                    .font(ImprovingFont.caption(13))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+
+                assistantMessageFooter(msg)
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 13)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(BevelColors.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(BevelColors.cardBorder, lineWidth: 0.8)
+            )
+            Spacer(minLength: 16)
+        }
+    }
+
+    private func appliedActionRow(_ act: CoachAppliedAction, messageId: String) -> some View {
+        let tint: Color = act.isUndone ? BevelColors.textMuted : Color(hex: act.badgeColorHex)
+        return HStack(spacing: 10) {
+            Image(systemName: act.isUndone ? "arrow.uturn.backward.circle" : act.icon)
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundColor(tint)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(tint.opacity(0.16)))
+
+            VStack(alignment: .leading, spacing: 1.5) {
+                Text(act.isUndone ? "\(act.title) · Deshecho" : act.title)
+                    .font(ImprovingFont.caption(12))
+                    .fontWeight(.bold)
+                    .foregroundColor(act.isUndone ? BevelColors.textMuted : BevelColors.textPrimary)
+                Text(act.detail)
+                    .font(ImprovingFont.caption(11.5))
+                    .foregroundColor(BevelColors.textSecondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+
+            if act.undoPayload != nil {
+                if act.isUndone {
+                    Text("Deshecho")
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.semibold)
+                        .foregroundColor(BevelColors.textMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.white.opacity(0.05)))
+                } else {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            store.undoCoachAction(messageId: messageId, actionId: act.id)
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Deshacer")
+                                .font(ImprovingFont.caption(11))
+                                .fontWeight(.bold)
+                        }
+                        .foregroundColor(BevelColors.textPrimary)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(0.10)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(BevelColors.cardSubtle))
+        .overlay(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(tint.opacity(act.isUndone ? 0.14 : 0.32), lineWidth: 0.8)
+        )
+    }
+
+    private func assistantMessageFooter(_ msg: CoachChatMessage) -> some View {
+        let isCopied = copiedMessageId == msg.id
+        return HStack(spacing: 8) {
+            if let model = msg.modelUsed, !model.isEmpty {
+                Text("\(msg.timestampLabel) · \(model)")
+                    .font(ImprovingFont.caption(10.5))
+                    .foregroundColor(BevelColors.textMuted)
+            } else {
+                Text(msg.timestampLabel)
+                    .font(ImprovingFont.caption(10.5))
+                    .foregroundColor(BevelColors.textMuted)
+            }
+            Spacer()
+            Button {
+                var full = msg.text
+                if !msg.bullets.isEmpty {
+                    full += "\n" + msg.bullets.map { "• \($0)" }.joined(separator: "\n")
+                }
+                UIPasteboard.general.string = full
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    copiedMessageId = msg.id
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                    if copiedMessageId == msg.id {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            copiedMessageId = nil
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Text(isCopied ? "Copiado" : "Copiar")
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(isCopied ? BevelColors.greenPrimary : BevelColors.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.white.opacity(0.06)))
+            }
+        }
+        .padding(.top, 2)
     }
 
     private func sendCurrentInput() {
