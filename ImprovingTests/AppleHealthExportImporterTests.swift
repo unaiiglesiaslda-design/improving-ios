@@ -166,9 +166,13 @@ final class AppleHealthExportImporterTests: XCTestCase {
     func testDiario20ManualItemsCompletionAnd30DayInsightLock() {
         let store = ImprovingStore()
         store.hasImportedOrPairedRealData = true
+        store.hiddenJournalHabitIds = []
+        store.customJournalHabits = []
         store.journalCheckinsByDate = [:]
         store.journalMoodByDate = [:]
+        store.journalNotesByDate = [:]
         store.hydrationGlassesByDate = [:]
+        store.manualNutrientsByDate = [:]
         store.realHistory = [:]
 
         let todayIso = store.selectedDateIso
@@ -1256,6 +1260,9 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.resetHiddenHabits()
         store.deleteCustomJournalHabit(id: customId)
         store.setJournalNote("")
+        store.journalCheckinsByDate = [:]
+        store.journalNotesByDate = [:]
+        store.flushPersistenceNow()
     }
 
     func testSmartNotificationSleepPlanCalculation() {

@@ -176,6 +176,14 @@ enum WidgetSnapshotStore {
         return parent.pathExtension.lowercased() == "app" ? parent : nil
     }
 
+    private static let cachedProvisionedGroups: [String] = {
+        var list = provisionedGroupsFromBundle(at: Bundle.main.bundleURL)
+        if let parentURL = parentAppBundleURLIfExtension() {
+            list.append(contentsOf: provisionedGroupsFromBundle(at: parentURL))
+        }
+        return list
+    }()
+
     /// Returns all candidate App Group identifiers in strict priority order:
     /// 1. Real entitlements in `embedded.mobileprovision` (self + parent `.app` when running as `.appex`)
     /// 2. `ALTAppGroups` in `Info.plist` (self + parent `.app`)
@@ -194,13 +202,7 @@ enum WidgetSnapshotStore {
         }
 
         // 1. Real provisioned entitlements from embedded.mobileprovision
-        let prov = provisionedOverride ?? {
-            var list = provisionedGroupsFromBundle(at: Bundle.main.bundleURL)
-            if let parentURL = parentAppBundleURLIfExtension() {
-                list.append(contentsOf: provisionedGroupsFromBundle(at: parentURL))
-            }
-            return list
-        }()
+        let prov = provisionedOverride ?? cachedProvisionedGroups
         for g in prov { add(g) }
 
         // 2. ALTAppGroups & AppGroupIdentifier from Bundle Info.plist (+ parent app if extension)
@@ -284,9 +286,34 @@ enum WidgetSnapshotStore {
     }
 
     static func save(_ snapshot: ImprovingWidgetSnapshot, triggerReload: Bool = true, forceReload: Bool = false) {
+        let prevSnap = load()
+        let contentChanged: Bool = {
+            guard let prev = prevSnap else { return true }
+            return prev.dateIso != snapshot.dateIso ||
+                prev.dateLabel != snapshot.dateLabel ||
+                prev.strainPct != snapshot.strainPct ||
+                prev.recoveryPct != snapshot.recoveryPct ||
+                prev.sleepPct != snapshot.sleepPct ||
+                prev.energyPct != snapshot.energyPct ||
+                prev.stressScore != snapshot.stressScore ||
+                prev.hrvMs != snapshot.hrvMs ||
+                prev.restingHrBpm != snapshot.restingHrBpm ||
+                prev.sleepDurationText != snapshot.sleepDurationText ||
+                prev.nutritionScore != snapshot.nutritionScore ||
+                prev.caloriesToday != snapshot.caloriesToday ||
+                prev.caloriesGoal != snapshot.caloriesGoal ||
+                prev.proteinG != snapshot.proteinG ||
+                prev.carbsG != snapshot.carbsG ||
+                prev.fatG != snapshot.fatG ||
+                prev.stepsCount != snapshot.stepsCount ||
+                prev.optimalStrainLowPct != snapshot.optimalStrainLowPct ||
+                prev.optimalStrainHighPct != snapshot.optimalStrainHighPct
+        }()
+
+        // Skip redundant disk + WidgetKit writes when nothing visible on widgets changed and not forced
+        guard forceReload || contentChanged else { return }
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
 
-        let prevSnap = load()
         let candidates = candidateSuiteNames()
         var wroteToSharedContainer = false
 
@@ -315,35 +342,9 @@ enum WidgetSnapshotStore {
         UserDefaults.standard.set(data, forKey: storageKey)
 
         guard triggerReload else { return }
-        let contentChanged: Bool = {
-            guard let prev = prevSnap else { return true }
-            return prev.dateIso != snapshot.dateIso ||
-                prev.dateLabel != snapshot.dateLabel ||
-                prev.strainPct != snapshot.strainPct ||
-                prev.recoveryPct != snapshot.recoveryPct ||
-                prev.sleepPct != snapshot.sleepPct ||
-                prev.energyPct != snapshot.energyPct ||
-                prev.stressScore != snapshot.stressScore ||
-                prev.hrvMs != snapshot.hrvMs ||
-                prev.restingHrBpm != snapshot.restingHrBpm ||
-                prev.sleepDurationText != snapshot.sleepDurationText ||
-                prev.nutritionScore != snapshot.nutritionScore ||
-                prev.caloriesToday != snapshot.caloriesToday ||
-                prev.proteinG != snapshot.proteinG ||
-                prev.carbsG != snapshot.carbsG ||
-                prev.fatG != snapshot.fatG ||
-                prev.stepsCount != snapshot.stepsCount ||
-                prev.optimalStrainLowPct != snapshot.optimalStrainLowPct ||
-                prev.optimalStrainHighPct != snapshot.optimalStrainHighPct
-        }()
-
-        if forceReload || contentChanged {
-            #if canImport(WidgetKit)
-            WidgetCenter.shared.reloadTimelines(ofKind: "ImprovingResumenWidget")
-            WidgetCenter.shared.reloadTimelines(ofKind: "ImprovingNutricionWidget")
-            WidgetCenter.shared.reloadAllTimelines()
-            #endif
-        }
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
     }
 
     static func load() -> ImprovingWidgetSnapshot? {
