@@ -908,7 +908,7 @@ enum CoachUndoPayload: Codable, Equatable, Hashable {
 struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let icon: String
-    let badgeColorHex: UInt
+    let badgeColorHex: UInt64
     let title: String
     let detail: String
     var isUndone: Bool = false
