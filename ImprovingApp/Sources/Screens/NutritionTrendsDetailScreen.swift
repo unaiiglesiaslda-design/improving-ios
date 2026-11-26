@@ -1059,7 +1059,10 @@ struct NutritionTrendsDetailScreen: View {
         for back in 0..<days {
             guard let d = cal.date(byAdding: .day, value: -back, to: anchor) else { continue }
             let iso = store.isoFormatter.string(from: d)
-            sum += store.netEnergyKcal(for: iso).net
+            let dayNet = store.netEnergyKcal(for: iso)
+            // Never count unlogged food days as massive -BMR deficits!
+            guard dayNet.consumed > 0 else { continue }
+            sum += dayNet.net
             count += 1
         }
         guard count > 0 else { return 0 }

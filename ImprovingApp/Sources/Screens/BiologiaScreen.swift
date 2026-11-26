@@ -12,6 +12,7 @@ struct BiologiaScreen: View {
     @State private var showShareBioSheet: Bool = false
     @State private var showScaleSheet: Bool = false
     @State private var showLabScannerSheet: Bool = false
+    @State private var pendingDeleteLabReport: LabReportRecord? = nil
 
     var body: some View {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
@@ -87,7 +88,7 @@ struct BiologiaScreen: View {
                             bioAgeYears: bioAge,
                             chronoAgeYears: chronologicalAge,
                             diffYears: bioDelta,
-                            sampledDays: store.activeHistory.count,
+                            sampledDays: store.trailingCalendarSummaries(days: 30).filter { $0.summary != nil }.count,
                             hasData: hasBioBase
                         )
                     }
@@ -378,7 +379,7 @@ struct BiologiaScreen: View {
                                             showLabScannerSheet = true
                                         }
                                         Button("Eliminar último informe", systemImage: "trash", role: .destructive) {
-                                            store.deleteLabReport(id: rep.id)
+                                            pendingDeleteLabReport = rep
                                         }
                                     } label: {
                                         Image(systemName: "ellipsis.circle")
@@ -483,6 +484,24 @@ struct BiologiaScreen: View {
         }
         .sheet(isPresented: $showLabScannerSheet) {
             LabReportScannerSheet(store: store, onClose: { showLabScannerSheet = false })
+        }
+        .confirmationDialog(
+            "¿Eliminar informe de analítica?",
+            isPresented: Binding(
+                get: { pendingDeleteLabReport != nil },
+                set: { if !$0 { pendingDeleteLabReport = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Eliminar informe permanentemente", role: .destructive) {
+                if let rep = pendingDeleteLabReport {
+                    store.deleteLabReport(id: rep.id)
+                }
+                pendingDeleteLabReport = nil
+            }
+            Button("Cancelar", role: .cancel) { pendingDeleteLabReport = nil }
+        } message: {
+            Text("Se borrarán «\(pendingDeleteLabReport?.title ?? "este informe")» y sus \(pendingDeleteLabReport?.biomarkers.count ?? 0) biomarcadores.")
         }
     }
 

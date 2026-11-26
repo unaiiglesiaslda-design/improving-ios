@@ -650,6 +650,8 @@ actor GeminiCoachService {
         history: [CoachChatMessage],
         previousInteractionId: String? = nil,
         jpegImageData: Data? = nil,
+        allowCloudAI: Bool = true,
+        allowKeylessFallback: Bool = false,
         actionExecutor: (@Sendable (String, String) async -> (responseJson: String, appliedAction: CoachAppliedAction?))? = nil
     ) async -> GeminiCoachResult {
         let seed = nextSeed()
@@ -667,7 +669,7 @@ actor GeminiCoachService {
         var lastCloudError: String? = nil
 
         // Tier 1: User's Gemini API Key (auto-discovers live active models via /v1beta/models + Native Function Calling!)
-        if !cleanKey.isEmpty {
+        if allowCloudAI && !cleanKey.isEmpty {
             if jpegImageData == nil, actionExecutor == nil, model.hasPrefix("gemini-4"),
                let res = await callGeminiInteractionsChat(
                 prompt: prompt,
@@ -718,15 +720,22 @@ actor GeminiCoachService {
             }
         }
 
-        // Tier 2: Out-of-the-box Keyless Cloud LLM with full multi-turn history & multi-model retry
-        if jpegImageData == nil, let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
+        // Tier 2: Optional Keyless Cloud LLM — DISABLED by default for privacy (never sends health data to 3rd-party proxy unless user opts in!)
+        if allowCloudAI && allowKeylessFallback && jpegImageData == nil,
+           let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
             return cloudRes
         }
 
         // Tier 3: Honest offline conversational fallback with real diagnostic cause
-        let extraDiag: String? = (jpegImageData != nil && cleanKey.isEmpty)
-            ? "Para analizar imágenes en el chat añade tu API Key gratuita de Google AI Studio en Dispositivos y Ajustes."
-            : lastCloudError
+        let extraDiag: String? = {
+            if !allowCloudAI {
+                return "La IA en la nube está desactivada en Privacidad (Dispositivos y Ajustes). Respondiendo en modo 100 % local."
+            }
+            if cleanKey.isEmpty {
+                return "Para activar respuestas en la nube con privacidad directa añade tu API Key gratuita de Google AI Studio en Dispositivos y Ajustes."
+            }
+            return lastCloudError
+        }()
         return buildOfflineChatFallback(
             prompt: prompt,
             userName: userName,
@@ -1023,7 +1032,7 @@ actor GeminiCoachService {
         guard let url = URL(string: keylessEndpoint) else { return nil }
         let messages = buildNormalizedOpenAIMessages(sysPrompt: sysPrompt, history: history, currentPrompt: prompt)
 
-        for (idx, cloudModel) in ["openai-fast", "openai-fast"].enumerated() {
+        for attempt in 0..<2 {
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.timeoutInterval = 24
@@ -1032,7 +1041,8 @@ actor GeminiCoachService {
             req.setValue("Improving-iOS/2.0", forHTTPHeaderField: "User-Agent")
 
             let body: [String: Any] = [
-                "model": cloudModel,
+                "model": "openai-fast",
+                "seed": seed + attempt,
                 "messages": messages,
                 "temperature": 0.78
             ]
@@ -1042,7 +1052,7 @@ actor GeminiCoachService {
             do {
                 let (respData, resp) = try await URLSession.shared.data(for: req)
                 guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                    if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                    if attempt == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
                     continue
                 }
                 if let root = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
@@ -1058,7 +1068,7 @@ actor GeminiCoachService {
                     return parseConversationalReply(rawText: plain, interactionId: nil, modelUsed: "improving-live-ai")
                 }
             } catch {
-                if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                if attempt == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
                 continue
             }
         }
@@ -1167,7 +1177,9 @@ actor GeminiCoachService {
         generatedAtLabel: String,
         nextUpdateLabel: String,
         apiKey: String,
-        selectedModel: String
+        selectedModel: String,
+        allowCloudAI: Bool = true,
+        allowKeylessFallback: Bool = false
     ) async -> SectionCoachingCard {
         let seed = nextSeed()
         let moment = describeLocalMoment(currentDate)
@@ -1251,7 +1263,7 @@ actor GeminiCoachService {
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
 
         // Tier 1: User's Gemini API Key (auto-discovers live active models on 404/auto!)
-        if !cleanKey.isEmpty {
+        if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: model == "auto")
             for m in candidates.prefix(4) {
                 if let raw = await callGeminiJsonOneShot(prompt: userPrompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: m),
@@ -1268,8 +1280,9 @@ actor GeminiCoachService {
             }
         }
 
-        // Tier 2: Keyless Live Cloud LLM
-        if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: seed + moment.blockIndex * 19),
+        // Tier 2: Optional Keyless Cloud LLM (disabled by default for privacy)
+        if allowCloudAI && allowKeylessFallback,
+           let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: seed + moment.blockIndex * 19),
            let card = parseSectionCoachingJson(
             raw: raw,
             section: section,
@@ -1339,7 +1352,7 @@ actor GeminiCoachService {
 
     private func callKeylessCloudOneShot(prompt: String, sysPrompt: String, seed: Int) async -> String? {
         guard let url = URL(string: keylessEndpoint) else { return nil }
-        for (idx, cloudModel) in ["openai-fast", "openai-fast"].enumerated() {
+        for attempt in 0..<2 {
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.timeoutInterval = 22
@@ -1348,7 +1361,8 @@ actor GeminiCoachService {
             req.setValue("Improving-iOS/2.0", forHTTPHeaderField: "User-Agent")
 
             let body: [String: Any] = [
-                "model": cloudModel,
+                "model": "openai-fast",
+                "seed": seed + attempt,
                 "temperature": 0.9,
                 "messages": [
                     ["role": "system", "content": sysPrompt],
@@ -1366,12 +1380,12 @@ actor GeminiCoachService {
                       let msg = choices.first?["message"] as? [String: Any],
                       let content = msg["content"] as? String,
                       !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                    if attempt == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
                     continue
                 }
                 return content
             } catch {
-                if idx == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
+                if attempt == 0 { try? await Task.sleep(nanoseconds: 350_000_000) }
                 continue
             }
         }
@@ -1635,7 +1649,9 @@ actor GeminiCoachService {
         descriptionText: String,
         jpegImageData: Data?,
         apiKey: String,
-        selectedModel: String
+        selectedModel: String,
+        allowCloudAI: Bool = true,
+        allowKeylessFallback: Bool = false
     ) async -> AnalyzedMealEstimate {
         let trimmedDesc = descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanKey = Self.sanitizeApiKey(apiKey)
@@ -1692,7 +1708,7 @@ actor GeminiCoachService {
         }()
 
         // Tier 1: Live Multimodal Gemini API (supports both JPEG inline_data + text!)
-        if !cleanKey.isEmpty {
+        if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: model == "auto")
             for m in candidates.prefix(5) {
                 if let raw = await callGeminiMultimodalJson(
@@ -1707,8 +1723,8 @@ actor GeminiCoachService {
             }
         }
 
-        // Tier 2: Keyless Live Cloud LLM when text description is available
-        if !trimmedDesc.isEmpty {
+        // Tier 2: Optional Keyless Cloud LLM (disabled by default for privacy)
+        if allowCloudAI && allowKeylessFallback && !trimmedDesc.isEmpty {
             if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
                let parsed = Self.parseMealEstimateJson(raw, usedLiveAI: true, modelUsed: "improving-cloud") {
                 return parsed
@@ -2085,7 +2101,9 @@ actor GeminiCoachService {
         report: WeeklyReviewReport,
         userName: String,
         apiKey: String,
-        selectedModel: String
+        selectedModel: String,
+        allowCloudAI: Bool = true,
+        allowKeylessFallback: Bool = false
     ) async -> WeeklyAiReviewInsight {
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
@@ -2136,7 +2154,7 @@ actor GeminiCoachService {
         """
         let userPrompt = "Resumen semanal real de \(name):\n\(jsonStr)"
 
-        if !cleanKey.isEmpty {
+        if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
             for m in candidates.prefix(4) {
                 if let raw = await callGeminiMultimodalJson(
@@ -2151,7 +2169,8 @@ actor GeminiCoachService {
             }
         }
 
-        if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
+        if allowCloudAI && allowKeylessFallback,
+           let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
            let parsed = Self.parseWeeklyReviewJson(raw, weekKey: report.weekKey, generatedAt: generatedLabel, modelUsed: "improving-live-ai", isLiveAI: true) {
             return parsed
         }
@@ -2234,7 +2253,9 @@ actor GeminiCoachService {
         pageImagesData: [Data],
         extractedPdfText: String,
         apiKey: String,
-        selectedModel: String
+        selectedModel: String,
+        allowCloudAI: Bool = true,
+        allowKeylessFallback: Bool = false
     ) async -> (report: LabReportRecord?, errorMessage: String?) {
         let cleanKey = Self.sanitizeApiKey(apiKey)
         let trimmedText = extractedPdfText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2273,7 +2294,7 @@ actor GeminiCoachService {
             ? "Extrae todos los biomarcadores numéricos reales de estas páginas de analítica de sangre."
             : "Extrae todos los biomarcadores numéricos reales de esta analítica de sangre:\n\n\(String(trimmedText.prefix(12000)))"
 
-        if !cleanKey.isEmpty {
+        if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
             for m in candidates.prefix(4) {
                 if let raw = await callGeminiMultiImageJson(
@@ -2290,7 +2311,9 @@ actor GeminiCoachService {
         }
 
         if !trimmedText.isEmpty {
-            if let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
+            // Never exfiltrate blood test PDF text to 3rd-party keyless proxy unless explicitly enabled!
+            if allowCloudAI && allowKeylessFallback,
+               let raw = await callKeylessCloudOneShot(prompt: userPrompt, sysPrompt: sysPrompt, seed: nextSeed()),
                let parsed = Self.parseLabReportJson(raw, sourceLabel: "Improving Cloud") {
                 return (parsed, nil)
             }
@@ -2445,7 +2468,7 @@ actor GeminiCoachService {
     nonisolated static func parseLabReportFromPlainTextLocally(_ text: String) -> LabReportRecord? {
         let patterns: [(regex: String, name: String, unit: String, rMin: Double, rMax: Double, oMin: Double, oMax: Double, cat: String)] = [
             (#"(?i)glucosa[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Glucosa", "mg/dL", 70, 100, 72, 90, "Metabolismo"),
-            (#"(?i)hba1c|hemoglobina\s+glicosilada[^\d]{0,20}(\d(?:[.,]\d+)?)"#, "HbA1c", "%", 4.0, 5.6, 4.5, 5.3, "Metabolismo"),
+            (#"(?i)(?:hba1c|hemoglobina\s+glicosilada)[^\d]{0,20}(\d(?:[.,]\d+)?)"#, "HbA1c", "%", 4.0, 5.6, 4.5, 5.3, "Metabolismo"),
             (#"(?i)vitamina\s*d[^\d]{0,25}(\d{1,3}(?:[.,]\d+)?)"#, "Vitamina D (25-OH)", "ng/mL", 30, 100, 40, 70, "Vitaminas y Minerales"),
             (#"(?i)ferritina[^\d]{0,20}(\d{1,4}(?:[.,]\d+)?)"#, "Ferritina", "ng/mL", 30, 300, 50, 150, "Vitaminas y Minerales"),
             (#"(?i)colesterol\s+total[^\d]{0,20}(\d{2,3}(?:[.,]\d+)?)"#, "Colesterol total", "mg/dL", 120, 200, 140, 190, "Lípidos"),

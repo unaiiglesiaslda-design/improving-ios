@@ -140,19 +140,66 @@ enum WhoopExportImporter {
         )
     }
 
+    private static func parseTimeRangeMinutes(_ range: String) -> (start: Int, end: Int)? {
+        let parts = range.components(separatedBy: "-")
+        guard parts.count == 2 else { return nil }
+        func toMin(_ s: String) -> Int? {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":")
+            guard t.count == 2, let h = Int(t[0]), let m = Int(t[1]), (0...23).contains(h), (0...59).contains(m) else { return nil }
+            return h * 60 + m
+        }
+        guard let s = toMin(parts[0]), let e = toMin(parts[1]) else { return nil }
+        return (s, e >= s ? e : e + 1440)
+    }
+
+    static func workoutsOverlapOrMatch(_ a: EffortEventItem, _ b: EffortEventItem) -> Bool {
+        if a.id == b.id { return true }
+        if a.title == b.title && a.timeRange == b.timeRange && a.timeRange != "Sesión" && a.timeRange != "Hoy" {
+            return true
+        }
+        if let sa = a.startEpochSec, let sb = b.startEpochSec {
+            let ea = sa + Int64(max(a.durationMin, 1) * 60)
+            let eb = sb + Int64(max(b.durationMin, 1) * 60)
+            let overlap = min(ea, eb) - max(sa, sb)
+            let shorter = min(ea - sa, eb - sb)
+            if overlap >= max(300, shorter / 2) || abs(sa - sb) <= 600 {
+                return true
+            }
+        }
+        if let ra = parseTimeRangeMinutes(a.timeRange), let rb = parseTimeRangeMinutes(b.timeRange) {
+            let overlap = min(ra.end, rb.end) - max(ra.start, rb.start)
+            let shorter = max(min(ra.end - ra.start, rb.end - rb.start), 1)
+            if overlap >= max(5, shorter / 2) || abs(ra.start - rb.start) <= 10 {
+                return true
+            }
+        }
+        return false
+    }
+
     static func mergeDays(existing: [String: RealBiometricDaySummary], imported: [String: RealBiometricDaySummary]) -> [String: RealBiometricDaySummary] {
         var merged = imported
         for (iso, cur) in existing {
             if let imp = merged[iso] {
-                let impHasFreshActivity = imp.activeKcal != nil || !imp.stressSamples5m.isEmpty || !imp.workouts.isEmpty
-                let zones = impHasFreshActivity
+                let impHasFreshActivity = imp.activeKcal != nil || !imp.workouts.isEmpty || imp.hrZoneMinutes.reduce(0, +) > 0
+                let zones = imp.hrZoneMinutes.reduce(0, +) > 0
                     ? imp.hrZoneMinutes
-                    : (cur.hrZoneMinutes.reduce(0, +) > imp.hrZoneMinutes.reduce(0, +) ? cur.hrZoneMinutes : imp.hrZoneMinutes)
+                    : cur.hrZoneMinutes
+                // Time-overlap workout deduplication: prefer richer workout (strength sets/tonnage or real HK workout over auto-detected HR bout)
                 var combinedWorkouts = imp.workouts
-                for w in cur.workouts where !combinedWorkouts.contains(where: { $0.title == w.title && $0.timeRange == w.timeRange }) {
-                    combinedWorkouts.append(w)
+                for w in cur.workouts {
+                    if let dupIdx = combinedWorkouts.firstIndex(where: { workoutsOverlapOrMatch($0, w) }) {
+                        let existingImp = combinedWorkouts[dupIdx]
+                        let curIsRicher = (w.totalSets != nil && existingImp.totalSets == nil)
+                            || (existingImp.title.contains("(FC)") && !w.title.contains("(FC)"))
+                            || (w.avgHrBpm > 0 && existingImp.avgHrBpm == 0)
+                        if curIsRicher {
+                            combinedWorkouts[dupIdx] = w
+                        }
+                    } else {
+                        combinedWorkouts.append(w)
+                    }
                 }
-                // Never downgrade true beat-to-beat RMSSD (from exportar.zip / HealthKit live) to Apple Shortcuts SDNN!
+                // Never downgrade true beat-to-beat RMSSD (from exportar.zip / HealthKit live / WHOOP) to Apple Shortcuts SDNN!
                 let preserveExistingRmssd: Bool = {
                     guard let curHrv = cur.hrvMs, curHrv > 2.0,
                           let curLbl = cur.hrvMethodLabel, curLbl.hasPrefix("RMSSD") else { return false }
@@ -187,6 +234,9 @@ enum WhoopExportImporter {
                 let mergedEnergyPct: Int? = mergedEnergy5m.last.map { Int($0.value.rounded()) }
                     ?? (imp.energyBankPercent ?? cur.energyBankPercent)
 
+                // Preserve richer staged sleep session rather than letting a sparse sync downgrade it
+                let keepCurSleepSession = (cur.sleepSession?.stages.count ?? 0) > (imp.sleepSession?.stages.count ?? 0)
+
                 merged[iso] = RealBiometricDaySummary(
                     dateIso: iso,
                     liveHrBpm: imp.liveHrBpm ?? cur.liveHrBpm,
@@ -206,17 +256,19 @@ enum WhoopExportImporter {
                     awakeMinutes: imp.awakeMinutes ?? cur.awakeMinutes,
                     sleepPct: imp.sleepPct ?? cur.sleepPct,
                     sleepDebtMinutes: imp.sleepDebtMinutes ?? cur.sleepDebtMinutes,
-                    sleepSession: imp.sleepSession ?? cur.sleepSession,
-                    strain21: impHasFreshActivity ? imp.strain21 : (imp.strain21 ?? cur.strain21),
-                    strainPct: impHasFreshActivity ? imp.strainPct : (imp.strainPct ?? cur.strainPct),
-                    recoveryPct: imp.recoveryPct ?? cur.recoveryPct,
+                    sleepSession: keepCurSleepSession ? cur.sleepSession : (imp.sleepSession ?? cur.sleepSession),
+                    strain21: impHasFreshActivity ? (imp.strain21 ?? cur.strain21) : (cur.strain21 ?? imp.strain21),
+                    strainPct: impHasFreshActivity ? (imp.strainPct ?? cur.strainPct) : (cur.strainPct ?? imp.strainPct),
+                    // Keep RMSSD-derived recovery aligned with RMSSD HRV when preserving RMSSD!
+                    recoveryPct: (preserveExistingRmssd && cur.recoveryPct != nil) ? cur.recoveryPct : (imp.recoveryPct ?? cur.recoveryPct),
                     stressScore: mergedStressAvg,
                     energyBankPercent: mergedEnergyPct,
                     stepsCount: imp.stepsCount ?? cur.stepsCount,
                     vo2MaxMlKgMin: imp.vo2MaxMlKgMin ?? cur.vo2MaxMlKgMin,
                     hrRecoveryBpm: imp.hrRecoveryBpm ?? cur.hrRecoveryBpm,
                     glucoseMgDl: imp.glucoseMgDl ?? cur.glucoseMgDl,
-                    activeKcal: impHasFreshActivity ? imp.activeKcal : (imp.activeKcal ?? cur.activeKcal),
+                    // Never wipe existing activeKcal to nil when partial sync lacks calorie samples!
+                    activeKcal: imp.activeKcal ?? cur.activeKcal,
                     daylightMinutes: imp.daylightMinutes ?? cur.daylightMinutes,
                     sleepNoiseOver50Db: imp.sleepNoiseOver50Db ?? cur.sleepNoiseOver50Db,
                     bodyWeightKg: imp.bodyWeightKg ?? cur.bodyWeightKg,
@@ -261,7 +313,10 @@ enum WhoopExportImporter {
             var d = days[iso] ?? RealBiometricDaySummary(dateIso: iso)
             d.recoveryPct = parseNum(cell(r, recCol)).map { Int($0.rounded()) } ?? d.recoveryPct
             d.restingHrBpm = parseNum(cell(r, rhrCol)) ?? d.restingHrBpm
-            d.hrvMs = parseNum(cell(r, hrvCol)) ?? d.hrvMs
+            if let hrv = parseNum(cell(r, hrvCol)) {
+                d.hrvMs = hrv
+                d.hrvMethodLabel = "RMSSD · WHOOP"
+            }
             if let s = parseNum(cell(r, strainCol)) {
                 d.strain21 = s
                 d.strainPct = min(max(Int(((s / 21.0) * 100.0).rounded()), 1), 100)

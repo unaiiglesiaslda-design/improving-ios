@@ -650,13 +650,17 @@ struct LabReportScannerSheet: View {
         let pdfTxt = extractedPdfText
         let key = store.geminiApiKey
         let model = store.selectedGeminiModel
+        let allowCloud = store.cloudAIEnabled
+        let allowKeyless = store.allowKeylessAIFallback
 
         Task {
             let res = await GeminiCoachService.shared.analyzeLabReportWithAI(
                 pageImagesData: jpegs,
                 extractedPdfText: pdfTxt,
                 apiKey: key,
-                selectedModel: model
+                selectedModel: model,
+                allowCloudAI: allowCloud,
+                allowKeylessFallback: allowKeyless
             )
             await MainActor.run {
                 isAnalyzing = false

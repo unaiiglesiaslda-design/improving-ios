@@ -26,6 +26,10 @@ struct DispositivosScreen: View {
     @State private var birthDateDraft: Date = Date()
     @State private var selectedAvatarPhoto: PhotosPickerItem? = nil
     @State private var savingAvatarPhoto: Bool = false
+    @State private var showDeleteAvatarConfirm: Bool = false
+    @State private var showingBackupImporter: Bool = false
+    @State private var exportedBackupURL: URL? = nil
+    @State private var backupStatusToast: (ok: Bool, text: String)? = nil
 
     private var minBirthDate: Date {
         Calendar.current.date(byAdding: .year, value: -95, to: Date()) ?? Date()
@@ -84,9 +88,7 @@ struct DispositivosScreen: View {
                                     }
                                     if profileDraft.profilePhotoPath != nil {
                                         Button("Quitar") {
-                                            ProfilePhotoStorage.deleteSavedPhotos()
-                                            profileDraft.profilePhotoPath = nil
-                                            store.updateProfile(profileDraft)
+                                            showDeleteAvatarConfirm = true
                                         }
                                         .font(ImprovingFont.caption(11))
                                         .foregroundColor(BevelColors.textMuted)
@@ -491,9 +493,62 @@ struct DispositivosScreen: View {
                                 .foregroundColor(BevelColors.greenPrimary)
                         }
 
-                        Text("En modo Auto detecta automáticamente el modelo Gemini activo disponible para tu clave (Gemini 3 / 3.1 Flash) sin errores 404 cuando Google jubila modelos antiguos.")
+                        Text("Tu API Key se guarda cifrada en el Llavero de iOS (Keychain), nunca en texto plano. En modo Auto detecta automáticamente el modelo Gemini activo para tu clave.")
                             .font(ImprovingFont.caption(11))
                             .foregroundColor(BevelColors.textMuted)
+
+                        Divider().background(BevelColors.divider)
+
+                        VStack(alignment: .leading, spacing: 9) {
+                            Text("PRIVACIDAD DE LA IA")
+                                .font(ImprovingFont.microLabel(10.5))
+                                .foregroundColor(BevelColors.skyBlue)
+
+                            Toggle(isOn: Binding(
+                                get: { store.cloudAIEnabled },
+                                set: { store.updateAIPrivacySettings(cloudAIEnabled: $0, allowKeylessFallback: store.allowKeylessAIFallback, redactPII: store.redactPIIFromAI) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Permitir consultas a Gemini en la nube")
+                                        .font(ImprovingFont.body(13))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Desactívalo para usar únicamente el motor 100 % local en tu iPhone.")
+                                        .font(ImprovingFont.caption(10.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                }
+                            }
+                            .tint(BevelColors.emeraldEnd)
+
+                            Toggle(isOn: Binding(
+                                get: { store.redactPIIFromAI },
+                                set: { store.updateAIPrivacySettings(cloudAIEnabled: store.cloudAIEnabled, allowKeylessFallback: store.allowKeylessAIFallback, redactPII: $0) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Anonimizar datos personales (PII)")
+                                        .font(ImprovingFont.body(13))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Oculta tu nombre, fecha de nacimiento, notas del Diario y analíticas antes de enviar contexto a la IA.")
+                                        .font(ImprovingFont.caption(10.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                }
+                            }
+                            .tint(BevelColors.skyBlue)
+
+                            Toggle(isOn: Binding(
+                                get: { store.allowKeylessAIFallback },
+                                set: { store.updateAIPrivacySettings(cloudAIEnabled: store.cloudAIEnabled, allowKeylessFallback: $0, redactPII: store.redactPIIFromAI) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Respaldo externo sin clave (proxy público)")
+                                        .font(ImprovingFont.body(13))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Apagado por defecto por privacidad: solo actívalo si deseas usar un proveedor gratuito de terceros cuando no haya clave Gemini.")
+                                        .font(ImprovingFont.caption(10.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                }
+                            }
+                            .tint(BevelColors.amberStart)
+                        }
                     }
                     .padding(16)
                 }
@@ -806,6 +861,89 @@ struct DispositivosScreen: View {
                     .padding(16)
                 }
                 .padding(.horizontal, 16)
+
+                // Full Backup & Restore Card (.improvingbak — essential for AltStore / SideStore / device migration!)
+                BevelCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "externaldrive.badge.checkmark")
+                                .font(.system(size: 16))
+                                .foregroundColor(BevelColors.skyBlue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("COPIA DE SEGURIDAD COMPLETA (.IMPROVINGBAK)")
+                                    .font(ImprovingFont.microLabel(11))
+                                    .foregroundColor(BevelColors.skyBlue)
+                                Text("Exporta o restaura todo tu historial, comidas, diario, analíticas, rutinas, chats y fotos (sin incluir tu API Key).")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        if let recoveryNotice = store.persistenceRecoveryNotice {
+                            Text(recoveryNotice)
+                                .font(ImprovingFont.caption(11.5))
+                                .foregroundColor(BevelColors.amberStart)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.amberSoftBg))
+                        }
+
+                        HStack(spacing: 10) {
+                            Button {
+                                do {
+                                    let url = try store.exportFullBackupURL()
+                                    exportedBackupURL = url
+                                    backupStatusToast = (true, "✓ Copia lista para guardar en Archivos o iCloud Drive.")
+                                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                } catch {
+                                    backupStatusToast = (false, "Error al generar la copia: \(error.localizedDescription)")
+                                }
+                            } label: {
+                                Label("Generar copia", systemImage: "square.and.arrow.up")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 11)
+                                    .background(Capsule().fill(BevelColors.emeraldEnd))
+                            }
+
+                            Button {
+                                showingBackupImporter = true
+                            } label: {
+                                Label("Restaurar copia", systemImage: "square.and.arrow.down")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.textPrimary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 11)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                                    .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                            }
+                        }
+
+                        if let shareURL = exportedBackupURL {
+                            ShareLink(item: shareURL) {
+                                Label("Guardar / Compartir \(shareURL.lastPathComponent)", systemImage: "folder.badge.plus")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 11)
+                                    .background(Capsule().fill(BevelColors.indigoEnd))
+                            }
+                        }
+
+                        if let toast = backupStatusToast {
+                            Text(toast.text)
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.semibold)
+                                .foregroundColor(toast.ok ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                        }
+                    }
+                    .padding(16)
+                }
+                .padding(.horizontal, 16)
             }
             .padding(.bottom, 120)
         }
@@ -851,6 +989,38 @@ struct DispositivosScreen: View {
             if case .success(let urls) = result {
                 store.importExportFiles(urls: urls)
             }
+        }
+        .fileImporter(
+            isPresented: $showingBackupImporter,
+            allowedContentTypes: [.data, .json],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let first = urls.first {
+                    switch store.restoreFullBackup(from: first) {
+                    case .success(let msg):
+                        backupStatusToast = (true, "✓ \(msg)")
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    case .failure(let err):
+                        backupStatusToast = (false, err.localizedDescription)
+                    }
+                }
+            case .failure(let err):
+                backupStatusToast = (false, err.localizedDescription)
+            }
+        }
+        .confirmationDialog(
+            "¿Quitar tu foto de perfil?",
+            isPresented: $showDeleteAvatarConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Quitar foto", role: .destructive) {
+                ProfilePhotoStorage.deleteSavedPhotos()
+                profileDraft.profilePhotoPath = nil
+                store.updateProfile(profileDraft)
+            }
+            Button("Cancelar", role: .cancel) {}
         }
             .sheet(isPresented: $showShortcutsGuide) {
                 ShortcutsAutomationGuideSheet(

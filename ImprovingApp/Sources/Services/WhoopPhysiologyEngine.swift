@@ -339,6 +339,12 @@ enum WhoopPhysiologyEngine {
         var rawEntries: [(item: LabBiomarkerItem, rawDelta: Double)] = []
         rawEntries.reserveCapacity(biomarkers.count)
 
+        func hasToken(_ text: String, _ token: String) -> Bool {
+            let escaped = NSRegularExpression.escapedPattern(for: token)
+            let pattern = "(?:^|[^a-z0-9])\(escaped)(?:$|[^a-z0-9])"
+            return text.range(of: pattern, options: .regularExpression) != nil
+        }
+
         for item in biomarkers {
             let key = item.name
                 .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
@@ -346,19 +352,22 @@ enum WhoopPhysiologyEngine {
             let cat = item.category
                 .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
 
-            // 1. Clinical longevity weighting (PhenoAge + cardiometabolic core = 1.0, endocrine/vitamins = 0.70, other = 0.45)
-            let isHdl = key.contains("hdl")
+            // 1. Clinical longevity weighting (word-boundary safe so "alt" never matches "alto", "got" never matches "gota", "ade" never matches "adenosina")
+            let isHdl = hasToken(key, "hdl")
             let isVitD = key.contains("vitamina d") || key.contains("25-oh") || key.contains("vitamin d")
-            let isLowerIsBetter = key.contains("pcr") || key.contains("crp") || key.contains("hba1c") ||
-                key.contains("glicosilada") || key.contains("ldl") || key.contains("apob") ||
-                key.contains("lp(a)") || key.contains("triglicer") || key.contains("insulina") ||
-                key.contains("homa") || key.contains("homociste") || key.contains("acido urico") ||
-                key.contains("ggt") || key.contains("alt") || key.contains("gpt") || key.contains("ast") || key.contains("got")
+            let isStrictlyLowerProtective = hasToken(key, "pcr") || hasToken(key, "crp") ||
+                hasToken(key, "ldl") || key.contains("apob") || key.contains("lp(a)") ||
+                key.contains("homociste")
+            let isLowerIsBetter = isStrictlyLowerProtective || key.contains("hba1c") ||
+                key.contains("glicosilada") || key.contains("triglicer") || key.contains("insulina") ||
+                hasToken(key, "homa") || key.contains("acido urico") ||
+                hasToken(key, "ggt") || hasToken(key, "alt") || hasToken(key, "gpt") ||
+                hasToken(key, "ast") || hasToken(key, "got")
 
             let isHighImpact = isLowerIsBetter || isHdl || key.contains("glucosa") || key.contains("glucose") ||
                 key.contains("colesterol") || key.contains("albumina") || key.contains("creatinina") ||
-                key.contains("egfr") || key.contains("filtrado") || key.contains("rdw") || key.contains("ade") ||
-                key.contains("vcm") || key.contains("leucocit") || key.contains("linfocit") ||
+                hasToken(key, "egfr") || key.contains("filtrado") || hasToken(key, "rdw") || hasToken(key, "ade") ||
+                hasToken(key, "vcm") || key.contains("leucocit") || key.contains("linfocit") ||
                 key.contains("fosfatasa alcalina") || cat.contains("metabol") || cat.contains("lipid") || cat.contains("inflam")
 
             let isModerateImpact = isVitD || key.contains("ferritin") || key.contains("b12") ||
@@ -420,9 +429,10 @@ enum WhoopPhysiologyEngine {
                 }
 
             case .low:
-                if isLowerIsBetter && !key.contains("glucosa") && !key.contains("glucose") {
-                    // Low LDL/ApoB/PCR/Triglycerides is protective rather than aging
-                    rawDelta = -0.18 * weight
+                // Only strictly protective atherogenic/inflammatory markers reward below-range lows;
+                // low HbA1c, insulin, uric acid, liver enzymes or glucose are NOT rewarded as youth!
+                if isStrictlyLowerProtective {
+                    rawDelta = -0.14 * weight
                 } else {
                     let sev = outOfRangeSeverity(isHigh: false)
                     let lowBase = isHdl ? 0.56 : 0.46
@@ -433,18 +443,23 @@ enum WhoopPhysiologyEngine {
             rawEntries.append((item, rawDelta))
         }
 
-        let rawSum = rawEntries.reduce(0.0) { $0 + $1.rawDelta }
+        // Prevent panel-size inflation (40 normal markers must not artificially grant a massive youth bonus vs 6 markers)
+        let panelCountNormalizer = rawEntries.count > 8
+            ? pow(8.0 / Double(rawEntries.count), 0.35)
+            : 1.0
+        let normalizedRawSum = rawEntries.reduce(0.0) { $0 + $1.rawDelta } * panelCountNormalizer
         let capNeg = -3.5
         let capPos = 4.5
-        let scale: Double = {
-            if rawSum < capNeg { return abs(capNeg / rawSum) }
-            if rawSum > capPos { return capPos / rawSum }
+        let capScale: Double = {
+            if normalizedRawSum < capNeg { return abs(capNeg / normalizedRawSum) }
+            if normalizedRawSum > capPos { return capPos / normalizedRawSum }
             return 1.0
         }()
+        let finalScale = panelCountNormalizer * capScale
 
         let impacts = rawEntries
             .map { entry -> LabBiomarkerAgeImpact in
-                let scaled = AppleHealthExportImporter.round1(entry.rawDelta * scale)
+                let scaled = AppleHealthExportImporter.round1(entry.rawDelta * finalScale)
                 return LabBiomarkerAgeImpact(
                     id: entry.item.id,
                     biomarker: entry.item,
@@ -453,7 +468,7 @@ enum WhoopPhysiologyEngine {
             }
             .sorted { abs($0.deltaYears) > abs($1.deltaYears) }
 
-        let totalDelta = AppleHealthExportImporter.round1(min(max(rawSum, capNeg), capPos))
+        let totalDelta = AppleHealthExportImporter.round1(min(max(normalizedRawSum, capNeg), capPos))
         return (totalDelta, impacts)
     }
 
@@ -476,11 +491,22 @@ enum WhoopPhysiologyEngine {
 
         var sleepDelta = 0.0
         if let s = meanSleepHours {
-            // Optimal around user's age-specific target; penalties for chronic short sleep or excessive oversleep
-            let deficit = norms.sleepTargetHours - s
-            sleepDelta = deficit >= 0
-                ? min(deficit * 0.85, 2.2)
-                : max(deficit * 0.45, -1.2)
+            // U-shaped clinical sleep-longevity curve:
+            // - Short sleep (< target) ages progressively up to +2.2 yrs
+            // - Optimal restorative window [target .. target + 0.85h] subtracts up to -0.65 yrs
+            // - Chronic excessive oversleep (> target + 0.85h, e.g. >9-10h) penalizes up to +1.4 yrs
+            let target = norms.sleepTargetHours
+            if s < target {
+                sleepDelta = min((target - s) * 0.85, 2.2)
+            } else if s <= target + 0.85 {
+                let extra = s - target
+                // Peaks around target + 0.35h (-0.65 yrs), tapers cleanly toward 0 near target + 0.85h
+                let distFromPeak = abs(extra - 0.35)
+                sleepDelta = min(max(-0.65 + distFromPeak * 0.9, -0.65), -0.15)
+            } else {
+                let oversleep = s - (target + 0.85)
+                sleepDelta = min(max(oversleep * 0.72, 0.05), 1.4)
+            }
         }
 
         var activityDelta = 0.0
@@ -1055,18 +1081,24 @@ enum WhoopPhysiologyEngine {
             zoneTrimp += Double(mins) * zoneWeights[idx] * ageZoneFactor
         }
 
-        // 2. Workout physiological load (uses real workout HR relative to Tanaka HRR, otherwise BMR-normalized kcal)
+        // 2. Workout physiological load (HR TRIMP + mechanical/muscular strength tonnage & sets when logged)
         var workoutLoad = 0.0
         for w in workouts {
+            var baseLoad = 0.0
             if w.avgHrBpm > 0 {
                 let frac = min(max((Double(w.avgHrBpm) - rhrBpm) / hrr, 0.25), 0.98)
                 let rate = frac * 0.64 * exp(b * frac)
-                workoutLoad += Double(w.durationMin) * rate * 1.15
+                baseLoad = Double(w.durationMin) * rate * 1.15
             } else if w.kcal > 0 {
-                workoutLoad += (Double(w.kcal) / max(bmr, 1100.0)) * 165.0
+                baseLoad = (Double(w.kcal) / max(bmr, 1100.0)) * 165.0
             } else {
-                workoutLoad += Double(w.durationMin) * 0.55 * ageZoneFactor
+                baseLoad = Double(w.durationMin) * 0.55 * ageZoneFactor
             }
+            // Add neuromuscular load for logged strength sessions (sets & tonnage) so heavy lifting isn't underestimated!
+            let setsBonus = Double(w.totalSets ?? 0) * 1.6
+            let volBonus = min((w.totalVolumeKg ?? 0) / 420.0, 22.0)
+            let muscularLoad = setsBonus + volBonus
+            workoutLoad += max(baseLoad, muscularLoad) + min(baseLoad, muscularLoad) * 0.35
         }
 
         // 3. Passive daily active energy load (normalized to personal BMR)
@@ -1912,9 +1944,13 @@ enum WhoopPhysiologyEngine {
                 }
             }
 
-            // 2. Synced HealthKit / Shortcuts workouts (mapped physiologically to active muscle groups)
+            // 2. Synced HealthKit / Shortcuts workouts (skip logged strength workouts when explicit setsByDay already accounted for them to avoid 2× fatigue!)
+            let hasExplicitStrengthSets = !(setsByDay[iso]?.isEmpty ?? true)
             if let day = history[iso] {
                 for w in day.workouts {
+                    if hasExplicitStrengthSets && w.categoryLabel == "Fuerza" && (w.totalSets != nil || w.targetMuscles != nil) {
+                        continue
+                    }
                     let mapping = inferMusclesForWorkout(w)
                     let baseStim = max(Double(w.strainPct) * 1.15, Double(w.durationMin) * 0.65)
                     for m in mapping.primary {

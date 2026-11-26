@@ -1974,4 +1974,104 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.hasImportedOrPairedRealData = false
         store.flushPersistenceNow()
     }
+
+    @MainActor
+    func testP0SecurityBackupCorruptionRecoveryPhysiologyAndCoachSafety() throws {
+        // 1. Isolated persistence + rolling .bak recovery on corrupted primary JSON + .improvingbak round-trip
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("improving_p0_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let storeUrl = tmpDir.appendingPathComponent("store.json")
+
+        let store = ImprovingStore(persistenceURL: storeUrl)
+        store.addQuickMeal(title: "Avena con proteína", kcal: 420, protein: 34, carbs: 48, fat: 9)
+        store.flushPersistenceNow()
+        // Second save ensures `.bak` has valid prior snapshot!
+        store.addQuickMeal(title: "Salmón con arroz", kcal: 610, protein: 46, carbs: 55, fat: 20)
+        store.flushPersistenceNow()
+
+        // Full .improvingbak export & restore round-trip
+        let bakArchiveURL = try store.exportFullBackupURL()
+        defer { try? FileManager.default.removeItem(at: bakArchiveURL) }
+        let emptyUrl = tmpDir.appendingPathComponent("restored.json")
+        let restoredStore = ImprovingStore(persistenceURL: emptyUrl)
+        let restoreRes = restoredStore.restoreFullBackup(from: bakArchiveURL)
+        if case .failure(let err) = restoreRes {
+            XCTFail("Backup restore failed: \(err)")
+        }
+        XCTAssertEqual(restoredStore.mealsToday.count, 2)
+
+        // Corrupt primary JSON -> reloading MUST quarantine & recover from `.bak` (never wipe!)
+        try Data("{not valid json!!!".utf8).write(to: storeUrl, options: .atomic)
+        let recoveredStore = ImprovingStore(persistenceURL: storeUrl)
+        XCTAssertNotNil(recoveredStore.persistenceRecoveryNotice)
+        XCTAssertGreaterThanOrEqual(recoveredStore.mealsToday.count, 1)
+
+        // 2. Biological Age U-shaped oversleeping penalty & word-boundary lab matching ("colesterol alto" != "alt")
+        var prof = UserPhysiologyProfile()
+        prof.ageYears = 30
+        prof.birthDateIso = nil
+        let goodSleep = WhoopPhysiologyEngine.computeBiologicalAge(profile: prof, meanRhr: 55, meanHrv: 70, meanSleepHours: 7.9, meanSteps: 9000, vo2Max: 46)
+        let oversleep = WhoopPhysiologyEngine.computeBiologicalAge(profile: prof, meanRhr: 55, meanHrv: 70, meanSleepHours: 10.6, meanSteps: 9000, vo2Max: 46)
+        XCTAssertLessThan(goodSleep.sleepDelta, 0.0)
+        XCTAssertGreaterThan(oversleep.sleepDelta, 0.5)
+
+        let lowHbA1c = LabBiomarkerItem(id: "h1", name: "HbA1c", value: 3.4, unit: "%", refMin: 4.0, refMax: 5.6, optimalMin: 4.5, optimalMax: 5.2, status: .low, category: "Metabolismo")
+        let labEval = WhoopPhysiologyEngine.computeBloodLabsAgeImpact(biomarkers: [lowHbA1c])
+        XCTAssertGreaterThan(labEval.totalDelta, 0.0) // Low HbA1c must NOT be rewarded as youth!
+
+        // 3. Local HbA1c PDF regex now extracts "HbA1c 5.2%" properly
+        let pdfParsed = GeminiCoachService.parseLabReportFromPlainTextLocally("Glucosa 84 mg/dL\nHbA1c 5.2%\nVitamina D 48 ng/mL")
+        XCTAssertNotNil(pdfParsed)
+        XCTAssertTrue(pdfParsed?.biomarkers.contains(where: { $0.name == "HbA1c" && abs($0.value - 5.2) < 0.05 }) == true)
+
+        // 4. Apple Health XML overlapping Watch + iPhone sources do NOT double-count Steps or Active Calories!
+        let xml = """
+        <HealthData>
+          <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Apple Watch de Aitor" unit="count" startDate="2026-11-20 09:00:00 +0100" endDate="2026-11-20 10:00:00 +0100" value="6000"/>
+          <Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone de Aitor" unit="count" startDate="2026-11-20 09:00:00 +0100" endDate="2026-11-20 10:00:00 +0100" value="5800"/>
+          <Record type="HKQuantityTypeIdentifierActiveEnergyBurned" sourceName="Apple Watch de Aitor" unit="kcal" startDate="2026-11-20 09:00:00 +0100" endDate="2026-11-20 10:00:00 +0100" value="420"/>
+          <Record type="HKQuantityTypeIdentifierActiveEnergyBurned" sourceName="Strava" unit="kcal" startDate="2026-11-20 09:00:00 +0100" endDate="2026-11-20 10:00:00 +0100" value="410"/>
+        </HealthData>
+        """
+        let xmlUrl = tmpDir.appendingPathComponent("export.xml")
+        try Data(xml.utf8).write(to: xmlUrl)
+        let res = AppleHealthExportImporter.importURLs([xmlUrl], profile: prof)
+        XCTAssertEqual(res.days["2026-11-20"]?.stepsCount, 6000)
+        XCTAssertEqual(res.days["2026-11-20"]?.activeKcal, 420)
+
+        // 5. mergeDays never wipes activeKcal on partial sync & keeps RMSSD + RMSSD recovery consistent
+        let existingDay = RealBiometricDaySummary(dateIso: "2026-11-20", hrvMs: 74, hrvMethodLabel: "RMSSD · Apple Health", recoveryPct: 82, activeKcal: 510)
+        let partialSync = RealBiometricDaySummary(dateIso: "2026-11-20", hrvMs: 48, hrvMethodLabel: "SDNN · Atajos", recoveryPct: 41, stressSamples5m: [TimedBiometricPoint(minuteOfDay: 600, value: 25)])
+        let merged = WhoopExportImporter.mergeDays(existing: ["2026-11-20": existingDay], imported: ["2026-11-20": partialSync])
+        XCTAssertEqual(merged["2026-11-20"]?.activeKcal, 510)
+        XCTAssertEqual(merged["2026-11-20"]?.hrvMs, 74)
+        XCTAssertEqual(merged["2026-11-20"]?.recoveryPct, 82)
+
+        // 6. Coach tool safety: delete workout without ID/title refused; invalid date rejected; PII redaction works
+        let wk = EffortEventItem(id: "w1", title: "Carrera 8K", timeRange: "08:00 - 08:40", durationMin: 40, avgHrBpm: 155, strainScore: 12, strainPct: 58, categoryLabel: "Cardio", kcal: 420, dateIso: store.selectedDateIso)
+        store.updateWorkout(wk, originalDateIso: store.selectedDateIso)
+        let badDel = store.executeCoachToolCall(name: "edit_or_delete_workout", argsJson: #"{"delete":true}"#)
+        XCTAssertTrue(badDel.responseJson.contains("\"ok\":false"))
+        XCTAssertEqual(store.workoutsToday.count, 1)
+
+        let badDate = store.executeCoachToolCall(name: "log_meal", argsJson: #"{"title":"Test","kcal":200,"date_iso":"2026-13-45"}"#)
+        XCTAssertTrue(badDate.responseJson.contains("\"ok\":false"))
+
+        store.redactPIIFromAI = true
+        let redactedCtx = store.buildBiometricContextJson()
+        XCTAssertFalse(redactedCtx.json.contains("nombre_completo"))
+        XCTAssertFalse(redactedCtx.json.contains("fecha_nacimiento"))
+        XCTAssertFalse(store.allowKeylessAIFallback)
+
+        // 7. Manual strength session recalculates daily Strain & does NOT double-count muscular fatigue
+        let strengthStore = ImprovingStore(persistenceURL: tmpDir.appendingPathComponent("strength.json"))
+        let sets = [
+            StrengthLoggedSet(id: "s1", dateIso: strengthStore.selectedDateIso, exercise: "Press banca", reps: 8, weightKg: 80, primaryMuscles: [.pectorales], secondaryMuscles: [.triceps], completed: true),
+            StrengthLoggedSet(id: "s2", dateIso: strengthStore.selectedDateIso, exercise: "Press banca", reps: 8, weightKg: 80, primaryMuscles: [.pectorales], secondaryMuscles: [.triceps], completed: true)
+        ]
+        strengthStore.logCompletedStrengthSession(title: "Pecho Fuerza", durationMin: 45, kcal: 280, sets: sets)
+        XCTAssertNotNil(strengthStore.realHistory[strengthStore.selectedDateIso]?.strainPct)
+        XCTAssertGreaterThan(strengthStore.realHistory[strengthStore.selectedDateIso]?.strainPct ?? 0, 0)
+    }
 }

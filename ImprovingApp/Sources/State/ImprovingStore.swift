@@ -25,7 +25,11 @@ enum SyncBannerState: Equatable {
 @MainActor
 final class ImprovingStore: ObservableObject {
 
+    static let currentSchemaVersion = 4
+    private static let geminiKeychainAccount = "gemini_api_key_v1"
+
     private struct PersistedSnapshot: Codable {
+        var schemaVersion: Int?
         var userProfile: UserPhysiologyProfile
         var isDarkMode: Bool
         var hasImportedOrPairedRealData: Bool
@@ -60,6 +64,9 @@ final class ImprovingStore: ObservableObject {
         var activeCoachThreadId: String?
         var labReports: [LabReportRecord]?
         var weeklyAiInsightsCache: [String: WeeklyAiReviewInsight]?
+        var cloudAIEnabled: Bool?
+        var allowKeylessAIFallback: Bool?
+        var redactPIIFromAI: Bool?
     }
 
     @Published var userProfile: UserPhysiologyProfile = {
@@ -122,6 +129,7 @@ final class ImprovingStore: ObservableObject {
     @Published var shortcutSyncName: String = "Sync Improving"
     @Published var autoRunShortcutOnOpen: Bool = false
     private var processedAutoSyncSignatures: Set<String> = []
+    private var processedAutoSyncSignaturesOrder: [String] = []
     private var lastShortcutTriggerAt: Date? = nil
     private var awaitingShortcutCallback: Bool = false
     private var lastIngestedPayloadHash: Int? = nil
@@ -139,11 +147,18 @@ final class ImprovingStore: ObservableObject {
     @Published var importStatus: ExportImportStatus = ExportImportStatus()
     @Published var geminiApiKey: String = ""
     @Published var selectedGeminiModel: String = "auto"
+    @Published var cloudAIEnabled: Bool = true
+    @Published var allowKeylessAIFallback: Bool = false
+    @Published var redactPIIFromAI: Bool = false
+    @Published var persistenceRecoveryNotice: String? = nil
     @Published var coachMessages: [CoachChatMessage] = []
     @Published var coachThreads: [CoachChatThread] = []
     @Published var activeCoachThreadId: String? = nil
     @Published var isCoachThinking: Bool = false
+    @Published var lastCoachErrorMessage: String? = nil
     private var activeCoachInteractionId: String? = nil
+    private var coachReplyTask: Task<Void, Never>? = nil
+    private var sectionCoachingTimestamps: [String: TimeInterval] = [:]
 
     // Background debounced persistence queue (zero main-thread JSON serialization jank!)
     private let persistenceQueue = DispatchQueue(label: "com.improving.persist.queue", qos: .utility)
@@ -174,14 +189,21 @@ final class ImprovingStore: ObservableObject {
         return f
     }()
 
+    private let customPersistenceURL: URL?
+
     private var persistenceURL: URL {
+        if let custom = customPersistenceURL {
+            try? FileManager.default.createDirectory(at: custom.deletingLastPathComponent(), withIntermediateDirectories: true)
+            return custom
+        }
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("improving_store_v3.json")
     }
 
-    init() {
+    init(persistenceURL: URL? = nil) {
+        self.customPersistenceURL = persistenceURL
         loadPersistedState()
         if !hasImportedOrPairedRealData && simulatedHistory.isEmpty {
             simulatedHistory = WhoopPhysiologyEngine.generateTwoYearSimulatedHistory(profile: userProfile)
@@ -493,15 +515,26 @@ final class ImprovingStore: ObservableObject {
         )
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
-        let endStr = nowFmt.string(from: Date())
-        let startStr = nowFmt.string(from: Date().addingTimeInterval(-Double(max(durationMin, 5) * 60)))
+        let cal = Calendar.current
+        let now = Date()
+        let timeComp = cal.dateComponents([.hour, .minute], from: now)
+        let selectedEndDate = cal.date(
+            bySettingHour: timeComp.hour ?? 12,
+            minute: timeComp.minute ?? 0,
+            second: 0,
+            of: selectedDate
+        ) ?? selectedDate
+        let clampedDuration = max(durationMin, 5)
+        let selectedStartDate = selectedEndDate.addingTimeInterval(-Double(clampedDuration * 60))
+        let endStr = nowFmt.string(from: selectedEndDate)
+        let startStr = nowFmt.string(from: selectedStartDate)
 
-        var d = currentDaySummary ?? RealBiometricDaySummary(dateIso: selectedDateIso)
+        var d = realHistory[selectedDateIso] ?? currentDaySummary ?? RealBiometricDaySummary(dateIso: selectedDateIso)
         let ev = EffortEventItem(
             id: UUID().uuidString,
             title: title,
             timeRange: "\(startStr) - \(endStr)",
-            durationMin: max(durationMin, 5),
+            durationMin: clampedDuration,
             avgHrBpm: 0,
             strainScore: ws.strain21,
             strainPct: ws.strainPct,
@@ -510,16 +543,28 @@ final class ImprovingStore: ObservableObject {
             distanceKm: nil,
             elevationM: nil,
             dateIso: selectedDateIso,
-            startEpochSec: Int64(Date().timeIntervalSince1970) - Int64(max(durationMin, 5) * 60),
+            startEpochSec: Int64(selectedStartDate.timeIntervalSince1970),
             totalSets: totalSets > 0 ? totalSets : nil,
             totalVolumeKg: totalVol > 0 ? AppleHealthExportImporter.round1(totalVol) : nil,
             targetMuscles: muscleNames.isEmpty ? nil : muscleNames
         )
         d.workouts.insert(ev, at: 0)
-        d.strengthMinutes += max(durationMin, 5)
-        if hasImportedOrPairedRealData {
-            realHistory[selectedDateIso] = d
-        } else {
+        d.strengthMinutes += clampedDuration
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let rhrRef = d.restingHrBpm ?? norms.restingHrExpected
+        if let st = WhoopPhysiologyEngine.computeBevelStrain(
+            profile: userProfile,
+            rhrBpm: rhrRef,
+            hrZoneMinutes: d.hrZoneMinutes,
+            workouts: d.workouts,
+            activeKcal: d.activeKcal.map { Double($0) }
+        ) {
+            d.strain21 = st.strain21
+            d.strainPct = st.strainPct
+        }
+        // Always persist real user-logged workouts in realHistory so they survive restart & first wearable sync!
+        realHistory[selectedDateIso] = d
+        if !hasImportedOrPairedRealData {
             simulatedHistory[selectedDateIso] = d
         }
         dataRevision += 1
@@ -1120,7 +1165,9 @@ final class ImprovingStore: ObservableObject {
         let prevHead = lastHeadlineBySection[section] ?? sectionCoachingCache[key]?.headline
         let apiKey = geminiApiKey
         let model = selectedGeminiModel
-        let userName = userProfile.userName
+        let allowCloud = cloudAIEnabled
+        let allowKeyless = allowKeylessAIFallback
+        let userName = redactPIIFromAI ? "Usuario" : userProfile.userName
         let selIso = selectedDateIso
         let isToday = dayOffset == 0
 
@@ -1140,17 +1187,26 @@ final class ImprovingStore: ObservableObject {
                 generatedAtLabel: info.generatedAtLabel,
                 nextUpdateLabel: info.nextUpdateLabel,
                 apiKey: apiKey,
-                selectedModel: model
+                selectedModel: model,
+                allowCloudAI: allowCloud,
+                allowKeylessFallback: allowKeyless
             )
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
                 self.sectionCoachingCache[key] = card
+                self.sectionCoachingTimestamps[key] = Date().timeIntervalSince1970
                 self.lastHeadlineBySection[section] = card.headline
                 self.loadingCoachingSections.remove(section)
-                // Keep cache bounded to latest 35 entries
+                // Evict oldest entries by real LRU timestamp (never alphabetical, which previously evicted energia/esfuerzo!)
                 if self.sectionCoachingCache.count > 35 {
-                    let dropKeys = self.sectionCoachingCache.keys.sorted().prefix(self.sectionCoachingCache.count - 35)
-                    for k in dropKeys { self.sectionCoachingCache.removeValue(forKey: k) }
+                    let dropCount = self.sectionCoachingCache.count - 35
+                    let oldestKeys = self.sectionCoachingCache.keys.sorted { lhs, rhs in
+                        (self.sectionCoachingTimestamps[lhs] ?? 0) < (self.sectionCoachingTimestamps[rhs] ?? 0)
+                    }.prefix(dropCount)
+                    for k in oldestKeys {
+                        self.sectionCoachingCache.removeValue(forKey: k)
+                        self.sectionCoachingTimestamps.removeValue(forKey: k)
+                    }
                 }
                 self.persistState()
             }
@@ -2353,21 +2409,38 @@ final class ImprovingStore: ObservableObject {
             list.insert(meal, at: 0)
         }
         mealsByDate[iso] = list
-        sectionCoachingCache.removeAll()
+        invalidateSectionCoachingCache(sections: [.hoy, .energia])
         dataRevision += 1
         persistState()
     }
 
-    func deleteMeal(id: String, for dateIso: String? = nil) {
+    func invalidateSectionCoachingCache(sections: [CoachingSection]) {
+        let prefixes = sections.map { "\($0.rawValue)_" }
+        for k in Array(sectionCoachingCache.keys) {
+            if prefixes.contains(where: { k.hasPrefix($0) }) {
+                sectionCoachingCache.removeValue(forKey: k)
+                sectionCoachingTimestamps.removeValue(forKey: k)
+            }
+        }
+    }
+
+    func deleteMeal(id: String, for dateIso: String? = nil, deletePhotoFromDisk: Bool = true) {
         let iso = dateIso ?? selectedDateIso
         guard var list = mealsByDate[iso] else { return }
+        if deletePhotoFromDisk {
+            for m in list where m.id == id {
+                if let fname = m.photoFilename, !fname.isEmpty {
+                    MealPhotoStorage.deletePhoto(filename: fname)
+                }
+            }
+        }
         list.removeAll { $0.id == id }
         if list.isEmpty {
             mealsByDate.removeValue(forKey: iso)
         } else {
             mealsByDate[iso] = list
         }
-        sectionCoachingCache.removeAll()
+        invalidateSectionCoachingCache(sections: [.hoy, .energia])
         dataRevision += 1
         persistState()
     }
@@ -2504,13 +2577,12 @@ final class ImprovingStore: ObservableObject {
             d.strainPct = st.strainPct
         }
 
-        if hasImportedOrPairedRealData {
-            realHistory[targetIso] = d
-        } else {
+        realHistory[targetIso] = d
+        if !hasImportedOrPairedRealData {
             simulatedHistory[targetIso] = d
         }
         selectedWorkoutItem = recalc
-        sectionCoachingCache.removeAll()
+        invalidateSectionCoachingCache(sections: [.hoy, .esfuerzo, .fitness, .energia])
         dataRevision += 1
         persistState()
     }
@@ -2537,15 +2609,14 @@ final class ImprovingStore: ObservableObject {
             d.strainPct = nil
         }
 
-        if hasImportedOrPairedRealData {
-            realHistory[targetIso] = d
-        } else {
+        realHistory[targetIso] = d
+        if !hasImportedOrPairedRealData {
             simulatedHistory[targetIso] = d
         }
         if selectedWorkoutItem?.id == id {
             selectedWorkoutItem = nil
         }
-        sectionCoachingCache.removeAll()
+        invalidateSectionCoachingCache(sections: [.hoy, .esfuerzo, .fitness, .energia])
         dataRevision += 1
         persistState()
     }
@@ -2580,26 +2651,47 @@ final class ImprovingStore: ObservableObject {
     }
 
     func addEffortEvent(title: String, durationMin: Int, kcal: Int) {
-        var d = currentDaySummary ?? RealBiometricDaySummary(dateIso: selectedDateIso)
-        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: durationMin, kcal: kcal, avgHrBpm: 0)
+        var d = realHistory[selectedDateIso] ?? currentDaySummary ?? RealBiometricDaySummary(dateIso: selectedDateIso)
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let rhrRef = d.restingHrBpm ?? norms.restingHrExpected
+        let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
+            durationMin: max(durationMin, 1),
+            kcal: max(kcal, 0),
+            avgHrBpm: 0,
+            rhrBpm: rhrRef,
+            maxHrBpm: Double(norms.maxHrBpm),
+            banisterB: userProfile.sex.banisterB
+        )
+        let startEp = Int64(selectedDate.timeIntervalSince1970) - Int64(max(durationMin, 1) * 60)
         let ev = EffortEventItem(
             id: UUID().uuidString,
             title: title,
             timeRange: "Hoy",
-            durationMin: durationMin,
+            durationMin: max(durationMin, 1),
             avgHrBpm: 0,
             strainScore: ws.strain21,
             strainPct: ws.strainPct,
             categoryLabel: "Actividad",
-            kcal: kcal,
-            dateIso: selectedDateIso
+            kcal: max(kcal, 0),
+            dateIso: selectedDateIso,
+            startEpochSec: startEp
         )
         d.workouts.insert(ev, at: 0)
-        if hasImportedOrPairedRealData {
-            realHistory[selectedDateIso] = d
-        } else {
+        if let st = WhoopPhysiologyEngine.computeBevelStrain(
+            profile: userProfile,
+            rhrBpm: rhrRef,
+            hrZoneMinutes: d.hrZoneMinutes,
+            workouts: d.workouts,
+            activeKcal: d.activeKcal.map { Double($0) }
+        ) {
+            d.strain21 = st.strain21
+            d.strainPct = st.strainPct
+        }
+        realHistory[selectedDateIso] = d
+        if !hasImportedOrPairedRealData {
             simulatedHistory[selectedDateIso] = d
         }
+        invalidateSectionCoachingCache(sections: [.hoy, .esfuerzo, .fitness])
         dataRevision += 1
         persistState()
     }
@@ -3349,9 +3441,7 @@ final class ImprovingStore: ObservableObject {
 
             var workoutSpans: [ClosedRange<Int64>] = []
             if !snap.workouts.isEmpty {
-                var strengthMins = 0
-                d.workouts = snap.workouts.map { w in
-                    if w.isStrength { strengthMins += w.durationMinutes }
+                let importedWorkouts: [EffortEventItem] = snap.workouts.map { w in
                     let sEp = Int64(w.startDate.timeIntervalSince1970)
                     let eEp = max(Int64(w.endDate.timeIntervalSince1970), sEp + Int64(w.durationMinutes * 60))
                     workoutSpans.append(sEp...eEp)
@@ -3373,10 +3463,26 @@ final class ImprovingStore: ObservableObject {
                         strainPct: ws.strainPct,
                         categoryLabel: w.isStrength ? "Fuerza" : "Cardio",
                         kcal: w.activeCalories,
-                        dateIso: iso
+                        dateIso: iso,
+                        startEpochSec: sEp
                     )
                 }
-                d.strengthMinutes = strengthMins
+                // Merge HealthKit workouts while preserving manual strength sessions & AI-logged workouts!
+                var mergedWorkouts = importedWorkouts
+                for existingW in d.workouts {
+                    if let dupIdx = mergedWorkouts.firstIndex(where: { WhoopExportImporter.workoutsOverlapOrMatch($0, existingW) }) {
+                        if existingW.totalSets != nil && mergedWorkouts[dupIdx].totalSets == nil {
+                            mergedWorkouts[dupIdx] = existingW
+                        }
+                    } else {
+                        mergedWorkouts.append(existingW)
+                        if let sEp = existingW.startEpochSec {
+                            workoutSpans.append(sEp...(sEp + Int64(max(existingW.durationMin, 1) * 60)))
+                        }
+                    }
+                }
+                d.workouts = mergedWorkouts
+                d.strengthMinutes = mergedWorkouts.filter { $0.categoryLabel == "Fuerza" }.reduce(0) { $0 + $1.durationMin }
                 hasReal = true
             }
 
@@ -3590,7 +3696,7 @@ final class ImprovingStore: ObservableObject {
 
     // MARK: - AI Coach Context & Multi-Turn Chat
 
-    private func buildBiometricContextJson() -> (json: String, highlights: [String]) {
+    func buildBiometricContextJson() -> (json: String, highlights: [String]) {
         let av = dataAvailability
         let d = currentDaySummary
         var highlights: [String] = []
@@ -3633,7 +3739,18 @@ final class ImprovingStore: ObservableObject {
         }()
 
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
-        let perfil: [String: Any] = [
+        let perfil: [String: Any] = redactPIIFromAI ? [
+            "nombre": "Usuario",
+            "edad": Int(userProfile.effectiveAgeYears.rounded(.down)),
+            "sexo": userProfile.sex.rawValue,
+            "peso_kg": latestBodyWeightKg ?? userProfile.weightKg,
+            "altura_cm": userProfile.heightCm,
+            "imc": norms.bmi,
+            "fc_max_tanaka": norms.maxHrBpm,
+            "vfc_esperada_ms": norms.hrvExpectedMs,
+            "meta_sueno_h": norms.sleepTargetHours,
+            "meta_hidratacion_l": norms.hydrationGoalLiters
+        ] : [
             "nombre": userProfile.displayFirstName.isEmpty ? "Usuario" : userProfile.displayFirstName,
             "nombre_completo": userProfile.fullName.isEmpty ? "Usuario" : userProfile.fullName,
             "fecha_nacimiento": userProfile.birthDateIso ?? "NO_INDICADA",
@@ -3687,8 +3804,8 @@ final class ImprovingStore: ObservableObject {
             "marcados_no": noHabits,
             "horarios_habitos_hoy": dayHabitTimes,
             "estado_animo_1_a_5": journalMoodByDate[selectedDateIso].map { $0 as Any } ?? "NO_REGISTRADO",
-            "nota_del_dia": noteToday.isEmpty ? "SIN_NOTA" : noteToday,
-            "notas_recientes_7d": recentNotes,
+            "nota_del_dia": redactPIIFromAI ? "OMITIDA_POR_PRIVACIDAD" : (noteToday.isEmpty ? "SIN_NOTA" : noteToday),
+            "notas_recientes_7d": redactPIIFromAI ? [:] : recentNotes,
             "habitos_disponibles": habitCatalogForAi
         ]
 
@@ -3773,11 +3890,12 @@ final class ImprovingStore: ObservableObject {
             "diario_hoy": diarioHoy,
             "nutricion_hoy": nutricionHoy
         ]
-        if !latestLabsSummary.isEmpty {
+        if !redactPIIFromAI && !latestLabsSummary.isEmpty {
             payload["analiticas_recientes"] = latestLabsSummary
         }
 
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]),
+        // Compact JSON (no .prettyPrinted) cuts Gemini input tokens by ~25-35%!
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
            let str = String(data: data, encoding: .utf8) {
             return (str, highlights)
         }
@@ -3885,19 +4003,24 @@ final class ImprovingStore: ObservableObject {
         coachMessages.append(userMsg)
         syncCurrentChatIntoThreads(updatedAtLabel: tsLabel)
         isCoachThinking = true
+        lastCoachErrorMessage = nil
 
         let ctx = buildBiometricContextJson()
         let key = geminiApiKey
         let model = selectedGeminiModel
-        let userName = userProfile.userName
+        let allowCloud = cloudAIEnabled
+        let allowKeyless = allowKeylessAIFallback
+        let userName = redactPIIFromAI ? "Usuario" : userProfile.userName
         let missing = dataAvailability.missingCategoryNames
         let prevId = activeCoachInteractionId
+        let originThreadId = activeCoachThreadId
 
-        Task { [weak self] in
+        coachReplyTask?.cancel()
+        coachReplyTask = Task { [weak self] in
             let executor: @Sendable (String, String) async -> (responseJson: String, appliedAction: CoachAppliedAction?) = { toolName, argsJson in
                 await MainActor.run {
-                    guard let self else {
-                        return ("{\"ok\":false,\"error\":\"store_unavailable\"}", nil)
+                    guard let self, self.activeCoachThreadId == originThreadId else {
+                        return ("{\"ok\":false,\"error\":\"thread_changed\"}", nil)
                     }
                     return self.executeCoachToolCall(
                         name: toolName,
@@ -3918,17 +4041,24 @@ final class ImprovingStore: ObservableObject {
                 history: historySnap,
                 previousInteractionId: prevId,
                 jpegImageData: jpegImageData,
+                allowCloudAI: allowCloud,
+                allowKeylessFallback: allowKeyless,
                 actionExecutor: executor
             )
             await MainActor.run {
-                guard let self else { return }
+                guard let self, !Task.isCancelled else { return }
+                // Prevent cross-thread injection if the user switched threads mid-request!
+                guard self.activeCoachThreadId == originThreadId else { return }
                 self.isCoachThinking = false
+                if !result.usedLiveCloud && allowCloud && !key.isEmpty {
+                    self.lastCoachErrorMessage = "No se pudo conectar con Gemini en vivo. Respuesta local mostrada."
+                }
                 if let newId = result.interactionId {
                     self.activeCoachInteractionId = newId
                 }
                 if !result.appliedActions.isEmpty {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    self.publishWidgetSnapshot(triggerReload: true, forceReload: true)
+                    self.publishWidgetSnapshot(triggerReload: true, forceReload: false)
                 }
                 let replyFmt = DateFormatter()
                 replyFmt.dateFormat = "HH:mm"
@@ -3951,9 +4081,15 @@ final class ImprovingStore: ObservableObject {
         }
     }
 
+    func cancelCoachReply() {
+        coachReplyTask?.cancel()
+        coachReplyTask = nil
+        isCoachThinking = false
+    }
+
     // MARK: - Agentic AI Tool Executor & 1-Tap Undo Engine
 
-    private func resolveCoachDateIso(_ raw: String?) -> String {
+    private func parseStrictCoachDateIso(_ raw: String?) -> String? {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return selectedDateIso
         }
@@ -3965,10 +4101,22 @@ final class ImprovingStore: ObservableObject {
             let y = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
             return isoFormatter.string(from: y)
         }
-        if isoFormatter.date(from: raw) != nil {
+        if low == "mañana" || low == "manana" || low == "tomorrow" {
+            let t = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+            return isoFormatter.string(from: t)
+        }
+        // Strictly validate yyyy-MM-dd format (reject invalid dates like 2026-13-45 or 23/11/2026!)
+        let parts = raw.split(separator: "-")
+        if parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+           let dt = isoFormatter.date(from: raw),
+           isoFormatter.string(from: dt) == raw {
             return raw
         }
-        return selectedDateIso
+        return nil
+    }
+
+    private func resolveCoachDateIso(_ raw: String?) -> String {
+        parseStrictCoachDateIso(raw) ?? selectedDateIso
     }
 
     private func normalizeCoachHHmm(_ raw: String?) -> String? {
@@ -4043,28 +4191,30 @@ final class ImprovingStore: ObservableObject {
 
         switch name {
         case "log_meal":
+            guard let dateIso = parseStrictCoachDateIso(str("date_iso")) else {
+                return (encodeToolResponse(["ok": false, "error": "Fecha inválida. Usa formato yyyy-MM-dd, 'hoy' o 'ayer'."]), nil)
+            }
             let title = str("title") ?? "Comida"
             let kcal = max(0, intVal("kcal") ?? 0)
             let p = max(0, intVal("protein_g") ?? 0)
             let c = max(0, intVal("carbs_g") ?? 0)
             let f = max(0, intVal("fat_g") ?? 0)
-            let dateIso = resolveCoachDateIso(str("date_iso"))
             let timeLabel = normalizeCoachHHmm(str("time_hhmm")) ?? nowHHmm()
             let quality = min(max(intVal("quality_score") ?? 78, 1), 100)
             let emoji = (str("emoji").flatMap { $0.isEmpty ? nil : String($0.prefix(2)) }) ?? "🍽️"
 
             let qFactors = NutritionQualityFactors(
-                wholeGrains: dblVal("whole_grains") ?? 0,
-                excessSugar: dblVal("excess_sugar") ?? 0,
-                excessSodium: dblVal("excess_sodium") ?? 0,
-                vegetables: dblVal("vegetables") ?? 0,
-                healthyFats: dblVal("healthy_fats") ?? 0,
-                fruit: dblVal("fruit") ?? 0,
-                nutsLegumes: dblVal("nuts_legumes") ?? 0,
-                omega3: dblVal("omega3") ?? 0,
-                redMeat: dblVal("red_meat") ?? 0,
-                processedMeat: dblVal("processed_meat") ?? 0,
-                alcohol: dblVal("alcohol_factor") ?? 0
+                wholeGrains: abs(dblVal("whole_grains") ?? 0),
+                excessSugar: -abs(dblVal("excess_sugar") ?? 0),
+                excessSodium: -abs(dblVal("excess_sodium") ?? 0),
+                vegetables: abs(dblVal("vegetables") ?? 0),
+                healthyFats: abs(dblVal("healthy_fats") ?? 0),
+                fruit: abs(dblVal("fruit") ?? 0),
+                nutsLegumes: abs(dblVal("nuts_legumes") ?? 0),
+                omega3: abs(dblVal("omega3") ?? 0),
+                redMeat: -abs(dblVal("red_meat") ?? 0),
+                processedMeat: -abs(dblVal("processed_meat") ?? 0),
+                alcohol: -abs(dblVal("alcohol_factor") ?? 0)
             )
 
             let meal = NutritionMealItem(
@@ -4096,17 +4246,25 @@ final class ImprovingStore: ObservableObject {
             return (encodeToolResponse(["ok": true, "meal_id": meal.id, "date_iso": dateIso, "time": timeLabel, "kcal": kcal]), action)
 
         case "edit_meal":
-            let preferredDate = resolveCoachDateIso(str("source_date_iso"))
+            let rawSourceDate = str("source_date_iso")
+            guard let preferredDate = parseStrictCoachDateIso(rawSourceDate) else {
+                return (encodeToolResponse(["ok": false, "error": "Fecha de origen inválida. Usa yyyy-MM-dd."]), nil)
+            }
             let mealId = str("meal_id")
             let matchTitle = str("match_title").map(fold)
+            guard (mealId != nil && !mealId!.isEmpty) || (matchTitle != nil && matchTitle!.count >= 2) else {
+                return (encodeToolResponse(["ok": false, "error": "Indica el ID o el nombre de la comida a editar."]), nil)
+            }
 
-            // Search preferred date first, then recent days if not found
+            // If a specific date was given, search ONLY that date (never silently edit a meal from days ago!)
             var candidateDates = [preferredDate]
-            let cal = Calendar.current
-            for back in 0..<7 {
-                if let dt = cal.date(byAdding: .day, value: -back, to: Date()) {
-                    let iso = isoFormatter.string(from: dt)
-                    if !candidateDates.contains(iso) { candidateDates.append(iso) }
+            if rawSourceDate == nil || rawSourceDate!.isEmpty {
+                let cal = Calendar.current
+                for back in 0..<2 {
+                    if let dt = cal.date(byAdding: .day, value: -back, to: Date()) {
+                        let iso = isoFormatter.string(from: dt)
+                        if !candidateDates.contains(iso) { candidateDates.append(iso) }
+                    }
                 }
             }
 
@@ -4117,12 +4275,17 @@ final class ImprovingStore: ObservableObject {
                 if let id = mealId, !id.isEmpty, let m = list.first(where: { $0.id == id }) {
                     foundDate = iso; foundMeal = m; break
                 }
-                if let mt = matchTitle, !mt.isEmpty, let m = list.first(where: { fold($0.title).contains(mt) || mt.contains(fold($0.title)) }) {
-                    foundDate = iso; foundMeal = m; break
+                if let mt = matchTitle, !mt.isEmpty {
+                    if let exact = list.first(where: { fold($0.title) == mt }) {
+                        foundDate = iso; foundMeal = exact; break
+                    }
+                    if let partial = list.first(where: { fold($0.title).contains(mt) }) {
+                        foundDate = iso; foundMeal = partial; break
+                    }
                 }
             }
             guard let oldDate = foundDate, let original = foundMeal else {
-                return (encodeToolResponse(["ok": false, "error": "No encontré esa comida registrada."]), nil)
+                return (encodeToolResponse(["ok": false, "error": "No encontré esa comida registrada en \(preferredDate)."]), nil)
             }
 
             var edited = original
@@ -4134,9 +4297,17 @@ final class ImprovingStore: ObservableObject {
             if let f = intVal("fat_g") { edited.fatG = max(0, f) }
             if let q = intVal("quality_score") { edited.qualityScore = min(max(q, 1), 100) }
 
-            let targetDate = str("new_date_iso").map { resolveCoachDateIso($0) } ?? oldDate
+            let targetDate: String
+            if let rawNewDate = str("new_date_iso"), !rawNewDate.isEmpty {
+                guard let validNew = parseStrictCoachDateIso(rawNewDate) else {
+                    return (encodeToolResponse(["ok": false, "error": "Nueva fecha inválida. Usa yyyy-MM-dd."]), nil)
+                }
+                targetDate = validNew
+            } else {
+                targetDate = oldDate
+            }
             if targetDate != oldDate {
-                deleteMeal(id: original.id, for: oldDate)
+                deleteMeal(id: original.id, for: oldDate, deletePhotoFromDisk: false)
                 saveMeal(edited, for: targetDate)
             } else {
                 saveMeal(edited, for: oldDate)
@@ -4156,14 +4327,22 @@ final class ImprovingStore: ObservableObject {
             return (encodeToolResponse(["ok": true, "meal_id": edited.id, "date_iso": targetDate, "time": edited.timeLabel, "title": edited.title]), action)
 
         case "delete_meal":
-            let preferredDate = resolveCoachDateIso(str("date_iso"))
+            let rawDelDate = str("date_iso")
+            guard let preferredDate = parseStrictCoachDateIso(rawDelDate) else {
+                return (encodeToolResponse(["ok": false, "error": "Fecha inválida. Usa yyyy-MM-dd."]), nil)
+            }
             let mealId = str("meal_id")
             let matchTitle = str("match_title").map(fold)
+            guard (mealId != nil && !mealId!.isEmpty) || (matchTitle != nil && matchTitle!.count >= 2) else {
+                return (encodeToolResponse(["ok": false, "error": "Indica el ID o el nombre exacto de la comida a eliminar."]), nil)
+            }
+            // Never silently delete a meal from 5 days ago when a date was explicitly specified!
             var candidateDates = [preferredDate]
-            for back in 0..<7 {
-                if let dt = Calendar.current.date(byAdding: .day, value: -back, to: Date()) {
-                    let iso = isoFormatter.string(from: dt)
-                    if !candidateDates.contains(iso) { candidateDates.append(iso) }
+            if rawDelDate == nil || rawDelDate!.isEmpty {
+                let cal = Calendar.current
+                if let y = cal.date(byAdding: .day, value: -1, to: Date()) {
+                    let yIso = isoFormatter.string(from: y)
+                    if !candidateDates.contains(yIso) { candidateDates.append(yIso) }
                 }
             }
             var foundDate: String? = nil
@@ -4173,14 +4352,20 @@ final class ImprovingStore: ObservableObject {
                 if let id = mealId, !id.isEmpty, let m = list.first(where: { $0.id == id }) {
                     foundDate = iso; foundMeal = m; break
                 }
-                if let mt = matchTitle, !mt.isEmpty, let m = list.first(where: { fold($0.title).contains(mt) || mt.contains(fold($0.title)) }) {
-                    foundDate = iso; foundMeal = m; break
+                if let mt = matchTitle, !mt.isEmpty {
+                    if let exact = list.first(where: { fold($0.title) == mt }) {
+                        foundDate = iso; foundMeal = exact; break
+                    }
+                    if let partial = list.first(where: { fold($0.title).contains(mt) }) {
+                        foundDate = iso; foundMeal = partial; break
+                    }
                 }
             }
             guard let iso = foundDate, let target = foundMeal else {
-                return (encodeToolResponse(["ok": false, "error": "No encontré esa comida para eliminar."]), nil)
+                return (encodeToolResponse(["ok": false, "error": "No encontré esa comida para eliminar en \(preferredDate)."]), nil)
             }
-            deleteMeal(id: target.id, for: iso)
+            // Keep photo on disk until undo expires so 1-tap Undo restores the full meal with its photo!
+            deleteMeal(id: target.id, for: iso, deletePhotoFromDisk: false)
             let action = CoachAppliedAction(
                 id: UUID().uuidString,
                 icon: "trash.fill",
@@ -4221,10 +4406,14 @@ final class ImprovingStore: ObservableObject {
         case "update_nutrition_goals":
             let prev = customNutritionGoals
             var updated = customNutritionGoals
-            if let c = intVal("calories_kcal"), c >= 900, c <= 7000 { updated.caloriesKcal = c }
-            if let p = intVal("protein_g"), p >= 30, p <= 450 { updated.proteinG = p }
-            if let cb = intVal("carbs_g"), cb >= 20, cb <= 800 { updated.carbsG = cb }
-            if let f = intVal("fat_g"), f >= 20, f <= 300 { updated.fatG = f }
+            var changed = false
+            if let c = intVal("calories_kcal"), c >= 900, c <= 7000 { updated.caloriesKcal = c; changed = true }
+            if let p = intVal("protein_g"), p >= 30, p <= 450 { updated.proteinG = p; changed = true }
+            if let cb = intVal("carbs_g"), cb >= 20, cb <= 800 { updated.carbsG = cb; changed = true }
+            if let f = intVal("fat_g"), f >= 20, f <= 300 { updated.fatG = f; changed = true }
+            guard changed else {
+                return (encodeToolResponse(["ok": false, "error": "Ningún objetivo recibido está dentro de rangos fisiológicos válidos (kcal 900-7000, P 30-450g, C 20-800g, G 20-300g)."]), nil)
+            }
             updateNutritionGoals(updated)
             let eff = effectiveNutritionGoals
             let action = CoachAppliedAction(
@@ -4384,17 +4573,28 @@ final class ImprovingStore: ObservableObject {
             return (encodeToolResponse(["ok": true, "workout_id": wk.id, "date_iso": iso, "duration_min": dur, "kcal": estKcal]), action)
 
         case "edit_or_delete_workout":
-            let iso = resolveCoachDateIso(str("date_iso"))
+            guard let iso = parseStrictCoachDateIso(str("date_iso")) else {
+                return (encodeToolResponse(["ok": false, "error": "Fecha inválida. Usa yyyy-MM-dd."]), nil)
+            }
             let wkId = str("workout_id")
             let matchTitle = str("match_title").map(fold)
+            let isDelete = boolVal("delete") == true
             let list = activeHistory[iso]?.workouts ?? []
             let target: EffortEventItem? = {
                 if let id = wkId, !id.isEmpty { return list.first(where: { $0.id == id }) }
-                if let mt = matchTitle, !mt.isEmpty { return list.first(where: { fold($0.title).contains(mt) || mt.contains(fold($0.title)) }) }
-                return list.first
+                if let mt = matchTitle, !mt.isEmpty {
+                    return list.first(where: { fold($0.title) == mt })
+                        ?? list.first(where: { fold($0.title).contains(mt) })
+                }
+                // NEVER delete an unspecified workout by falling back to list.first!
+                if isDelete { return nil }
+                return list.count == 1 ? list.first : nil
             }()
             guard let original = target else {
-                return (encodeToolResponse(["ok": false, "error": "No encontré ese entrenamiento en \(iso)."]), nil)
+                let errMsg = (isDelete && wkId == nil && matchTitle == nil)
+                    ? "Indica el nombre o ID exacto del entrenamiento que quieres eliminar."
+                    : "No encontré ese entrenamiento en \(iso)."
+                return (encodeToolResponse(["ok": false, "error": errMsg]), nil)
             }
             if boolVal("delete") == true {
                 deleteWorkout(id: original.id, dateIso: iso)
@@ -4535,15 +4735,16 @@ final class ImprovingStore: ObservableObject {
             updateWorkout(workout, originalDateIso: dateIso)
 
         case .restoreBodyMeasurement(let dateIso, let prevW, let prevF, let prevL, let prevSys, let prevDia):
-            if var d = activeHistory[dateIso] {
+            if var d = realHistory[dateIso] ?? activeHistory[dateIso] {
                 d.bodyWeightKg = prevW
                 d.bodyFatPct = prevF
                 d.leanMassKg = prevL
                 d.systolicBp = prevSys
                 d.diastolicBp = prevDia
-                if hasImportedOrPairedRealData {
-                    realHistory[dateIso] = d
-                } else {
+                if let pw = prevW { userProfile.weightKg = pw }
+                if let pf = prevF { userProfile.bodyFatPct = pf }
+                realHistory[dateIso] = d
+                if !hasImportedOrPairedRealData {
                     simulatedHistory[dateIso] = d
                 }
                 dataRevision += 1
@@ -4585,6 +4786,12 @@ final class ImprovingStore: ObservableObject {
             coachThreads.insert(thread, at: 0)
         }
         if coachThreads.count > 30 {
+            let dropped = coachThreads.dropFirst(30)
+            for t in dropped {
+                for m in t.messages {
+                    if let fn = m.attachedPhotoFilename { MealPhotoStorage.deletePhoto(filename: fn) }
+                }
+            }
             coachThreads = Array(coachThreads.prefix(30))
         }
         persistState()
@@ -4592,16 +4799,26 @@ final class ImprovingStore: ObservableObject {
 
     func selectCoachThread(_ id: String) {
         guard let thread = coachThreads.first(where: { $0.id == id }) else { return }
+        coachReplyTask?.cancel()
+        coachReplyTask = nil
         activeCoachThreadId = thread.id
         coachMessages = thread.messages
         activeCoachInteractionId = nil
         isCoachThinking = false
+        lastCoachErrorMessage = nil
         persistState()
     }
 
     func deleteCoachThread(_ id: String) {
+        if let doomed = coachThreads.first(where: { $0.id == id }) {
+            for m in doomed.messages {
+                if let fn = m.attachedPhotoFilename { MealPhotoStorage.deletePhoto(filename: fn) }
+            }
+        }
         coachThreads.removeAll { $0.id == id }
         if activeCoachThreadId == id {
+            coachReplyTask?.cancel()
+            coachReplyTask = nil
             if let next = coachThreads.first {
                 activeCoachThreadId = next.id
                 coachMessages = next.messages
@@ -4610,15 +4827,19 @@ final class ImprovingStore: ObservableObject {
                 coachMessages = []
             }
             activeCoachInteractionId = nil
+            isCoachThinking = false
         }
         persistState()
     }
 
     func startNewCleanChat() {
+        coachReplyTask?.cancel()
+        coachReplyTask = nil
         coachMessages = []
         activeCoachThreadId = nil
         activeCoachInteractionId = nil
         isCoachThinking = false
+        lastCoachErrorMessage = nil
         persistState()
     }
 
@@ -4694,9 +4915,8 @@ final class ImprovingStore: ObservableObject {
             d.diastolicBp = dia
         }
 
-        if hasImportedOrPairedRealData {
-            realHistory[iso] = d
-        } else {
+        realHistory[iso] = d
+        if !hasImportedOrPairedRealData {
             simulatedHistory[iso] = d
         }
         dataRevision += 1
@@ -4945,14 +5165,18 @@ final class ImprovingStore: ObservableObject {
         isGeneratingWeeklyReviewAI = true
         let key = geminiApiKey
         let model = selectedGeminiModel
-        let uName = userProfile.displayFirstName
+        let allowCloud = cloudAIEnabled
+        let allowKeyless = allowKeylessAIFallback
+        let uName = redactPIIFromAI ? "Usuario" : userProfile.displayFirstName
 
         Task { [weak self] in
             let insight = await GeminiCoachService.shared.generateWeeklyReviewInsight(
                 report: report,
                 userName: uName,
                 apiKey: key,
-                selectedModel: model
+                selectedModel: model,
+                allowCloudAI: allowCloud,
+                allowKeylessFallback: allowKeyless
             )
             await MainActor.run {
                 guard let self else { return }
@@ -5026,21 +5250,62 @@ final class ImprovingStore: ObservableObject {
     func updateGeminiConfig(apiKey: String, model: String) {
         geminiApiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedGeminiModel = model
+        // Store API key securely in Keychain (never in plaintext JSON!)
+        if customPersistenceURL == nil {
+            KeychainSecretStore.saveString(geminiApiKey, account: Self.geminiKeychainAccount)
+        }
         dataRevision += 1
         persistState()
     }
 
-    // MARK: - Async Debounced Background Persistence (P3 — Zero Main-Thread Jank!)
+    func updateAIPrivacySettings(cloudAIEnabled: Bool, allowKeylessFallback: Bool, redactPII: Bool) {
+        self.cloudAIEnabled = cloudAIEnabled
+        self.allowKeylessAIFallback = allowKeylessFallback
+        self.redactPIIFromAI = redactPII
+        sectionCoachingCache.removeAll()
+        sectionCoachingTimestamps.removeAll()
+        dataRevision += 1
+        persistState()
+    }
+
+    func exportFullBackupURL() throws -> URL {
+        let snap = buildPersistedSnapshot()
+        let data = try JSONEncoder().encode(snap)
+        return try AppBackupService.createBackupFile(snapshotData: data)
+    }
+
+    func restoreFullBackup(from url: URL) -> Result<String, Error> {
+        do {
+            let unpacked = try AppBackupService.unpackBackupFile(at: url)
+            let snap = try JSONDecoder().decode(PersistedSnapshot.self, from: unpacked.snapshotData)
+            applyPersistedSnapshot(snap)
+            persistState(immediate: true)
+            refreshSmartNotificationSchedules(promptPermission: false)
+            publishWidgetSnapshot(triggerReload: true, forceReload: true)
+            let photoCount = unpacked.restoredMealPhotos + unpacked.restoredAvatarPhotos
+            let daysCount = realHistory.count
+            return .success("Copia restaurada: \(daysCount) días, \(mealsByDate.values.reduce(0) { $0 + $1.count }) comidas, \(labReports.count) analíticas y \(photoCount) fotos.")
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    // MARK: - Async Debounced Background Persistence (Schema-Versioned + .bak Anti-Corruption + File Protection!)
 
     private func buildPersistedSnapshot() -> PersistedSnapshot {
-        PersistedSnapshot(
+        let orderedSigs = processedAutoSyncSignaturesOrder.isEmpty
+            ? Array(processedAutoSyncSignatures.prefix(80))
+            : Array(processedAutoSyncSignaturesOrder.suffix(80))
+        return PersistedSnapshot(
+            schemaVersion: Self.currentSchemaVersion,
             userProfile: userProfile,
             isDarkMode: BevelColors.isDarkMode,
             hasImportedOrPairedRealData: hasImportedOrPairedRealData,
             realHistory: realHistory,
             journalCheckins: journalCheckinsByDate,
             journalMoodByDate: journalMoodByDate,
-            geminiApiKey: geminiApiKey,
+            // Never write API key to plaintext JSON when Keychain is active (isolated custom URL tests keep round-trip intact)
+            geminiApiKey: customPersistenceURL == nil ? "" : geminiApiKey,
             selectedGeminiModel: selectedGeminiModel,
             mealsByDate: mealsByDate,
             hydrationGlassesByDate: hydrationGlassesByDate,
@@ -5049,7 +5314,7 @@ final class ImprovingStore: ObservableObject {
             sleepGoalPct: sleepGoalPct,
             visibleTabs: Array(visibleTabs),
             sectionCoachingCache: sectionCoachingCache,
-            processedAutoSyncSignatures: Array(processedAutoSyncSignatures.prefix(80)),
+            processedAutoSyncSignatures: orderedSigs,
             lastAutoSyncStatus: autoSyncStatusText,
             shortcutSyncName: shortcutSyncName,
             autoRunShortcutOnOpen: autoRunShortcutOnOpen,
@@ -5067,8 +5332,24 @@ final class ImprovingStore: ObservableObject {
             coachThreads: Array(coachThreads.prefix(30)),
             activeCoachThreadId: activeCoachThreadId,
             labReports: labReports,
-            weeklyAiInsightsCache: weeklyAiInsightsCache
+            weeklyAiInsightsCache: weeklyAiInsightsCache,
+            cloudAIEnabled: cloudAIEnabled,
+            allowKeylessAIFallback: allowKeylessAIFallback,
+            redactPIIFromAI: redactPIIFromAI
         )
+    }
+
+    private static func writeProtectedSnapshot(_ snap: PersistedSnapshot, to targetURL: URL) {
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        let fm = FileManager.default
+        let bakURL = targetURL.appendingPathExtension("bak")
+        // Keep a rolling last-known-good `.bak` before overwriting the primary store!
+        if fm.fileExists(atPath: targetURL.path),
+           let existing = try? Data(contentsOf: targetURL),
+           existing.count > 32 {
+            try? existing.write(to: bakURL, options: [.atomic, .completeFileProtection])
+        }
+        try? data.write(to: targetURL, options: [.atomic, .completeFileProtection])
     }
 
     func persistState(immediate: Bool = false) {
@@ -5080,17 +5361,13 @@ final class ImprovingStore: ObservableObject {
         if immediate {
             pendingPersistWorkItem = nil
             persistenceQueue.sync {
-                if let data = try? JSONEncoder().encode(snap) {
-                    try? data.write(to: targetURL, options: .atomic)
-                }
+                Self.writeProtectedSnapshot(snap, to: targetURL)
             }
             return
         }
 
         let work = DispatchWorkItem {
-            if let data = try? JSONEncoder().encode(snap) {
-                try? data.write(to: targetURL, options: .atomic)
-            }
+            Self.writeProtectedSnapshot(snap, to: targetURL)
         }
         pendingPersistWorkItem = work
         persistenceQueue.asyncAfter(deadline: .now() + 0.28, execute: work)
@@ -5101,10 +5378,41 @@ final class ImprovingStore: ObservableObject {
     }
 
     private func loadPersistedState() {
-        guard let data = try? Data(contentsOf: persistenceURL),
-              let snap = try? JSONDecoder().decode(PersistedSnapshot.self, from: data) else {
-            return
+        let fm = FileManager.default
+        let primaryURL = persistenceURL
+        let bakURL = primaryURL.appendingPathExtension("bak")
+
+        // Load API key from Keychain first
+        if customPersistenceURL == nil, let kcKey = KeychainSecretStore.loadString(account: Self.geminiKeychainAccount), !kcKey.isEmpty {
+            geminiApiKey = kcKey
         }
+
+        if fm.fileExists(atPath: primaryURL.path) {
+            if let data = try? Data(contentsOf: primaryURL),
+               let snap = try? JSONDecoder().decode(PersistedSnapshot.self, from: data) {
+                applyPersistedSnapshot(snap)
+                return
+            }
+            // Primary JSON is corrupted! Quarantine it instead of silently overwriting with empty state!
+            let corruptURL = primaryURL.deletingLastPathComponent()
+                .appendingPathComponent("improving_store_corrupt_\(Int(Date().timeIntervalSince1970)).json")
+            try? fm.copyItem(at: primaryURL, to: corruptURL)
+
+            if let bakData = try? Data(contentsOf: bakURL),
+               let bakSnap = try? JSONDecoder().decode(PersistedSnapshot.self, from: bakData) {
+                applyPersistedSnapshot(bakSnap)
+                persistenceRecoveryNotice = "Se detectó un archivo dañado y se restauró automáticamente tu última copia de seguridad local (.bak)."
+                return
+            }
+            persistenceRecoveryNotice = "No se pudo leer el archivo de datos local; se guardó una copia en cuarentena para evitar pérdida definitiva."
+        } else if let bakData = try? Data(contentsOf: bakURL),
+                  let bakSnap = try? JSONDecoder().decode(PersistedSnapshot.self, from: bakData) {
+            applyPersistedSnapshot(bakSnap)
+            persistenceRecoveryNotice = "Se restauró tu historial desde la copia de seguridad local (.bak)."
+        }
+    }
+
+    private func applyPersistedSnapshot(_ snap: PersistedSnapshot) {
         userProfile = snap.userProfile
         // One-time migration: older builds bypassed onboarding (`profileSetupVersion == 0`), so present the
         // high-craft motion graphics onboarding & profile setup once while preserving 100% of stored realHistory!
@@ -5116,7 +5424,21 @@ final class ImprovingStore: ObservableObject {
         realHistory = snap.realHistory
         journalCheckinsByDate = snap.journalCheckins
         journalMoodByDate = snap.journalMoodByDate
-        geminiApiKey = snap.geminiApiKey
+
+        // Migrate legacy plaintext API key from JSON -> Keychain cleanly once
+        let legacyKey = snap.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if customPersistenceURL == nil {
+            if geminiApiKey.isEmpty && !legacyKey.isEmpty {
+                geminiApiKey = legacyKey
+                KeychainSecretStore.saveString(legacyKey, account: Self.geminiKeychainAccount)
+            }
+        } else if !legacyKey.isEmpty {
+            geminiApiKey = legacyKey
+        }
+        if let cloudOn = snap.cloudAIEnabled { cloudAIEnabled = cloudOn }
+        if let keylessOn = snap.allowKeylessAIFallback { allowKeylessAIFallback = keylessOn }
+        if let redactOn = snap.redactPIIFromAI { redactPIIFromAI = redactOn }
+
         // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
         if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {
             selectedGeminiModel = "auto"
@@ -5130,7 +5452,10 @@ final class ImprovingStore: ObservableObject {
         sleepGoalPct = snap.sleepGoalPct
         if !snap.visibleTabs.isEmpty { visibleTabs = Set(snap.visibleTabs) }
         if let cached = snap.sectionCoachingCache { sectionCoachingCache = cached }
-        if let sigs = snap.processedAutoSyncSignatures { processedAutoSyncSignatures = Set(sigs) }
+        if let sigs = snap.processedAutoSyncSignatures {
+            processedAutoSyncSignaturesOrder = sigs
+            processedAutoSyncSignatures = Set(sigs)
+        }
         if let status = snap.lastAutoSyncStatus, !status.isEmpty { autoSyncStatusText = status }
         if let sName = snap.shortcutSyncName, !sName.isEmpty {
             // Migrate legacy two-shortcut names cleanly to the single unified `Sync Improving` master shortcut

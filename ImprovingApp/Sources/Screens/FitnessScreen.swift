@@ -1289,6 +1289,8 @@ private struct RoutineEditorSheet: View {
     @State private var exReps: Int = 10
     @State private var exWeight: Double = 40
     @State private var exMuscle: MuscleGroupKind = .pectorales
+    @State private var showDeleteRoutineConfirm: Bool = false
+    @State private var pendingDeleteExercise: WorkoutRoutineExercise? = nil
 
     private let categories = ["Fuerza", "Cardio", "Movilidad", "HIIT"]
 
@@ -1444,13 +1446,14 @@ private struct RoutineEditorSheet: View {
                                     }
                                     Spacer()
                                     Button {
-                                        exercisesDraft.removeAll { $0.id == ex.id }
+                                        pendingDeleteExercise = ex
                                     } label: {
                                         Image(systemName: "trash")
                                             .font(.system(size: 13))
                                             .foregroundColor(BevelColors.coralHigh)
-                                            .frame(width: 30, height: 30)
+                                            .frame(width: 44, height: 44)
                                     }
+                                    .accessibilityLabel("Quitar ejercicio")
                                 }
                                 .padding(13)
                             }
@@ -1485,10 +1488,9 @@ private struct RoutineEditorSheet: View {
                     .disabled(nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .opacity(nameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1.0)
 
-                    if let existing = existingRoutine {
+                    if existingRoutine != nil {
                         Button {
-                            store.deleteRoutine(existing.id)
-                            onClose()
+                            showDeleteRoutineConfirm = true
                         } label: {
                             Label("Eliminar rutina", systemImage: "trash")
                                 .font(ImprovingFont.cardTitle(14))
@@ -1506,6 +1508,35 @@ private struct RoutineEditorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) }
+            }
+            .confirmationDialog(
+                "¿Eliminar esta rutina?",
+                isPresented: $showDeleteRoutineConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Eliminar rutina", role: .destructive) {
+                    if let existing = existingRoutine {
+                        store.deleteRoutine(existing.id)
+                    }
+                    onClose()
+                }
+                Button("Cancelar", role: .cancel) {}
+            }
+            .confirmationDialog(
+                "¿Quitar ejercicio de la rutina?",
+                isPresented: Binding(
+                    get: { pendingDeleteExercise != nil },
+                    set: { if !$0 { pendingDeleteExercise = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Quitar ejercicio", role: .destructive) {
+                    if let ex = pendingDeleteExercise {
+                        exercisesDraft.removeAll { $0.id == ex.id }
+                    }
+                    pendingDeleteExercise = nil
+                }
+                Button("Cancelar", role: .cancel) { pendingDeleteExercise = nil }
             }
             .onAppear {
                 if let r = existingRoutine {

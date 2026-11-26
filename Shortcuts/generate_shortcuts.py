@@ -128,28 +128,30 @@ def build_all_health_actions(variant: str = "final"):
       - Full Fitness & Body metrics (VO2 Max, Walk/Run Distance, Cycling Distance, Flights/Elevation, Weight)
       - Auto-detected HR workouts & 1-min post-effort HRR computed directly from real Heart Rate samples!
     """
-    # (key_prefix, exact ActionKit English picker label, days_back, include_end_date, group_by, date_prop)
+    # (key_prefix, exact ActionKit English picker label, days_back, include_end_date, group_by, date_prop, include_unit)
+    # Note: Heart Rate grouped by "Minute" keeps full 1-min resolution for 5-min Stress/Energy, HR zones & 1-min HRR
+    # while shrinking the URL payload ~10x so iOS custom URL scheme IPC never truncates even after heavy workouts!
     metrics = [
-        ("hr", "Heart Rate", 2, False, None, "Start Date"),
-        ("hrv", "Heart Rate Variability", 14, False, None, "Start Date"),
-        ("rhr", "Resting Heart Rate", 14, False, None, "Start Date"),
-        ("sleep", "Sleep", 5, True, None, "Start Date"),
-        ("resp", "Respiratory Rate", 14, False, None, "Start Date"),
-        ("spo2", "Blood Oxygen", 14, False, None, "Start Date"),
-        ("temp", "Wrist Temperature", 30, False, None, "End Date"),
-        ("steps", "Steps", 30, False, "Day", "Start Date"),
-        ("kcal", "Active Calories", 30, False, "Day", "Start Date"),
-        ("vo2", "VO2 Max", 90, False, None, "Start Date"),
-        ("distance", "Walking + Running Distance", 30, False, "Day", "Start Date"),
-        ("cycling_distance", "Cycling Distance", 30, False, "Day", "Start Date"),
-        ("flights", "Flights Climbed", 30, False, "Day", "Start Date"),
-        ("weight", "Weight", 30, False, None, "Start Date"),
+        ("hr", "Heart Rate", 2, False, "Minute", "Start Date", False),
+        ("hrv", "Heart Rate Variability", 14, False, None, "Start Date", False),
+        ("rhr", "Resting Heart Rate", 14, False, None, "Start Date", False),
+        ("sleep", "Sleep", 5, True, None, "Start Date", False),
+        ("resp", "Respiratory Rate", 14, False, None, "Start Date", False),
+        ("spo2", "Blood Oxygen", 14, False, None, "Start Date", False),
+        ("temp", "Wrist Temperature", 30, False, None, "End Date", True),
+        ("steps", "Steps", 30, False, "Day", "Start Date", False),
+        ("kcal", "Active Calories", 30, False, "Day", "Start Date", True),
+        ("vo2", "VO2 Max", 90, False, None, "Start Date", False),
+        ("distance", "Walking + Running Distance", 30, False, "Day", "Start Date", True),
+        ("cycling_distance", "Cycling Distance", 30, False, "Day", "Start Date", True),
+        ("flights", "Flights Climbed", 30, False, "Day", "Start Date", False),
+        ("weight", "Weight", 30, False, None, "Start Date", True),
     ]
 
     actions = []
     dict_items = []
 
-    for prefix, label, days, include_end, group_by, date_prop in metrics:
+    for prefix, label, days, include_end, group_by, date_prop, include_unit in metrics:
         find_id = make_uuid(f"{variant}.{prefix}.find")
         val_id = make_uuid(f"{variant}.{prefix}.val")
         start_id = make_uuid(f"{variant}.{prefix}.start")
@@ -159,6 +161,10 @@ def build_all_health_actions(variant: str = "final"):
         actions.append(get_health_detail_action(start_id, find_id, date_prop))
 
         dict_items.append(dict_text_item(f"{prefix}_values", val_id, "Value"))
+        if include_unit:
+            unit_id = make_uuid(f"{variant}.{prefix}.unit")
+            actions.append(get_health_detail_action(unit_id, find_id, "Unit"))
+            dict_items.append(dict_text_item(f"{prefix}_units", unit_id, "Unit"))
         if include_end:
             end_id = make_uuid(f"{variant}.{prefix}.end")
             actions.append(get_health_detail_action(end_id, find_id, "End Date"))

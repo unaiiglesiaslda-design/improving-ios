@@ -1036,6 +1036,7 @@ private struct JournalCustomizeSheet: View {
     @State private var newEmoji: String = "⚡"
     @State private var newTitle: String = ""
     @State private var isNightSection: Bool = false
+    @State private var pendingDeleteCustomHabit: CustomJournalHabit? = nil
 
     private let suggestedEmojis = ["💊", "😴", "📚", "🏋️", "⚽", "🧘", "☕", "🍵", "❄️", "🧠", "🩹", "⚡"]
     private let quickIdeas = ["Siesta", "Entreno noche", "Exámenes", "Electrolitos", "Sauna / Baño frío", "Estudio intenso"]
@@ -1206,14 +1207,15 @@ private struct JournalCustomizeSheet: View {
                                     }
                                     Spacer()
                                     Button {
-                                        store.deleteCustomJournalHabit(id: custom.id)
+                                        pendingDeleteCustomHabit = custom
                                     } label: {
                                         Image(systemName: "trash")
                                             .font(.system(size: 13, weight: .semibold))
                                             .foregroundColor(BevelColors.coralHigh)
-                                            .frame(width: 32, height: 32)
-                                            .background(Circle().fill(BevelColors.coralHigh.opacity(0.12)))
+                                            .frame(width: 44, height: 44)
+                                            .background(Circle().fill(BevelColors.coralHigh.opacity(0.12)).frame(width: 34, height: 34))
                                     }
+                                    .accessibilityLabel("Eliminar hábito personalizado")
                                 }
                                 .padding(12)
                             }
@@ -1272,6 +1274,24 @@ private struct JournalCustomizeSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Listo", action: onClose)
                 }
+            }
+            .confirmationDialog(
+                "¿Eliminar hábito personalizado?",
+                isPresented: Binding(
+                    get: { pendingDeleteCustomHabit != nil },
+                    set: { if !$0 { pendingDeleteCustomHabit = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Eliminar hábito", role: .destructive) {
+                    if let h = pendingDeleteCustomHabit {
+                        store.deleteCustomJournalHabit(id: h.id)
+                    }
+                    pendingDeleteCustomHabit = nil
+                }
+                Button("Cancelar", role: .cancel) { pendingDeleteCustomHabit = nil }
+            } message: {
+                Text("Se eliminará «\(pendingDeleteCustomHabit?.title ?? "")» de tu Diario.")
             }
         }
     }

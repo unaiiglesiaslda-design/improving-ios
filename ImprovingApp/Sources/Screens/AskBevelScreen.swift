@@ -555,6 +555,7 @@ private struct CoachChatHistorySheet: View {
     let onSelect: (String) -> Void
     let onNewChat: () -> Void
     let onClose: () -> Void
+    @State private var pendingDeleteThread: CoachChatThread? = nil
 
     var body: some View {
         NavigationStack {
@@ -604,13 +605,14 @@ private struct CoachChatHistorySheet: View {
                                     .buttonStyle(.plain)
 
                                     Button {
-                                        store.deleteCoachThread(thread.id)
+                                        pendingDeleteThread = thread
                                     } label: {
                                         Image(systemName: "trash")
                                             .font(.system(size: 13.5))
                                             .foregroundColor(BevelColors.textMuted)
-                                            .frame(width: 32, height: 32)
+                                            .frame(width: 44, height: 44)
                                     }
+                                    .accessibilityLabel("Eliminar conversación")
                                 }
                                 .padding(14)
                             }
@@ -629,5 +631,23 @@ private struct CoachChatHistorySheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .confirmationDialog(
+            "¿Eliminar esta conversación?",
+            isPresented: Binding(
+                get: { pendingDeleteThread != nil },
+                set: { if !$0 { pendingDeleteThread = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Eliminar conversación", role: .destructive) {
+                if let t = pendingDeleteThread {
+                    store.deleteCoachThread(t.id)
+                }
+                pendingDeleteThread = nil
+            }
+            Button("Cancelar", role: .cancel) { pendingDeleteThread = nil }
+        } message: {
+            Text("Se eliminará permanentemente «\(pendingDeleteThread?.title ?? "")».")
+        }
     }
 }

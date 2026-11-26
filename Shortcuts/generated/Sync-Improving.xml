@@ -63,6 +63,10 @@
 					<key>WFSerializationType</key>
 					<string>WFContentPredicateTableTemplate</string>
 				</dict>
+				<key>WFHKSampleFilteringFillMissing</key>
+				<false/>
+				<key>WFHKSampleFilteringGroupBy</key>
+				<string>Minute</string>
 			</dict>
 		</dict>
 		<dict>
@@ -808,6 +812,31 @@
 		</dict>
 		<dict>
 			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.properties.health.quantity</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>E7C39AFA-808C-5910-B6E8-B06293F4C6C2</string>
+				<key>WFContentItemPropertyName</key>
+				<string>Unit</string>
+				<key>WFInput</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>OutputName</key>
+						<string>Health Samples</string>
+						<key>OutputUUID</key>
+						<string>D17F3685-9EE6-56E7-99A2-A239792C4D99</string>
+						<key>Type</key>
+						<string>ActionOutput</string>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFTextTokenAttachment</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
 			<string>is.workflow.actions.filter.health.quantity</string>
 			<key>WFWorkflowActionParameters</key>
 			<dict>
@@ -1020,6 +1049,31 @@
 				<string>AC1BCF3B-0AC7-5E0B-BC04-80C0E910B015</string>
 				<key>WFContentItemPropertyName</key>
 				<string>Start Date</string>
+				<key>WFInput</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>OutputName</key>
+						<string>Health Samples</string>
+						<key>OutputUUID</key>
+						<string>8BAA357F-44D5-572E-B442-968B425804D1</string>
+						<key>Type</key>
+						<string>ActionOutput</string>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFTextTokenAttachment</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.properties.health.quantity</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>E7DC9AF7-D62C-5CF3-AB3A-E015BFF781D5</string>
+				<key>WFContentItemPropertyName</key>
+				<string>Unit</string>
 				<key>WFInput</key>
 				<dict>
 					<key>Value</key>
@@ -1264,6 +1318,31 @@
 		</dict>
 		<dict>
 			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.properties.health.quantity</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>D25FF0C2-1A5F-5AC5-BEB5-EC115804744E</string>
+				<key>WFContentItemPropertyName</key>
+				<string>Unit</string>
+				<key>WFInput</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>OutputName</key>
+						<string>Health Samples</string>
+						<key>OutputUUID</key>
+						<string>22EDDD1D-B2DE-51FC-8107-A66CB7F4394D</string>
+						<key>Type</key>
+						<string>ActionOutput</string>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFTextTokenAttachment</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
 			<string>is.workflow.actions.filter.health.quantity</string>
 			<key>WFWorkflowActionParameters</key>
 			<dict>
@@ -1361,6 +1440,31 @@
 				<string>4507FE88-103E-5596-B84A-C89B303ADF0F</string>
 				<key>WFContentItemPropertyName</key>
 				<string>Start Date</string>
+				<key>WFInput</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>OutputName</key>
+						<string>Health Samples</string>
+						<key>OutputUUID</key>
+						<string>700C46D2-B384-5B20-9361-93832FB16A65</string>
+						<key>Type</key>
+						<string>ActionOutput</string>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFTextTokenAttachment</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.properties.health.quantity</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>4A4587DA-AC42-5E2F-BEA6-B890065DCF22</string>
+				<key>WFContentItemPropertyName</key>
+				<string>Unit</string>
 				<key>WFInput</key>
 				<dict>
 					<key>Value</key>
@@ -1587,6 +1691,31 @@
 				<string>3AB1153C-070D-5969-BAD2-DB85AE018068</string>
 				<key>WFContentItemPropertyName</key>
 				<string>Start Date</string>
+				<key>WFInput</key>
+				<dict>
+					<key>Value</key>
+					<dict>
+						<key>OutputName</key>
+						<string>Health Samples</string>
+						<key>OutputUUID</key>
+						<string>B05D3BD5-C9FF-508D-855A-374AAC5AD697</string>
+						<key>Type</key>
+						<string>ActionOutput</string>
+					</dict>
+					<key>WFSerializationType</key>
+					<string>WFTextTokenAttachment</string>
+				</dict>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.properties.health.quantity</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>UUID</key>
+				<string>7F734C3A-305D-5197-95F1-99F58023B5AA</string>
+				<key>WFContentItemPropertyName</key>
+				<string>Unit</string>
 				<key>WFInput</key>
 				<dict>
 					<key>Value</key>
@@ -2158,6 +2287,44 @@
 										<key>attachmentsByRange</key>
 										<dict/>
 										<key>string</key>
+										<string>temp_units</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict>
+											<key>{0, 1}</key>
+											<dict>
+												<key>OutputName</key>
+												<string>Unit</string>
+												<key>OutputUUID</key>
+												<string>E7C39AFA-808C-5910-B6E8-B06293F4C6C2</string>
+												<key>Type</key>
+												<string>ActionOutput</string>
+											</dict>
+										</dict>
+										<key>string</key>
+										<string>￼</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict/>
+										<key>string</key>
 										<string>temp_ends</string>
 									</dict>
 									<key>WFSerializationType</key>
@@ -2289,6 +2456,44 @@
 												<string>Value</string>
 												<key>OutputUUID</key>
 												<string>0E6BA344-8278-5CAC-90E6-18AB96B5B4E2</string>
+												<key>Type</key>
+												<string>ActionOutput</string>
+											</dict>
+										</dict>
+										<key>string</key>
+										<string>￼</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict/>
+										<key>string</key>
+										<string>kcal_units</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict>
+											<key>{0, 1}</key>
+											<dict>
+												<key>OutputName</key>
+												<string>Unit</string>
+												<key>OutputUUID</key>
+												<string>E7DC9AF7-D62C-5CF3-AB3A-E015BFF781D5</string>
 												<key>Type</key>
 												<string>ActionOutput</string>
 											</dict>
@@ -2462,6 +2667,44 @@
 										<key>attachmentsByRange</key>
 										<dict/>
 										<key>string</key>
+										<string>distance_units</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict>
+											<key>{0, 1}</key>
+											<dict>
+												<key>OutputName</key>
+												<string>Unit</string>
+												<key>OutputUUID</key>
+												<string>D25FF0C2-1A5F-5AC5-BEB5-EC115804744E</string>
+												<key>Type</key>
+												<string>ActionOutput</string>
+											</dict>
+										</dict>
+										<key>string</key>
+										<string>￼</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict/>
+										<key>string</key>
 										<string>distance_dates</string>
 									</dict>
 									<key>WFSerializationType</key>
@@ -2517,6 +2760,44 @@
 												<string>Value</string>
 												<key>OutputUUID</key>
 												<string>77ED5D1E-0FFB-5483-8E1F-2FB6FA0D607C</string>
+												<key>Type</key>
+												<string>ActionOutput</string>
+											</dict>
+										</dict>
+										<key>string</key>
+										<string>￼</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict/>
+										<key>string</key>
+										<string>cycling_distance_units</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict>
+											<key>{0, 1}</key>
+											<dict>
+												<key>OutputName</key>
+												<string>Unit</string>
+												<key>OutputUUID</key>
+												<string>4A4587DA-AC42-5E2F-BEA6-B890065DCF22</string>
 												<key>Type</key>
 												<string>ActionOutput</string>
 											</dict>
@@ -2669,6 +2950,44 @@
 												<string>Value</string>
 												<key>OutputUUID</key>
 												<string>F56C8040-DF27-58B7-9416-7599A2DCA75E</string>
+												<key>Type</key>
+												<string>ActionOutput</string>
+											</dict>
+										</dict>
+										<key>string</key>
+										<string>￼</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+							</dict>
+							<dict>
+								<key>WFItemType</key>
+								<integer>0</integer>
+								<key>WFKey</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict/>
+										<key>string</key>
+										<string>weight_units</string>
+									</dict>
+									<key>WFSerializationType</key>
+									<string>WFTextTokenString</string>
+								</dict>
+								<key>WFValue</key>
+								<dict>
+									<key>Value</key>
+									<dict>
+										<key>attachmentsByRange</key>
+										<dict>
+											<key>{0, 1}</key>
+											<dict>
+												<key>OutputName</key>
+												<string>Unit</string>
+												<key>OutputUUID</key>
+												<string>7F734C3A-305D-5197-95F1-99F58023B5AA</string>
 												<key>Type</key>
 												<string>ActionOutput</string>
 											</dict>

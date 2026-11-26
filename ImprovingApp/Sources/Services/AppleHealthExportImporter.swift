@@ -54,13 +54,39 @@ enum AppleHealthExportImporter {
         var hasDaylight: Bool = false
         var audioSamplesDb: [(Int64, Double)] = []
         var stepsSum: Double = 0
+        var stepsBySource: [String: Double] = [:]
         var hasSteps: Bool = false
         var activeKcalSum: Double = 0
+        var activeKcalBySource: [String: Double] = [:]
         var hasActiveKcal: Bool = false
         var distanceKmSum: Double = 0
+        var distanceKmBySource: [String: Double] = [:]
         var hasDistanceKm: Bool = false
         var elevationMSum: Double = 0
+        var elevationMBySource: [String: Double] = [:]
         var hasElevationM: Bool = false
+
+        /// Resolves overlapping Watch + iPhone + 3rd-party XML sources without double-counting!
+        /// Prefers Apple Watch sum when substantial; otherwise takes the highest single-source total
+        /// (falls back to direct `fallbackSum` for Shortcuts/unit-test inputs that populate `*Sum` directly).
+        private func resolvedDeduplicatedSum(bySource: [String: Double], fallbackSum: Double) -> Double {
+            guard !bySource.isEmpty else { return fallbackSum }
+            if bySource.count == 1 { return bySource.values.first ?? fallbackSum }
+            let watchEntries = bySource.filter {
+                let low = $0.key.lowercased()
+                return low.contains("watch") || low.contains("reloj") || low.contains("whoop")
+            }
+            let maxOverall = bySource.values.max() ?? fallbackSum
+            if let watchSum = watchEntries.values.max(), watchSum >= maxOverall * 0.45 {
+                return watchSum
+            }
+            return maxOverall
+        }
+
+        var deduplicatedStepsSum: Double { resolvedDeduplicatedSum(bySource: stepsBySource, fallbackSum: stepsSum) }
+        var deduplicatedActiveKcalSum: Double { resolvedDeduplicatedSum(bySource: activeKcalBySource, fallbackSum: activeKcalSum) }
+        var deduplicatedDistanceKmSum: Double { resolvedDeduplicatedSum(bySource: distanceKmBySource, fallbackSum: distanceKmSum) }
+        var deduplicatedElevationMSum: Double { resolvedDeduplicatedSum(bySource: elevationMBySource, fallbackSum: elevationMSum) }
         var powerValues: [Double] = []
         var cadenceValues: [Double] = []
 
@@ -344,7 +370,9 @@ enum AppleHealthExportImporter {
             let awakeSec = mergeIntervalSeconds(primaryAwake)
             let inBedSecRaw = mergeIntervalSeconds(primaryInBed)
 
-            let stagedSec = deepSec + remSec + coreSec
+            // Merge all staged sleep spans together so overlapping Deep/REM/Core blocks from two devices never double-count asleep time!
+            let stagedMergedSec = mergeIntervalSeconds(primaryDeep + primaryRem + primaryCore)
+            let stagedSec = stagedMergedSec > 0 ? stagedMergedSec : (deepSec + remSec + coreSec)
             let asleepSec = stagedSec > 0 ? stagedSec : unspecSec
             let asleepMin = Int((Double(asleepSec) / 60.0).rounded())
             let inBedSec = max(inBedSecRaw, asleepSec + awakeSec)
@@ -594,7 +622,7 @@ enum AppleHealthExportImporter {
                     deepMinutes: deepOrNil,
                     remMinutes: remOrNil,
                     awakeMinutes: awakeOrNil,
-                    awakeCount: raw.awakeIntervals.count,
+                    awakeCount: primaryAwake.count,
                     hrDipPct: hrDipPct,
                     targetMinutes: targetSleepMin,
                     deepTargetPct: norms.deepTargetPct,
@@ -648,8 +676,8 @@ enum AppleHealthExportImporter {
                     profile: profile,
                     sleepStartEpoch: sleepSession?.startEpochSec,
                     sleepEndEpoch: sleepSession?.endEpochSec,
-                    dailyActiveKcal: raw.hasActiveKcal ? raw.activeKcalSum : nil,
-                    dailyDistanceKm: raw.hasDistanceKm ? raw.distanceKmSum : nil
+                    dailyActiveKcal: raw.hasActiveKcal ? raw.deduplicatedActiveKcalSum : nil,
+                    dailyDistanceKm: raw.hasDistanceKm ? raw.deduplicatedDistanceKmSum : nil
                 )
                 effectiveWorkoutsRaw = detected.workouts
                 effectiveWorkoutSpans = detected.spans
@@ -727,7 +755,7 @@ enum AppleHealthExportImporter {
                 }
                 // If only 1 outdoor distance workout occurred today and distanceKm is missing on the workout, attach daily distance
                 if item.distanceKm == nil && raw.hasDistanceKm && outdoorDistanceWorkouts.count == 1 && outdoorDistanceWorkouts.first?.id == item.id {
-                    item.distanceKm = round1(raw.distanceKmSum)
+                    item.distanceKm = round1(raw.deduplicatedDistanceKmSum)
                 }
                 return item
             }
@@ -739,7 +767,7 @@ enum AppleHealthExportImporter {
                 rhrBpm: rhrForZones,
                 hrZoneMinutes: zones,
                 workouts: enrichedWorkouts,
-                activeKcal: raw.hasActiveKcal ? raw.activeKcalSum : nil
+                activeKcal: raw.hasActiveKcal ? raw.deduplicatedActiveKcalSum : nil
             )
 
             // 7. High-Resolution 5-Minute Stress & CONTINUOUS Cross-Day Energy (Zero Midnight Jumps!)
@@ -829,11 +857,11 @@ enum AppleHealthExportImporter {
                 recoveryPct: recPct,
                 stressScore: stressScore,
                 energyBankPercent: energyPct,
-                stepsCount: raw.hasSteps ? max(Int(raw.stepsSum.rounded()), 0) : nil,
+                stepsCount: raw.hasSteps ? max(Int(raw.deduplicatedStepsSum.rounded()), 0) : nil,
                 vo2MaxMlKgMin: vo2,
                 hrRecoveryBpm: finalHrr,
                 glucoseMgDl: glucose,
-                activeKcal: raw.hasActiveKcal ? Int(raw.activeKcalSum.rounded()) : nil,
+                activeKcal: raw.hasActiveKcal ? Int(raw.deduplicatedActiveKcalSum.rounded()) : nil,
                 daylightMinutes: raw.hasDaylight ? Int(raw.daylightMinSum.rounded()) : nil,
                 sleepNoiseOver50Db: sleepNoiseOver50,
                 bodyWeightKg: weight,
@@ -843,8 +871,8 @@ enum AppleHealthExportImporter {
                 diastolicBp: diaBp,
                 hrZoneMinutes: zones,
                 hrZone0Minutes: z0Min > 0 ? z0Min : nil,
-                distanceKm: raw.hasDistanceKm ? round1(raw.distanceKmSum) : nil,
-                elevationM: raw.hasElevationM ? round1(raw.elevationMSum) : nil,
+                distanceKm: raw.hasDistanceKm ? round1(raw.deduplicatedDistanceKmSum) : nil,
+                elevationM: raw.hasElevationM ? round1(raw.deduplicatedElevationMSum) : nil,
                 avgPowerW: mean(raw.powerValues).map(round1),
                 avgCadenceRpm: mean(raw.cadenceValues).map(round1),
                 stressSeries24h: [],
@@ -1618,6 +1646,7 @@ enum AppleHealthExportImporter {
             guard let num = Double(valStr.replacingOccurrences(of: ",", with: ".")), num.isFinite else { return }
             let day = dayEntry(for: endDate, rawTimestamp: rawEnd)
 
+            let srcKey = decodeXmlEntities((attrs["sourceName"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
             switch type {
             case "HKQuantityTypeIdentifierRestingHeartRate":
                 if (28.0...130.0).contains(num) { day.rhrValues.append(num) }
@@ -1671,12 +1700,14 @@ enum AppleHealthExportImporter {
             case "HKQuantityTypeIdentifierStepCount":
                 if (0.0...120_000.0).contains(num) {
                     day.stepsSum += num
+                    day.stepsBySource[srcKey, default: 0] += num
                     day.hasSteps = true
                 }
             case "HKQuantityTypeIdentifierActiveEnergyBurned":
                 let kcal = unitStr.lowercased() == "kj" ? num / 4.184 : num
                 if (0.0...15_000.0).contains(kcal) {
                     day.activeKcalSum += kcal
+                    day.activeKcalBySource[srcKey, default: 0] += kcal
                     day.hasActiveKcal = true
                 }
             case "HKQuantityTypeIdentifierDistanceWalkingRunning", "HKQuantityTypeIdentifierDistanceCycling":
@@ -1684,11 +1715,14 @@ enum AppleHealthExportImporter {
                 let km = lowU == "m" ? num / 1000.0 : (lowU.contains("mi") ? num * 1.60934 : num)
                 if (0.0...300.0).contains(km) {
                     day.distanceKmSum += km
+                    day.distanceKmBySource[srcKey, default: 0] += km
                     day.hasDistanceKm = true
                 }
             case "HKQuantityTypeIdentifierFlightsClimbed":
                 if (0.0...500.0).contains(num) {
-                    day.elevationMSum += num * 3.05
+                    let elev = num * 3.05
+                    day.elevationMSum += elev
+                    day.elevationMBySource[srcKey, default: 0] += elev
                     day.hasElevationM = true
                 }
             case "HKQuantityTypeIdentifierRunningPower", "HKQuantityTypeIdentifierCyclingPower":
@@ -1749,7 +1783,8 @@ enum AppleHealthExportImporter {
                 categoryLabel: category,
                 kcal: kcal,
                 distanceKm: distKm,
-                dateIso: day.dateIso
+                dateIso: day.dateIso,
+                startEpochSec: sEp
             )
             day.workouts.append(item)
             activeWorkoutDateIso = day.dateIso
@@ -1775,7 +1810,8 @@ enum AppleHealthExportImporter {
                         durationMin: item.durationMin, avgHrBpm: bpm,
                         strainScore: updatedStrain.strain21, strainPct: updatedStrain.strainPct,
                         categoryLabel: item.categoryLabel, kcal: item.kcal,
-                        distanceKm: item.distanceKm, elevationM: item.elevationM, dateIso: item.dateIso
+                        distanceKm: item.distanceKm, elevationM: item.elevationM, dateIso: item.dateIso,
+                        startEpochSec: item.startEpochSec
                     )
                     day.workouts[activeWorkoutIdx] = item
                 }
@@ -1791,7 +1827,8 @@ enum AppleHealthExportImporter {
                     durationMin: item.durationMin, avgHrBpm: item.avgHrBpm,
                     strainScore: updatedStrain.strain21, strainPct: updatedStrain.strainPct,
                     categoryLabel: item.categoryLabel, kcal: kcal,
-                    distanceKm: item.distanceKm, elevationM: item.elevationM, dateIso: item.dateIso
+                    distanceKm: item.distanceKm, elevationM: item.elevationM, dateIso: item.dateIso,
+                    startEpochSec: item.startEpochSec
                 )
                 day.workouts[activeWorkoutIdx] = item
                 activeWorkoutHasKcal = true

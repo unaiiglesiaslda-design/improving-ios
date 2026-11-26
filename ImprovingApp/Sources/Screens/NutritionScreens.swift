@@ -21,12 +21,21 @@ enum MealPhotoStorage {
         if maxSide > maxDimension {
             let ratio = maxDimension / maxSide
             let newSize = CGSize(width: floor(sz.width * ratio), height: floor(sz.height * ratio))
-            let renderer = UIGraphicsImageRenderer(size: newSize)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1.0
+            format.opaque = true
+            let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
             targetImage = renderer.image { _ in
                 image.draw(in: CGRect(origin: .zero, size: newSize))
             }
         } else {
-            targetImage = image
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1.0
+            format.opaque = true
+            let renderer = UIGraphicsImageRenderer(size: sz, format: format)
+            targetImage = renderer.image { _ in
+                image.draw(in: CGRect(origin: .zero, size: sz))
+            }
         }
         return targetImage.jpegData(compressionQuality: quality)
     }
@@ -1094,6 +1103,7 @@ private struct MisAlimentosSheet: View {
     @State private var newKcal: String = ""
     @State private var newFat: String = ""
     @State private var newCarbs: String = ""
+    @State private var pendingDeleteFood: SavedFoodLibraryItem? = nil
     @State private var newProtein: String = ""
 
     var body: some View {
@@ -1204,12 +1214,14 @@ private struct MisAlimentosSheet: View {
                                     }
 
                                     Button {
-                                        store.removeFoodFromLibrary(id: item.id)
+                                        pendingDeleteFood = item
                                     } label: {
                                         Image(systemName: "trash")
-                                            .font(.system(size: 13))
+                                            .font(.system(size: 13.5))
                                             .foregroundColor(BevelColors.textMuted)
+                                            .frame(width: 44, height: 44)
                                     }
+                                    .accessibilityLabel("Eliminar alimento guardado")
                                 }
                                 .padding(13)
                             }
@@ -1225,6 +1237,24 @@ private struct MisAlimentosSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Cerrar", action: onClose)
                 }
+            }
+            .confirmationDialog(
+                "¿Eliminar de Mis alimentos?",
+                isPresented: Binding(
+                    get: { pendingDeleteFood != nil },
+                    set: { if !$0 { pendingDeleteFood = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Eliminar alimento", role: .destructive) {
+                    if let f = pendingDeleteFood {
+                        store.removeFoodFromLibrary(id: f.id)
+                    }
+                    pendingDeleteFood = nil
+                }
+                Button("Cancelar", role: .cancel) { pendingDeleteFood = nil }
+            } message: {
+                Text("Se quitará «\(pendingDeleteFood?.title ?? "")» de tu biblioteca.")
             }
         }
     }
@@ -1559,6 +1589,7 @@ private struct MealComposerSheet: View {
     @State private var capturedImage: UIImage? = nil
     @State private var capturedJpegData: Data? = nil
     @State private var removedExistingPhoto: Bool = false
+    @State private var showDeleteMealConfirm: Bool = false
 
     @State private var isAnalyzingAI: Bool = false
     @State private var aiFeedbackText: String? = nil
@@ -1781,11 +1812,9 @@ private struct MealComposerSheet: View {
                             .background(Capsule().fill(BevelColors.emeraldEnd))
                     }
 
-                    if let existing = existingMeal {
+                    if existingMeal != nil {
                         Button {
-                            MealPhotoStorage.deletePhoto(filename: existing.photoFilename)
-                            store.deleteMeal(id: existing.id)
-                            onClose()
+                            showDeleteMealConfirm = true
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "trash")
@@ -1805,6 +1834,21 @@ private struct MealComposerSheet: View {
             .navigationTitle(existingMeal == nil ? "Registrar comida" : "Editar comida")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
+            .confirmationDialog(
+                "¿Eliminar esta comida?",
+                isPresented: $showDeleteMealConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Eliminar comida permanentemente", role: .destructive) {
+                    if let existing = existingMeal {
+                        store.deleteMeal(id: existing.id)
+                    }
+                    onClose()
+                }
+                Button("Cancelar", role: .cancel) {}
+            } message: {
+                Text("Se borrarán «\(existingMeal?.title ?? "esta comida")» y su foto asociada.")
+            }
             .onAppear {
                 populateInitialFields()
                 if !didApplyInitialMode && existingMeal == nil {
@@ -1920,13 +1964,17 @@ private struct MealComposerSheet: View {
         let jpg = capturedJpegData
         let key = store.geminiApiKey
         let model = store.selectedGeminiModel
+        let allowCloud = store.cloudAIEnabled
+        let allowKeyless = store.allowKeylessAIFallback
 
         Task {
             let est = await GeminiCoachService.shared.analyzeMealWithAI(
                 descriptionText: desc,
                 jpegImageData: jpg,
                 apiKey: key,
-                selectedModel: model
+                selectedModel: model,
+                allowCloudAI: allowCloud,
+                allowKeylessFallback: allowKeyless
             )
             await MainActor.run {
                 isAnalyzingAI = false
@@ -2384,7 +2432,7 @@ struct NutrientDetailScreen: View {
                             .foregroundColor(BevelColors.textPrimary)
                         Spacer()
                         if manualVal > 0 {
-                            Button("Borrar manual") { store.resetNutrientAmount(key: key) }
+                            Button("Borrar manual") { showResetConfirmation = true }
                                 .font(ImprovingFont.caption(12))
                                 .foregroundColor(BevelColors.coralHigh)
                         }
