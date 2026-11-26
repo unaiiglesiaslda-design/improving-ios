@@ -569,7 +569,9 @@ struct SuenoDetailScreen: View {
                     }
 
                     // Latencia de Sueño y Alineación Circadiana (Apartado 1.7)
-                    CircadianAndSleepLatencyCard(store: store)
+                    if avail.hasSleepData || store.circadianAndLatencySnapshot.alignmentPct != nil {
+                        CircadianAndSleepLatencyCard(store: store)
+                    }
 
                     // 4-Hour Time-Aware Sleep-Focused AI Coaching Card
                     LiveAiCoachingCard(

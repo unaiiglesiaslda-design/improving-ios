@@ -33,7 +33,8 @@ extension GeminiCoachService {
         CÓMO CONVERSAR Y ACTUAR DENTRO DE LA APP:
         - \(continuityRule)
         - Si te pregunta sobre entrenamiento, sueño, comida, salir de fiesta, suplementos, molestias, horarios o cualquier tema cotidiano o deportivo, responde con naturalidad, criterio real y cercanía.
-        - TIENES CAPACIDAD REAL PARA REGISTRAR, EDITAR Y BORRAR DATOS EN IMPROVING mediante tus herramientas (`log_meal`, `edit_meal`, `delete_meal`, `add_quick_nutrient`, `update_nutrition_goals`, `set_journal_habit`, `set_journal_note_and_mood`, `create_custom_habit`, `log_workout`, `edit_or_delete_workout`, `log_body_measurement`).
+        - TIENES CAPACIDAD REAL PARA REGISTRAR, EDITAR Y BORRAR DATOS EN IMPROVING mediante tus herramientas (`log_meal`, `edit_meal`, `delete_meal`, `add_quick_nutrient`, `update_nutrition_goals`, `set_journal_habit`, `set_journal_note_and_mood`, `create_custom_habit`, `log_workout`, `edit_or_delete_workout`, `log_body_measurement`, `save_coach_memory`).
+        - MEMORIA A LARGO PLAZO Y MODO ACTIVO: Respeta siempre los recuerdos permanentes en `diario_hoy.memoria_largo_plazo_usuario` (lesiones, objetivos deportivos, intolerancias, horarios) y la directriz del modo elegido en `diario_hoy.modo_objetivo_global`. Si \(name) te pide que recuerdes algo para el futuro ("recuerda que tengo tendinitis", "apunta que preparo media maratón"), llama directamente a `save_coach_memory`.
         - Cuando \(name) te pida registrar algo ("he comido...", "apunta...", "hoy pesé...", "hice 45 min de pádel...", "marca creatina en el diario...") o modificar/borrar un registro ("cambia la hora del desayuno a las 9:15", "borra la merienda", "pasa la cena a ayer"), EJECUTA LA HERRAMIENTA DIRECTAMENTE SIN PEDIR PERMISO PREVIO (el usuario siempre tiene un botón Deshacer en tu respuesta).
         - Si \(name) adjunta una foto de un plato y dice que se lo comió o pide registrarlo, estima con precisión título, kcal, proteína, carbos, grasas, puntuación 1–100 y factores nutricionales y llama a `log_meal` directamente con la hora indicada (o la hora actual si no indicó otra).
         - Para editar o borrar comidas/entrenamientos usa siempre el `id` exacto que aparece en `nutricion_hoy.comidas_registradas`, `comidas_ayer` o `metricas_hoy.entrenamientos_hoy`.
@@ -324,6 +325,17 @@ extension GeminiCoachService {
                     "diastolic_bp": ["type": "INTEGER", "description": "Tensión diastólica mmHg"],
                     "date_iso": ["type": "STRING", "description": "Fecha yyyy-MM-dd (opcional)"]
                 ]
+            ]
+        ],
+        [
+            "name": "save_coach_memory",
+            "description": "Guarda una nota permanente en la memoria a largo plazo del Coach IA (lesión, objetivo deportivo, preferencia alimentaria u horario habitual) para recordarla siempre.",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "note": ["type": "STRING", "description": "Texto conciso a recordar a largo plazo en español"]
+                ],
+                "required": ["note"]
             ]
         ]
     ]

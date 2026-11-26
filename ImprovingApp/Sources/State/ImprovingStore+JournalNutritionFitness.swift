@@ -795,6 +795,7 @@ extension ImprovingStore {
         } else {
             mealsByDate[iso] = list
         }
+        syncAutoJournalHabits(for: iso, clearMissingFromDeletedMeal: true)
         invalidateSectionCoachingCache(sections: [.hoy, .energia])
         dataRevision += 1
         persistState()
@@ -1173,11 +1174,11 @@ extension ImprovingStore {
         persistState()
     }
 
-    /// Automatically populates Diario habits (`caffeine`, `alcohol`, `late_meal`, `added_sugar`, `dairy`) from logged meals without double entry.
-    func syncAutoJournalHabits(for dateIso: String? = nil) {
+    /// Automatically populates Diario habits (`caffeine`, `alcohol`, `late_meal`, `added_sugar`) from logged meals without double entry.
+    func syncAutoJournalHabits(for dateIso: String? = nil, clearMissingFromDeletedMeal: Bool = false) {
         let iso = dateIso ?? selectedDateIso
         let meals = mealsByDate[iso] ?? []
-        guard !meals.isEmpty else { return }
+        if meals.isEmpty && !clearMissingFromDeletedMeal { return }
 
         var checkMap = journalCheckinsByDate[iso] ?? [:]
         var quantMap = journalQuantitiesByDate[iso] ?? [:]
@@ -1195,6 +1196,10 @@ extension ImprovingStore {
             if let t = timing.lastCaffeineTimeLabel {
                 timeMap["caffeine"] = t
             }
+        } else if clearMissingFromDeletedMeal {
+            checkMap.removeValue(forKey: "caffeine")
+            quantMap.removeValue(forKey: "caffeine")
+            timeMap.removeValue(forKey: "caffeine")
         }
 
         // 2. Alcohol auto-sync
@@ -1205,6 +1210,10 @@ extension ImprovingStore {
             if let lastAlcMeal = meals.first(where: { ($0.alcoholDrinks ?? 0) > 0 }) {
                 timeMap["alcohol"] = lastAlcMeal.timeLabel
             }
+        } else if clearMissingFromDeletedMeal {
+            checkMap.removeValue(forKey: "alcohol")
+            quantMap.removeValue(forKey: "alcohol")
+            timeMap.removeValue(forKey: "alcohol")
         }
 
         // 3. Late meal auto-sync (meal < 2.8h before bedtime or >= 20:45)
@@ -1218,6 +1227,10 @@ extension ImprovingStore {
             checkMap["late_meal"] = .yes
             quantMap["late_meal"] = timing.hoursFromLastMealToBedtime ?? 1.5
             timeMap["late_meal"] = lastT
+        } else if clearMissingFromDeletedMeal {
+            checkMap.removeValue(forKey: "late_meal")
+            quantMap.removeValue(forKey: "late_meal")
+            timeMap.removeValue(forKey: "late_meal")
         }
 
         // 4. Added sugar auto-sync
@@ -1227,9 +1240,9 @@ extension ImprovingStore {
             checkMap["added_sugar"] = .yes
         }
 
-        journalCheckinsByDate[iso] = checkMap
-        if !quantMap.isEmpty { journalQuantitiesByDate[iso] = quantMap }
-        if !timeMap.isEmpty { journalEventTimesByDate[iso] = timeMap }
+        if checkMap.isEmpty { journalCheckinsByDate.removeValue(forKey: iso) } else { journalCheckinsByDate[iso] = checkMap }
+        if quantMap.isEmpty { journalQuantitiesByDate.removeValue(forKey: iso) } else { journalQuantitiesByDate[iso] = quantMap }
+        if timeMap.isEmpty { journalEventTimesByDate.removeValue(forKey: iso) } else { journalEventTimesByDate[iso] = timeMap }
     }
 
     var caffeineAndMealTimingToday: CaffeineAndMealTimingSnapshot {

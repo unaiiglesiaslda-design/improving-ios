@@ -490,7 +490,16 @@ struct ClinicalReportExportCard: View {
     @ObservedObject var store: ImprovingStore
     let periodDays: Int
 
+    @State private var cachedPdfURL: URL? = nil
+    @State private var cachedCsvURL: URL? = nil
+
+    private func refreshExports() {
+        cachedPdfURL = try? ClinicalReportExporter.generateClinicalPDF(store: store, periodDays: periodDays)
+        cachedCsvURL = try? ClinicalReportExporter.generateBiometricCSV(store: store, periodDays: periodDays)
+    }
+
     var body: some View {
+        let exportKey = "\(periodDays)#\(store.dataRevision)#\(store.labReports.count)"
         BevelCard(cornerRadius: 20) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -505,7 +514,7 @@ struct ClinicalReportExportCard: View {
                     .foregroundColor(BevelColors.textSecondary)
 
                 HStack(spacing: 10) {
-                    if let pdfURL = try? ClinicalReportExporter.generateClinicalPDF(store: store, periodDays: periodDays) {
+                    if let pdfURL = cachedPdfURL {
                         ShareLink(item: pdfURL) {
                             Label("Exportar PDF médico", systemImage: "doc.fill")
                                 .font(ImprovingFont.caption(12.5))
@@ -515,10 +524,30 @@ struct ClinicalReportExportCard: View {
                                 .padding(.vertical, 11)
                                 .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.indigoEnd))
                         }
+                    } else {
+                        Button { refreshExports() } label: {
+                            Label("Preparar PDF médico", systemImage: "doc.fill")
+                                .font(ImprovingFont.caption(12.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.indigoEnd))
+                        }
                     }
-                    if let csvURL = try? ClinicalReportExporter.generateBiometricCSV(store: store, periodDays: periodDays) {
+                    if let csvURL = cachedCsvURL {
                         ShareLink(item: csvURL) {
                             Label("Exportar CSV", systemImage: "tablecells.fill")
+                                .font(ImprovingFont.caption(12.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                        }
+                    } else {
+                        Button { refreshExports() } label: {
+                            Label("Preparar CSV", systemImage: "tablecells.fill")
                                 .font(ImprovingFont.caption(12.5))
                                 .fontWeight(.bold)
                                 .foregroundColor(BevelColors.textPrimary)
@@ -530,6 +559,9 @@ struct ClinicalReportExportCard: View {
                 }
             }
             .padding(16)
+        }
+        .task(id: exportKey) {
+            refreshExports()
         }
     }
 }

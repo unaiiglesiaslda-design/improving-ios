@@ -748,6 +748,19 @@ final class ImprovingStore: ObservableObject {
         )
     }
 
+    var hasCustomNutritionGoalOverrides: Bool {
+        customNutritionGoals.caloriesKcal != nil ||
+        customNutritionGoals.fatG != nil ||
+        customNutritionGoals.carbsG != nil ||
+        customNutritionGoals.proteinG != nil
+    }
+
+    func clearCustomNutritionGoals() {
+        customNutritionGoals = CustomNutritionGoals()
+        dataRevision += 1
+        persistState()
+    }
+
     var savedFoodsCounts: (favorites: Int, recipes: Int, meals: Int) {
         let favs = savedFoodsLibrary.filter { $0.kind == .favorite }.count
         let recs = savedFoodsLibrary.filter { $0.kind == .recipe }.count
@@ -755,8 +768,12 @@ final class ImprovingStore: ObservableObject {
         return (favs, recs, mls)
     }
 
+    static func isZeroCalorieCaffeineOnlyDrink(_ m: NutritionMealItem) -> Bool {
+        m.kcal == 0 && m.proteinG == 0 && m.carbsG == 0 && m.fatG == 0 && (m.caffeineMg ?? 0) > 0
+    }
+
     func nutritionScore(for dateIso: String) -> Int? {
-        let meals = mealsByDate[dateIso] ?? []
+        let meals = (mealsByDate[dateIso] ?? []).filter { !Self.isZeroCalorieCaffeineOnlyDrink($0) }
         guard !meals.isEmpty else { return nil }
         let totalKcal = max(meals.reduce(0) { $0 + max($1.kcal, 50) }, 1)
         let weighted = meals.reduce(0.0) { acc, m in
@@ -775,6 +792,7 @@ final class ImprovingStore: ObservableObject {
 
     func nutritionDayTotals(for dateIso: String) -> (kcal: Int, fatG: Double, carbsG: Double, proteinG: Double, score: Int?, mealCount: Int) {
         let meals = mealsByDate[dateIso] ?? []
+        let foodMeals = meals.filter { !Self.isZeroCalorieCaffeineOnlyDrink($0) }
         let extraP = manualNutrientAmount(for: "Proteína", dateIso: dateIso)
         let extraC = manualNutrientAmount(for: "Carbohidratos", dateIso: dateIso)
         let extraF = manualNutrientAmount(for: "Grasas", dateIso: dateIso)
@@ -783,7 +801,7 @@ final class ImprovingStore: ObservableObject {
         let f = Double(meals.reduce(0) { $0 + $1.fatG }) + extraF
         let mealKcal = meals.reduce(0) { $0 + $1.kcal }
         let kcal = mealKcal + Int((extraP * 4.0 + extraC * 4.0 + extraF * 9.0).rounded())
-        return (kcal, f, c, p, nutritionScore(for: dateIso), meals.count)
+        return (kcal, f, c, p, nutritionScore(for: dateIso), foodMeals.count)
     }
 
     func burnedCalories(for dateIso: String) -> Int {

@@ -1119,7 +1119,7 @@ struct StrengthSessionLoggerSheet: View {
                 }
             }
             .sheet(isPresented: $showCatalogPicker) {
-                StrengthCatalogPickerSheet { chosen in
+                StrengthCatalogPickerSheet(store: store) { chosen in
                     newExerciseName = chosen.name
                     if let firstM = chosen.primaryMuscles.first {
                         newMuscle = firstM
@@ -1220,12 +1220,13 @@ struct StrengthSessionLoggerSheet: View {
         let histSnap = store.exercisePerformanceSnapshot(for: s.exercise)
         let isNewPr = s.setKind != .warmup && histSnap.bestOneRepMaxKg > 0 && s.estimatedOneRepMaxKg > histSnap.bestOneRepMaxKg + 0.2
         return BevelCard(cornerRadius: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
                     HStack(spacing: 6) {
                         Text(s.exercise)
                             .font(ImprovingFont.cardTitle(14.5))
                             .foregroundColor(BevelColors.textPrimary)
+                            .lineLimit(1)
                         Text(s.setKind.shortBadge)
                             .font(ImprovingFont.microLabel(9.5))
                             .foregroundColor(s.setKind == .warmup ? BevelColors.textMuted : BevelColors.amberStart)
@@ -1233,7 +1234,7 @@ struct StrengthSessionLoggerSheet: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(BevelColors.cardSubtle))
                         if isNewPr {
-                            Text("🏆 NUEVO PR")
+                            Text("🏆 PR")
                                 .font(ImprovingFont.microLabel(9.5))
                                 .foregroundColor(BevelColors.greenPrimary)
                                 .padding(.horizontal, 6)
@@ -1241,23 +1242,72 @@ struct StrengthSessionLoggerSheet: View {
                                 .background(Capsule().fill(BevelColors.greenSoftBg))
                         }
                     }
+                    Spacer(minLength: 4)
+                    Button(s.completed ? "✓ Hecho" : "Marcar") {
+                        AppHaptics.selection()
+                        set.wrappedValue.completed.toggle()
+                    }
+                    .font(ImprovingFont.caption(11.5))
+                    .fontWeight(.bold)
+                    .foregroundColor(s.completed ? BevelColors.greenPrimary : BevelColors.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(s.completed ? BevelColors.greenSoftBg : BevelColors.trackGroove))
+                }
+
+                HStack(spacing: 8) {
                     Text("\(s.reps) reps · \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), s.weightKg)) kg · 1RM \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), s.estimatedOneRepMaxKg)) kg\(s.rir.map { " · RIR \($0)" } ?? "")")
                         .font(ImprovingFont.caption(12))
                         .monospacedDigit()
                         .foregroundColor(BevelColors.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                    Spacer(minLength: 4)
+                    Button {
+                        AppHaptics.selection()
+                        let copy = StrengthLoggedSet(
+                            id: UUID().uuidString,
+                            dateIso: s.dateIso,
+                            exercise: s.exercise,
+                            reps: s.reps,
+                            weightKg: s.weightKg,
+                            primaryMuscles: s.primaryMuscles,
+                            secondaryMuscles: s.secondaryMuscles,
+                            completed: s.completed,
+                            setKind: s.setKind,
+                            rpe: s.rpe,
+                            rir: s.rir
+                        )
+                        if let idx = setsDraft.firstIndex(where: { $0.id == s.id }) {
+                            setsDraft.insert(copy, at: idx + 1)
+                        } else {
+                            setsDraft.append(copy)
+                        }
+                    } label: {
+                        Image(systemName: "plus.square.on.square")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(BevelColors.skyBlue)
+                            .frame(width: 28, height: 28)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(BevelColors.skySoftBg))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Duplicar serie de \(s.exercise)")
+
+                    Button {
+                        AppHaptics.selection()
+                        setsDraft.removeAll { $0.id == s.id }
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundColor(BevelColors.coralHigh)
+                            .frame(width: 28, height: 28)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(BevelColors.coralSoftBg))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Eliminar serie de \(s.exercise)")
                 }
-                Spacer()
-                Button(s.completed ? "✓ Hecho" : "Marcar") {
-                    set.wrappedValue.completed.toggle()
-                }
-                .font(ImprovingFont.caption(12))
-                .fontWeight(.bold)
-                .foregroundColor(s.completed ? BevelColors.greenPrimary : BevelColors.textSecondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 10).fill(s.completed ? BevelColors.greenSoftBg : BevelColors.trackGroove))
             }
-            .padding(14)
+            .padding(13)
         }
     }
 
@@ -1314,62 +1364,117 @@ struct StrengthSessionLoggerSheet: View {
 
 struct OvertrainingAutoDeloadCard: View {
     @ObservedObject var store: ImprovingStore
+    @State private var manuallyExpanded: Bool = false
 
     var body: some View {
         let assess = store.overtrainingAssessment
         let accent: Color = assess.riskLevel == 2 ? BevelColors.coralHigh : (assess.riskLevel == 1 ? BevelColors.amberStart : BevelColors.greenPrimary)
+        let isExpanded = assess.riskLevel >= 1 || store.autoDeloadModeActive || manuallyExpanded
 
-        BevelCard(cornerRadius: 20) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Image(systemName: assess.riskLevel == 2 ? "bolt.shield.fill" : "waveform.path.ecg.rectangle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(accent)
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(accent.opacity(0.14)))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("FATIGA NEUROMUSCULAR Y AUTO-DELOAD")
-                            .font(ImprovingFont.microLabel(10))
-                            .foregroundColor(BevelColors.textMuted)
+        if !isExpanded {
+            Button {
+                AppHaptics.selection()
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                    manuallyExpanded = true
+                }
+            } label: {
+                BevelCard(cornerRadius: 16) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "waveform.path.ecg.rectangle.fill")
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundColor(accent)
+                            .frame(width: 28, height: 28)
+                            .background(Circle().fill(accent.opacity(0.14)))
                         Text(assess.statusTitle)
-                            .font(ImprovingFont.cardTitle(14.5))
+                            .font(ImprovingFont.cardTitle(13.5))
                             .foregroundColor(BevelColors.textPrimary)
-                    }
-                    Spacer()
-                    Button {
-                        AppHaptics.selection()
-                        store.toggleAutoDeloadMode()
-                    } label: {
-                        Text(store.autoDeloadModeActive ? "Descarga: ON" : "Descarga −15%")
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(String(format: "ACWR %.2f", locale: Locale(identifier: "es_ES"), assess.acwr))
                             .font(ImprovingFont.caption(11.5))
-                            .fontWeight(.bold)
-                            .foregroundColor(store.autoDeloadModeActive ? .white : accent)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 6)
-                            .background(Capsule().fill(store.autoDeloadModeActive ? accent : accent.opacity(0.14)))
+                            .fontWeight(.semibold)
+                            .monospacedDigit()
+                            .foregroundColor(accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(accent.opacity(0.12)))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(BevelColors.textMuted)
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
                 }
-
-                HStack(spacing: 14) {
-                    Label(String(format: "ACWR %.2f", locale: Locale(identifier: "es_ES"), assess.acwr), systemImage: "gauge.with.dots.needle.67percent")
-                    Label(String(format: "VFC 3d %+.1f ms", locale: Locale(identifier: "es_ES"), assess.hrv3DaySlopeMs), systemImage: "waveform.path.ecg")
-                    Label(String(format: "RPE %.1f", locale: Locale(identifier: "es_ES"), assess.recentAvgRpe), systemImage: "flame.fill")
-                }
-                .font(ImprovingFont.caption(11.5))
-                .monospacedDigit()
-                .foregroundColor(BevelColors.textSecondary)
-
-                Text(assess.recommendation)
-                    .font(ImprovingFont.caption(12))
-                    .foregroundColor(BevelColors.textMuted)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(16)
+            .buttonStyle(.plain)
+        } else {
+            BevelCard(cornerRadius: 20) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Image(systemName: assess.riskLevel == 2 ? "bolt.shield.fill" : "waveform.path.ecg.rectangle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(accent)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(accent.opacity(0.14)))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("FATIGA NEUROMUSCULAR Y AUTO-DELOAD")
+                                .font(ImprovingFont.microLabel(10))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(assess.statusTitle)
+                                .font(ImprovingFont.cardTitle(14.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
+                        Spacer()
+                        Button {
+                            AppHaptics.selection()
+                            store.toggleAutoDeloadMode()
+                        } label: {
+                            Text(store.autoDeloadModeActive ? "Descarga: ON" : "Descarga −15%")
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(store.autoDeloadModeActive ? .white : accent)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(store.autoDeloadModeActive ? accent : accent.opacity(0.14)))
+                        }
+                        if assess.riskLevel == 0 && !store.autoDeloadModeActive {
+                            Button {
+                                AppHaptics.selection()
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.86)) {
+                                    manuallyExpanded = false
+                                }
+                            } label: {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(BevelColors.textMuted)
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    HStack(spacing: 14) {
+                        Label(String(format: "ACWR %.2f", locale: Locale(identifier: "es_ES"), assess.acwr), systemImage: "gauge.with.dots.needle.67percent")
+                        Label(String(format: "VFC 3d %+.1f ms", locale: Locale(identifier: "es_ES"), assess.hrv3DaySlopeMs), systemImage: "waveform.path.ecg")
+                        Label(String(format: "RPE %.1f", locale: Locale(identifier: "es_ES"), assess.recentAvgRpe), systemImage: "flame.fill")
+                    }
+                    .font(ImprovingFont.caption(11.5))
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textSecondary)
+
+                    Text(assess.recommendation)
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+            }
         }
     }
 }
 
 private struct StrengthCatalogPickerSheet: View {
+    @ObservedObject var store: ImprovingStore
     let onSelect: (StrengthCatalogExercise) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var searchText: String = ""
@@ -1412,6 +1517,7 @@ private struct StrengthCatalogPickerSheet: View {
                 }
 
                 List(filteredExercises) { ex in
+                    let snap = store.exercisePerformanceSnapshot(for: ex.name)
                     Button {
                         onSelect(ex)
                     } label: {
@@ -1424,11 +1530,26 @@ private struct StrengthCatalogPickerSheet: View {
                                     .font(ImprovingFont.caption(12))
                                     .foregroundColor(BevelColors.textSecondary)
                             }
-                            Spacer()
-                            Text("\(Int(ex.defaultWeightKg)) kg × \(ex.defaultReps)")
-                                .font(ImprovingFont.caption(12))
-                                .monospacedDigit()
-                                .foregroundColor(BevelColors.skyBlue)
+                            Spacer(minLength: 6)
+                            if snap.bestOneRepMaxKg > 0 {
+                                VStack(alignment: .trailing, spacing: 3) {
+                                    Text("PR 1RM \(Int(snap.bestOneRepMaxKg.rounded())) kg")
+                                        .font(ImprovingFont.microLabel(9.5))
+                                        .foregroundColor(BevelColors.amberStart)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(BevelColors.amberSoftBg))
+                                    Text("\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), snap.suggestedWeightKg)) kg × \(snap.suggestedReps)")
+                                        .font(ImprovingFont.caption(11.5))
+                                        .monospacedDigit()
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                }
+                            } else {
+                                Text("\(Int(ex.defaultWeightKg)) kg × \(ex.defaultReps)")
+                                    .font(ImprovingFont.caption(12))
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.skyBlue)
+                            }
                         }
                     }
                 }

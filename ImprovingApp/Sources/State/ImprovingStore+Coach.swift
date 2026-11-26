@@ -846,6 +846,21 @@ extension ImprovingStore {
             )
             return (encodeToolResponse(["ok": true, "habit_id": created.id, "title": created.title]), action)
 
+        case "save_coach_memory":
+            guard let note = str("note"), !note.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Falta el texto a guardar en memoria."]), nil)
+            }
+            addCoachMemoryNote(note)
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "brain.head.profile",
+                badgeColorHex: 0x60A5FA,
+                title: "Memoria actualizada",
+                detail: note,
+                undoPayload: nil
+            )
+            return (encodeToolResponse(["ok": true, "saved_memory": note, "total_memories": coachMemoryNotes.count]), action)
+
         case "log_workout":
             guard let title = str("title"), !title.isEmpty, let dur = intVal("duration_min"), dur > 0 else {
                 return (encodeToolResponse(["ok": false, "error": "Falta nombre o duración del entrenamiento."]), nil)

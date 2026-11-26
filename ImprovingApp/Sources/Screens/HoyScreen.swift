@@ -96,7 +96,9 @@ struct HoyScreen: View {
                 }
 
                 // 1. Top Bar with Dropdown Calendar Picker + Emoji Morning Briefing & Mode Button + < Date > + Daily Share & Avatar
-                HStack(spacing: 8) {
+                let vitalAlert = store.healthMonitorAlert(for: store.selectedDateIso)
+                let hasBriefingAlert = vitalAlert.isCritical || store.overtrainingAssessment.riskLevel >= 2
+                HStack(spacing: 6) {
                     HStack(spacing: 6) {
                         Button { showCalendarSheet = true } label: {
                             Image(systemName: "calendar")
@@ -118,36 +120,47 @@ struct HoyScreen: View {
                                 .frame(width: 40, height: 40)
                                 .background(Circle().fill(showBriefingDropdown ? BevelColors.indigoEnd.opacity(0.24) : BevelColors.glassChromeFill))
                                 .overlay(Circle().strokeBorder(showBriefingDropdown ? BevelColors.indigoEnd.opacity(0.75) : BevelColors.glassChromeBorder, lineWidth: showBriefingDropdown ? 1.2 : 0.8))
+                                .overlay(alignment: .topTrailing) {
+                                    if hasBriefingAlert {
+                                        Circle()
+                                            .fill(BevelColors.coralHigh)
+                                            .frame(width: 9, height: 9)
+                                            .overlay(Circle().strokeBorder(BevelColors.canvas, lineWidth: 1.5))
+                                            .offset(x: -1, y: 1)
+                                    }
+                                }
                         }
                         .accessibilityLabel("Briefing matutino y modo \(store.globalGoalMode.rawValue)")
                     }
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 2)
 
-                    HStack(spacing: 8) {
+                    HStack(spacing: 5) {
                         Button {
                             UISelectionFeedbackGenerator().selectionChanged()
                             store.shiftDay(1)
                         } label: {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 13, weight: .bold))
+                                .font(.system(size: 12.5, weight: .bold))
                                 .foregroundColor(BevelColors.textPrimary)
-                                .frame(width: 30, height: 30)
+                                .frame(width: 28, height: 28)
                                 .background(Circle().fill(BevelColors.glassChromeFill))
                                 .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.7))
                         }
 
                         Button { showCalendarSheet = true } label: {
-                            HStack(spacing: 4) {
+                            HStack(spacing: 3) {
                                 Text(store.dateLabel)
-                                    .font(ImprovingFont.sectionTitle(16.5))
+                                    .font(ImprovingFont.sectionTitle(16))
                                     .foregroundColor(BevelColors.textPrimary)
                                     .lineLimit(1)
+                                    .minimumScaleFactor(0.80)
                                 Image(systemName: "chevron.down")
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.system(size: 9.5, weight: .semibold))
                                     .foregroundColor(BevelColors.textSecondary)
                             }
                         }
+                        .layoutPriority(1)
 
                         Button {
                             if store.dayOffset > 0 {
@@ -156,16 +169,16 @@ struct HoyScreen: View {
                             }
                         } label: {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .bold))
+                                .font(.system(size: 12.5, weight: .bold))
                                 .foregroundColor(store.dayOffset > 0 ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
-                                .frame(width: 30, height: 30)
+                                .frame(width: 28, height: 28)
                                 .background(Circle().fill(BevelColors.glassChromeFill.opacity(store.dayOffset > 0 ? 1 : 0.45)))
                                 .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.7))
                         }
                         .disabled(store.dayOffset == 0)
                     }
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 2)
 
                     HStack(spacing: 8) {
                         Button {
@@ -248,7 +261,6 @@ struct HoyScreen: View {
                 }
 
                 // Proactive WHOOP-style Health Monitor multi-vital alert (2+ unhealthy overnight vitals simultaneously)
-                let vitalAlert = store.healthMonitorAlert(for: store.selectedDateIso)
                 if vitalAlert.isCritical {
                     Button { onNavigate(.esfuerzo) } label: {
                         BevelCard(cornerRadius: 18) {
@@ -1083,6 +1095,31 @@ struct MorningBriefingAndGoalModeCard: View {
                     Label(brief.nutritionPlanText, systemImage: "fork.knife")
                         .font(ImprovingFont.caption(12))
                         .foregroundColor(BevelColors.greenPrimary)
+
+                    if store.hasCustomNutritionGoalOverrides {
+                        HStack(spacing: 8) {
+                            Label("Metas manuales activas", systemImage: "slider.horizontal.3")
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.amberStart)
+                            Spacer(minLength: 4)
+                            Button {
+                                AppHaptics.selection()
+                                store.clearCustomNutritionGoals()
+                            } label: {
+                                Text("Aplicar metas del modo")
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.indigoEnd)
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 4)
+                                    .background(Capsule().fill(BevelColors.indigoEnd.opacity(0.14)))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(BevelColors.amberSoftBg.opacity(0.55)))
+                    }
 
                     if let deloadTxt = brief.deloadAlertText {
                         Label(deloadTxt, systemImage: "bolt.shield.fill")

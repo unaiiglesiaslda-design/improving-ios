@@ -6,6 +6,7 @@ import UIKit
 struct NutrientDetailScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
+    var onAskCoach: (() -> Void)? = nil
 
     @State private var showCustomInputSheet: Bool = false
     @State private var customAmountText: String = ""
@@ -42,7 +43,7 @@ struct NutrientDetailScreen: View {
 
                     nutrientGaugeCard(spec: spec, totalVal: totalVal, frac: frac)
                     if low.contains("cafe") {
-                        CaffeineWindowCard(store: store)
+                        CaffeineWindowCard(store: store, onAskCoach: onAskCoach)
                             .padding(.horizontal, 16)
                     }
                     nutrientEntriesSection(spec: spec, manualVal: manualVal)

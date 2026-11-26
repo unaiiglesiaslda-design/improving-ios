@@ -80,10 +80,12 @@ struct CaffeineWindowCard: View {
         .sheet(isPresented: $showDetailSheet) {
             CaffeineWindowDetailSheet(
                 store: store,
-                onAskCoach: {
-                    showDetailSheet = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                        onAskCoach?()
+                onAskCoach: onAskCoach.map { cb in
+                    {
+                        showDetailSheet = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                            cb()
+                        }
                     }
                 },
                 onClose: { showDetailSheet = false }
@@ -344,12 +346,13 @@ private struct CaffeineDecayCurveChart: View {
 
 struct CaffeineWindowDetailSheet: View {
     @ObservedObject var store: ImprovingStore
-    let onAskCoach: () -> Void
+    var onAskCoach: (() -> Void)? = nil
     let onClose: () -> Void
 
     @State private var showAllSources: Bool = false
     @State private var showQuickLogger: Bool = false
     @State private var activeGuide: CaffeineGuideArticle? = nil
+    @State private var loggedToastMessage: String? = nil
 
     private struct CaffeineGuideArticle: Identifiable {
         let id: String
@@ -380,32 +383,54 @@ struct CaffeineWindowDetailSheet: View {
     ]
 
     var body: some View {
-        let snap = store.caffeineWindowSnapshot
         let visibleSources = showAllSources
             ? CaffeineBeverageSource.commonSources
             : Array(CaffeineBeverageSource.commonSources.prefix(6))
 
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    heroHeaderSection(snap)
-                    chartAndBarSection(snap)
-                    registerCaffeineButton
-                    coachInsightSection(snap)
+            TimelineView(.periodic(from: .now, by: 60)) { _ in
+                let snap = store.caffeineWindowSnapshot
+                ZStack(alignment: .bottom) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            heroHeaderSection(snap)
+                            chartAndBarSection(snap)
+                            registerCaffeineButton
+                            coachInsightSection(snap)
 
-                    if !snap.intakes.isEmpty {
-                        loggedIntakesSection(snap)
+                            if !snap.intakes.isEmpty {
+                                loggedIntakesSection(snap)
+                            }
+
+                            commonSourcesSection(snap: snap, sources: visibleSources)
+                            moreInfoCarouselSection
+                            methodologyAndSourcesSection
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 6)
+                        .padding(.bottom, 54)
                     }
+                    .background(BevelColors.canvas)
 
-                    commonSourcesSection(snap: snap, sources: visibleSources)
-                    moreInfoCarouselSection
-                    methodologyAndSourcesSection
+                    if let toast = loggedToastMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(BevelColors.greenPrimary)
+                            Text(toast)
+                                .font(ImprovingFont.caption(12.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Capsule().fill(Color(hex: 0x1D2230).opacity(0.95)))
+                        .overlay(Capsule().strokeBorder(BevelColors.greenPrimary.opacity(0.45), lineWidth: 0.9))
+                        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
-                .padding(.bottom, 40)
             }
-            .background(BevelColors.canvas)
             .navigationTitle("Ventana de cafeína")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -539,17 +564,19 @@ struct CaffeineWindowDetailSheet: View {
                             .foregroundColor(BevelColors.textSecondary)
                     }
                     Spacer()
-                    Button(action: onAskCoach) {
-                        HStack(spacing: 3) {
-                            Text("Preguntar al Coach")
-                                .font(ImprovingFont.caption(12.5))
-                                .fontWeight(.semibold)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10.5, weight: .bold))
+                    if let onAskCoach {
+                        Button(action: onAskCoach) {
+                            HStack(spacing: 3) {
+                                Text("Preguntar al Coach")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.semibold)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10.5, weight: .bold))
+                            }
+                            .foregroundColor(BevelColors.textPrimary)
                         }
-                        .foregroundColor(BevelColors.textPrimary)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
 
                 Text(guidance)
@@ -677,6 +704,17 @@ struct CaffeineWindowDetailSheet: View {
                                 Button {
                                     AppHaptics.success()
                                     store.logQuickCaffeineDrink(title: src.displayTitle, mg: src.mg, emoji: src.emoji)
+                                    let msg = "\(src.name) (+\(Int(src.mg)) mg) añadido"
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                                        loggedToastMessage = msg
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.1) {
+                                        if loggedToastMessage == msg {
+                                            withAnimation(.easeOut(duration: 0.22)) {
+                                                loggedToastMessage = nil
+                                            }
+                                        }
+                                    }
                                 } label: {
                                     Image(systemName: "plus")
                                         .font(.system(size: 13, weight: .bold))

@@ -703,5 +703,28 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         XCTAssertTrue(WhoopPhysiologyEngine.isDrinkSafeForSleepNow(drinkMg: 28, snapshot: cSnap))
         XCTAssertFalse(WhoopPhysiologyEngine.isDrinkSafeForSleepNow(drinkMg: 160, snapshot: cSnap))
         XCTAssertEqual(cSnap.curvePoints.count, 65)
+
+        // 7. Polish round checks: 0-kcal caffeine drinks do not pollute nutrition score/mealCount,
+        // deleting a meal clears auto-synced Diario caffeine, and custom goal overrides can be reset cleanly.
+        XCTAssertNil(store.nutritionScore(for: todayIso))
+        let cafOnlyTotals = store.nutritionDayTotals(for: todayIso)
+        XCTAssertEqual(cafOnlyTotals.mealCount, 0)
+        XCTAssertEqual(cafOnlyTotals.kcal, 0)
+        XCTAssertEqual(store.journalCheckinsByDate[todayIso]?["caffeine"], .yes)
+        XCTAssertEqual(store.journalQuantitiesByDate[todayIso]?["caffeine"] ?? 0, 65.0, accuracy: 0.1)
+
+        if let espId = store.mealsByDate[todayIso]?.first?.id {
+            store.deleteMeal(id: espId, for: todayIso)
+        }
+        XCTAssertNil(store.journalCheckinsByDate[todayIso]?["caffeine"])
+        XCTAssertNil(store.journalQuantitiesByDate[todayIso]?["caffeine"])
+
+        XCTAssertFalse(store.hasCustomNutritionGoalOverrides)
+        store.updateNutritionGoals(CustomNutritionGoals(caloriesKcal: 1850))
+        XCTAssertTrue(store.hasCustomNutritionGoalOverrides)
+        XCTAssertEqual(store.effectiveNutritionGoals.kcal, 1850)
+        store.clearCustomNutritionGoals()
+        XCTAssertFalse(store.hasCustomNutritionGoalOverrides)
+        XCTAssertEqual(store.effectiveNutritionGoals.kcal, volKcal)
     }
 }

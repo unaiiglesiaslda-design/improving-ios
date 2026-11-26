@@ -422,7 +422,7 @@ struct ImprovingRootView: View {
                 }
             )
         case .nutrientDetail:
-            NutrientDetailScreen(store: store, onBack: { pop() })
+            NutrientDetailScreen(store: store, onBack: { pop() }, onAskCoach: { push(.askBevel) })
         case .nutritionTrends:
             NutritionTrendsDetailScreen(
                 store: store,

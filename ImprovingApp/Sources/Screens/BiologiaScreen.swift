@@ -182,142 +182,135 @@ struct BiologiaScreen: View {
                         }
                     }
 
-                    if let avgS = meanSleep {
-                        let hrs = Int(avgS)
-                        let mins = Int(((avgS - Double(hrs)) * 60).rounded())
+                    if meanSleep != nil || store.sleepConsistencyPct != nil {
+                        let consPct = store.sleepConsistencyPct
+                        let combinedSleepDelta = (meanSleep != nil ? bioEval.sleepDelta : 0) + (consPct != nil ? bioEval.sleepConsistencyDelta : 0)
+                        let sleepSub: String = {
+                            if let avgS = meanSleep {
+                                let hrs = Int(avgS)
+                                let mins = Int(((avgS - Double(hrs)) * 60).rounded())
+                                if let c = consPct {
+                                    return "\(hrs) h \(String(format: "%02d", mins)) min · Consistencia \(c)%"
+                                }
+                                return "\(hrs) h \(String(format: "%02d", mins)) min promedio"
+                            }
+                            return "\(consPct ?? 0)% regularidad horaria"
+                        }()
                         bioCategoryCard(
                             id: "sleep",
                             icon: "moon.fill",
-                            ringPrimary: impactColor(bioEval.sleepDelta),
+                            ringPrimary: impactColor(combinedSleepDelta),
                             ringSecondary: BevelColors.trackGroove,
                             title: "Sueño",
-                            subtitle: "\(hrs) h \(String(format: "%02d", mins)) min promedio",
+                            subtitle: sleepSub,
                             subtitleColor: BevelColors.textSecondary,
-                            deltaYears: bioEval.sleepDelta
+                            deltaYears: combinedSleepDelta
                         ) {
-                            BioDotRangeSlider(
-                                title: "Duración media (30 d)",
-                                valueLabel: "\(hrs) h \(String(format: "%02d", mins)) min",
-                                minLabel: "5 h",
-                                maxLabel: "10 h",
-                                deltaText: sliderDeltaNumber(bioEval.sleepDelta),
-                                deltaUnit: "años",
-                                positionFrac: min(max((avgS - 5.0) / 5.0, 0.05), 0.95),
-                                fillStartFrac: min(max((norms.sleepLowHours - 5.0) / 5.0, 0.10), 0.70),
-                                fillEndFrac: min(max((norms.sleepHighHours - 5.0) / 5.0, 0.45), 0.96),
-                                accentColor: BevelColors.bioTeal,
-                                deltaColor: impactColor(bioEval.sleepDelta)
-                            )
+                            if let avgS = meanSleep {
+                                let hrs = Int(avgS)
+                                let mins = Int(((avgS - Double(hrs)) * 60).rounded())
+                                BioDotRangeSlider(
+                                    title: "Duración media (30 d)",
+                                    valueLabel: "\(hrs) h \(String(format: "%02d", mins)) min",
+                                    minLabel: "5 h",
+                                    maxLabel: "10 h",
+                                    deltaText: sliderDeltaNumber(bioEval.sleepDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max((avgS - 5.0) / 5.0, 0.05), 0.95),
+                                    fillStartFrac: min(max((norms.sleepLowHours - 5.0) / 5.0, 0.10), 0.70),
+                                    fillEndFrac: min(max((norms.sleepHighHours - 5.0) / 5.0, 0.45), 0.96),
+                                    accentColor: BevelColors.bioTeal,
+                                    deltaColor: impactColor(bioEval.sleepDelta)
+                                )
+                            }
+                            if let c = consPct {
+                                if meanSleep != nil { Divider().background(BevelColors.divider) }
+                                BioDotRangeSlider(
+                                    title: "Consistencia circadiana del sueño",
+                                    valueLabel: "\(c)%",
+                                    minLabel: "30%",
+                                    maxLabel: "100%",
+                                    deltaText: sliderDeltaNumber(bioEval.sleepConsistencyDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max(Double(c - 30) / 70.0, 0.05), 0.95),
+                                    fillStartFrac: 0.64,
+                                    fillEndFrac: 0.96,
+                                    accentColor: BevelColors.periwinkleStart,
+                                    deltaColor: impactColor(bioEval.sleepConsistencyDelta)
+                                )
+                            }
                         }
                     }
 
-                    if let consPct = store.sleepConsistencyPct {
-                        bioCategoryCard(
-                            id: "sleep_consistency",
-                            icon: "calendar.badge.clock",
-                            ringPrimary: impactColor(bioEval.sleepConsistencyDelta),
-                            ringSecondary: BevelColors.trackGroove,
-                            title: "Consistencia circadiana del sueño",
-                            subtitle: "\(consPct)% regularidad horaria",
-                            subtitleColor: BevelColors.textSecondary,
-                            deltaYears: bioEval.sleepConsistencyDelta
-                        ) {
-                            BioDotRangeSlider(
-                                title: "Consistencia de horario",
-                                valueLabel: "\(consPct)%",
-                                minLabel: "30%",
-                                maxLabel: "100%",
-                                deltaText: sliderDeltaNumber(bioEval.sleepConsistencyDelta),
-                                deltaUnit: "años",
-                                positionFrac: min(max(Double(consPct - 30) / 70.0, 0.05), 0.95),
-                                fillStartFrac: 0.64,
-                                fillEndFrac: 0.96,
-                                accentColor: BevelColors.periwinkleStart,
-                                deltaColor: impactColor(bioEval.sleepConsistencyDelta)
-                            )
-                        }
-                    }
-
-                    if bioEval.hasWeeklyZones {
+                    if meanSteps != nil || bioEval.hasWeeklyZones || bioEval.hasWeeklyStrength {
                         let zp = store.longevityZoneProgress
-                        bioCategoryCard(
-                            id: "weekly_zones",
-                            icon: "heart.text.square.fill",
-                            ringPrimary: impactColor(bioEval.weeklyZonesDelta),
-                            ringSecondary: BevelColors.trackGroove,
-                            title: "Zonas cardíacas semanales (Z1–3 y Z4–5)",
-                            subtitle: "Z1–3: \(zp.weeklyZone1To3Minutes)/150 min · Z4–5: \(zp.weeklyZone4To5Minutes)/25 min",
-                            subtitleColor: BevelColors.textSecondary,
-                            deltaYears: bioEval.weeklyZonesDelta
-                        ) {
-                            BioDotRangeSlider(
-                                title: "Minutos aeróbicos (Z1–3) + pico VO₂ (Z4–5)",
-                                valueLabel: "\(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes) min/sem",
-                                minLabel: "0",
-                                maxLabel: "240m",
-                                deltaText: sliderDeltaNumber(bioEval.weeklyZonesDelta),
-                                deltaUnit: "años",
-                                positionFrac: min(max(Double(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes) / 240.0, 0.05), 0.95),
-                                fillStartFrac: 0.60,
-                                fillEndFrac: 0.95,
-                                accentColor: BevelColors.greenPrimary,
-                                deltaColor: impactColor(bioEval.weeklyZonesDelta)
-                            )
-                        }
-                    }
-
-                    if bioEval.hasWeeklyStrength {
-                        let zp = store.longevityZoneProgress
-                        bioCategoryCard(
-                            id: "weekly_strength",
-                            icon: "figure.strengthtraining.traditional",
-                            ringPrimary: impactColor(bioEval.weeklyStrengthDelta),
-                            ringSecondary: BevelColors.trackGroove,
-                            title: "Fuerza muscular semanal",
-                            subtitle: "\(zp.weeklyStrengthMinutes) min (\(zp.weeklyStrengthSessions) sesiones / 7 d)",
-                            subtitleColor: BevelColors.textSecondary,
-                            deltaYears: bioEval.weeklyStrengthDelta
-                        ) {
-                            BioDotRangeSlider(
-                                title: "Tiempo semanal de fuerza",
-                                valueLabel: "\(zp.weeklyStrengthMinutes) min",
-                                minLabel: "0",
-                                maxLabel: "180m",
-                                deltaText: sliderDeltaNumber(bioEval.weeklyStrengthDelta),
-                                deltaUnit: "años",
-                                positionFrac: min(max(Double(zp.weeklyStrengthMinutes) / 180.0, 0.05), 0.95),
-                                fillStartFrac: 0.42,
-                                fillEndFrac: 0.92,
-                                accentColor: BevelColors.amberStart,
-                                deltaColor: impactColor(bioEval.weeklyStrengthDelta)
-                            )
-                        }
-                    }
-
-                    if let avgSt = meanSteps {
+                        let combinedActivityDelta = (meanSteps != nil ? bioEval.activityDelta : 0)
+                            + (bioEval.hasWeeklyZones ? bioEval.weeklyZonesDelta : 0)
+                            + (bioEval.hasWeeklyStrength ? bioEval.weeklyStrengthDelta : 0)
+                        let activitySub: String = {
+                            var parts: [String] = []
+                            if let avgSt = meanSteps { parts.append("\(avgSt) pasos/d") }
+                            if bioEval.hasWeeklyZones { parts.append("Z1–5: \(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes)m") }
+                            if bioEval.hasWeeklyStrength { parts.append("Fuerza: \(zp.weeklyStrengthMinutes)m") }
+                            return parts.joined(separator: " · ")
+                        }()
                         bioCategoryCard(
                             id: "activity",
                             icon: "figure.run",
-                            ringPrimary: impactColor(bioEval.activityDelta),
+                            ringPrimary: impactColor(combinedActivityDelta),
                             ringSecondary: BevelColors.trackGroove,
                             title: "Actividad",
-                            subtitle: "\(avgSt) pasos/día (30 d)",
+                            subtitle: activitySub,
                             subtitleColor: BevelColors.textSecondary,
-                            deltaYears: bioEval.activityDelta
+                            deltaYears: combinedActivityDelta
                         ) {
-                            BioDotRangeSlider(
-                                title: "Número de pasos medio",
-                                valueLabel: String(format: "%.1fk", Double(avgSt) / 1000.0),
-                                minLabel: "0",
-                                maxLabel: "16k",
-                                deltaText: sliderDeltaNumber(bioEval.activityDelta),
-                                deltaUnit: "años",
-                                positionFrac: min(max(Double(avgSt) / 16000.0, 0.04), 0.96),
-                                fillStartFrac: min(max(Double(norms.dailyStepsGoal) / 16000.0, 0.25), 0.75),
-                                fillEndFrac: 0.90,
-                                accentColor: BevelColors.bioTeal,
-                                deltaColor: impactColor(bioEval.activityDelta)
-                            )
+                            if let avgSt = meanSteps {
+                                BioDotRangeSlider(
+                                    title: "Número de pasos medio (30 d)",
+                                    valueLabel: String(format: "%.1fk", Double(avgSt) / 1000.0),
+                                    minLabel: "0",
+                                    maxLabel: "16k",
+                                    deltaText: sliderDeltaNumber(bioEval.activityDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max(Double(avgSt) / 16000.0, 0.04), 0.96),
+                                    fillStartFrac: min(max(Double(norms.dailyStepsGoal) / 16000.0, 0.25), 0.75),
+                                    fillEndFrac: 0.90,
+                                    accentColor: BevelColors.bioTeal,
+                                    deltaColor: impactColor(bioEval.activityDelta)
+                                )
+                            }
+                            if bioEval.hasWeeklyZones {
+                                if meanSteps != nil { Divider().background(BevelColors.divider) }
+                                BioDotRangeSlider(
+                                    title: "Zonas cardíacas semanales (Z1–3: \(zp.weeklyZone1To3Minutes)m · Z4–5: \(zp.weeklyZone4To5Minutes)m)",
+                                    valueLabel: "\(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes) min/sem",
+                                    minLabel: "0",
+                                    maxLabel: "240m",
+                                    deltaText: sliderDeltaNumber(bioEval.weeklyZonesDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max(Double(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes) / 240.0, 0.05), 0.95),
+                                    fillStartFrac: 0.60,
+                                    fillEndFrac: 0.95,
+                                    accentColor: BevelColors.greenPrimary,
+                                    deltaColor: impactColor(bioEval.weeklyZonesDelta)
+                                )
+                            }
+                            if bioEval.hasWeeklyStrength {
+                                if meanSteps != nil || bioEval.hasWeeklyZones { Divider().background(BevelColors.divider) }
+                                BioDotRangeSlider(
+                                    title: "Fuerza muscular semanal (\(zp.weeklyStrengthSessions) sesiones / 7 d)",
+                                    valueLabel: "\(zp.weeklyStrengthMinutes) min",
+                                    minLabel: "0",
+                                    maxLabel: "180m",
+                                    deltaText: sliderDeltaNumber(bioEval.weeklyStrengthDelta),
+                                    deltaUnit: "años",
+                                    positionFrac: min(max(Double(zp.weeklyStrengthMinutes) / 180.0, 0.05), 0.95),
+                                    fillStartFrac: 0.42,
+                                    fillEndFrac: 0.92,
+                                    accentColor: BevelColors.amberStart,
+                                    deltaColor: impactColor(bioEval.weeklyStrengthDelta)
+                                )
+                            }
                         }
                     }
 
@@ -586,8 +579,10 @@ struct BiologiaScreen: View {
                         }
                     }
 
-                    // Seguimiento de Ciclo Menstrual y Calibración de Fase Lútea (Apartado 1.8)
-                    CycleTrackingBiologyCard(store: store)
+                    // Seguimiento de Ciclo Menstrual y Calibración de Fase Lútea (solo visible si perfil femenino o activo)
+                    if store.userProfile.sex == .female || store.cycleTrackingSettings.isEnabled {
+                        CycleTrackingBiologyCard(store: store)
+                    }
                 }
                 .padding(.horizontal, 16)
             }
@@ -918,20 +913,6 @@ struct CycleTrackingBiologyCard: View {
                         }
                         .padding(14)
                     }
-                }
-                .buttonStyle(.plain)
-            } else {
-                Button { showCycleSheet = true } label: {
-                    HStack {
-                        Image(systemName: "drop.circle")
-                            .font(.system(size: 12))
-                            .foregroundColor(BevelColors.textMuted)
-                        Text("Configurar seguimiento de ciclo fisiológico (opcional)")
-                            .font(ImprovingFont.caption(12))
-                            .foregroundColor(BevelColors.textMuted)
-                        Spacer()
-                    }
-                    .padding(.vertical, 6)
                 }
                 .buttonStyle(.plain)
             }

@@ -295,6 +295,30 @@ struct AskBevelScreen: View {
                         .foregroundColor(BevelColors.textPrimary)
                         .onSubmit { sendCurrentInput() }
 
+                    if let voiceErr = speechRecognizer.errorMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "mic.slash.fill")
+                                .font(.system(size: 11.5))
+                                .foregroundColor(BevelColors.amberStart)
+                            Text(voiceErr)
+                                .font(ImprovingFont.caption(11.5))
+                                .foregroundColor(BevelColors.amberStart)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Button("Ajustes") {
+                                if let url = URL(string: UIApplication.openSettingsURLString) {
+                                    UIApplication.shared.open(url)
+                                }
+                            }
+                            .font(ImprovingFont.caption(11.5))
+                            .fontWeight(.bold)
+                            .foregroundColor(BevelColors.skyBlue)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.amberSoftBg))
+                    }
+
                     HStack(spacing: 8) {
                         PhotosPicker(selection: $selectedPhotoItem, matching: .images, photoLibrary: .shared()) {
                             HStack(spacing: 5) {
@@ -896,6 +920,7 @@ struct CoachLongTermMemorySheet: View {
 
 final class SpeechDictationController: ObservableObject {
     @Published var isRecording: Bool = false
+    @Published var errorMessage: String? = nil
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -906,19 +931,42 @@ final class SpeechDictationController: ObservableObject {
             stopRecording()
             return
         }
+        errorMessage = nil
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
-            guard status == .authorized else { return }
             DispatchQueue.main.async {
-                self?.startSession(onTranscript: onTranscript)
+                guard let self else { return }
+                switch status {
+                case .authorized:
+                    AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                        DispatchQueue.main.async {
+                            if granted {
+                                self.startSession(onTranscript: onTranscript)
+                            } else {
+                                self.errorMessage = "Permiso de micrófono desactivado. Actívalo en Ajustes."
+                            }
+                        }
+                    }
+                case .denied, .restricted:
+                    self.errorMessage = "Reconocimiento de voz denegado. Actívalo en Ajustes."
+                case .notDetermined:
+                    self.errorMessage = "No se pudo verificar el permiso de dictado."
+                @unknown default:
+                    self.errorMessage = "Dictado por voz no disponible."
+                }
             }
         }
     }
 
     private func startSession(onTranscript: @escaping (String) -> Void) {
         stopRecording()
+        guard let recognizer = speechRecognizer, recognizer.isAvailable else {
+            errorMessage = "El reconocimiento de voz en español no está disponible ahora mismo."
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         guard (try? session.setCategory(.record, mode: .measurement, options: .duckOthers)) != nil,
               (try? session.setActive(true, options: .notifyOthersOnDeactivation)) != nil else {
+            errorMessage = "No se pudo iniciar el micrófono."
             return
         }
         let req = SFSpeechAudioBufferRecognitionRequest()
@@ -934,10 +982,11 @@ final class SpeechDictationController: ObservableObject {
         audioEngine.prepare()
         guard (try? audioEngine.start()) != nil else {
             inputNode.removeTap(onBus: 0)
+            errorMessage = "No se pudo capturar audio del micrófono."
             return
         }
         isRecording = true
-        recognitionTask = speechRecognizer?.recognitionTask(with: req) { [weak self] result, error in
+        recognitionTask = recognizer.recognitionTask(with: req) { [weak self] result, error in
             if let r = result {
                 let text = r.bestTranscription.formattedString
                 DispatchQueue.main.async {
