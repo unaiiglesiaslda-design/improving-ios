@@ -34,9 +34,10 @@ struct BodyCompositionDetailScreen: View {
         let avgVal: Double? = realVals.isEmpty ? nil : (realVals.reduce(0, +) / Double(realVals.count))
         let minVal: Double? = realVals.min()
         let maxVal: Double? = realVals.max()
-        let deltaVal: Double? = (realVals.count >= 2)
-            ? zip(realVals.first.map { [$0] } ?? [], realVals.last.map { [$0] } ?? []).first.map { $0.1 - $0.0 }
-            : nil
+        let deltaVal: Double? = {
+            guard realVals.count >= 2, let first = realVals.first, let last = realVals.last else { return nil }
+            return last - first
+        }()
 
         let latestText: String = {
             switch kind {
