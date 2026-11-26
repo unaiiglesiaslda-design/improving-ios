@@ -1,11 +1,35 @@
 import SwiftUI
+import UIKit
+
+/// Enables native iOS interactive edge-swipe back gesture when custom screen headers hide the system nav bar.
+private struct InteractivePopGestureEnabler: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = PopEnablerController()
+        vc.view.backgroundColor = .clear
+        return vc
+    }
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+
+    private final class PopEnablerController: UIViewController {
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            if let nav = navigationController {
+                nav.interactivePopGestureRecognizer?.isEnabled = true
+                nav.interactivePopGestureRecognizer?.delegate = nil
+            }
+        }
+    }
+}
 
 struct ImprovingRootView: View {
     @EnvironmentObject var store: ImprovingStore
     @ObservedObject private var themeSettings = ThemeSettings.shared
 
     @State private var selectedTab: MainTab = .hoy
-    @State private var overlayStack: [OverlayRoute] = []
+    @State private var hoyPath: [OverlayRoute] = []
+    @State private var diarioPath: [OverlayRoute] = []
+    @State private var fitnessPath: [OverlayRoute] = []
+    @State private var biologiaPath: [OverlayRoute] = []
     @State private var quickMenuOpen: Bool = false
     @State private var isBottomBarCollapsed: Bool = false
     @State private var trainingLoadTab: TrainingLoadTab = .cardio
@@ -18,7 +42,16 @@ struct ImprovingRootView: View {
     @State private var showQuickScaleSheet: Bool = false
     @State private var showQuickWorkoutSheet: Bool = false
 
-    private var currentOverlay: OverlayRoute { overlayStack.last ?? .none }
+    private var activePath: [OverlayRoute] {
+        switch selectedTab {
+        case .hoy: return hoyPath
+        case .diario: return diarioPath
+        case .fitness: return fitnessPath
+        case .biologia: return biologiaPath
+        }
+    }
+
+    private var currentOverlay: OverlayRoute { activePath.last ?? .none }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -39,9 +72,9 @@ struct ImprovingRootView: View {
                 .transition(.opacity)
             } else {
                 ZStack(alignment: .bottom) {
-                    Group {
-                        switch selectedTab {
-                        case .hoy:
+                    // Per-tab native NavigationStacks kept alive to preserve scroll position & provide interactive swipe-back!
+                    ZStack {
+                        NavigationStack(path: $hoyPath) {
                             HoyScreen(
                                 store: store,
                                 onNavigate: { push($0) },
@@ -54,9 +87,31 @@ struct ImprovingRootView: View {
                                     push(.workoutDetail)
                                 }
                             )
-                        case .diario:
+                            .toolbar(.hidden, for: .navigationBar)
+                            .navigationDestination(for: OverlayRoute.self) { route in
+                                overlayView(for: route)
+                                    .toolbar(.hidden, for: .navigationBar)
+                                    .background(InteractivePopGestureEnabler())
+                            }
+                        }
+                        .opacity(selectedTab == .hoy ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .hoy)
+                        .zIndex(selectedTab == .hoy ? 1 : 0)
+
+                        NavigationStack(path: $diarioPath) {
                             DiarioScreen(store: store, onNavigate: { push($0) })
-                        case .fitness:
+                                .toolbar(.hidden, for: .navigationBar)
+                                .navigationDestination(for: OverlayRoute.self) { route in
+                                    overlayView(for: route)
+                                        .toolbar(.hidden, for: .navigationBar)
+                                        .background(InteractivePopGestureEnabler())
+                                }
+                        }
+                        .opacity(selectedTab == .diario ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .diario)
+                        .zIndex(selectedTab == .diario ? 1 : 0)
+
+                        NavigationStack(path: $fitnessPath) {
                             FitnessScreen(
                                 store: store,
                                 onNavigate: { push($0) },
@@ -73,7 +128,18 @@ struct ImprovingRootView: View {
                                     push(.workoutDetail)
                                 }
                             )
-                        case .biologia:
+                            .toolbar(.hidden, for: .navigationBar)
+                            .navigationDestination(for: OverlayRoute.self) { route in
+                                overlayView(for: route)
+                                    .toolbar(.hidden, for: .navigationBar)
+                                    .background(InteractivePopGestureEnabler())
+                            }
+                        }
+                        .opacity(selectedTab == .fitness ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .fitness)
+                        .zIndex(selectedTab == .fitness ? 1 : 0)
+
+                        NavigationStack(path: $biologiaPath) {
                             BiologiaScreen(
                                 store: store,
                                 onSelectHealthMetric: { kind in
@@ -90,13 +156,16 @@ struct ImprovingRootView: View {
                                 },
                                 onNavigate: { push($0) }
                             )
+                            .toolbar(.hidden, for: .navigationBar)
+                            .navigationDestination(for: OverlayRoute.self) { route in
+                                overlayView(for: route)
+                                    .toolbar(.hidden, for: .navigationBar)
+                                    .background(InteractivePopGestureEnabler())
+                            }
                         }
-                    }
-
-                    if currentOverlay != .none {
-                        overlayView(for: currentOverlay)
-                            .transition(.move(edge: currentOverlay == .askBevel ? .bottom : .trailing).combined(with: .opacity))
-                            .zIndex(5)
+                        .opacity(selectedTab == .biologia ? 1 : 0)
+                        .allowsHitTesting(selectedTab == .biologia)
+                        .zIndex(selectedTab == .biologia ? 1 : 0)
                     }
 
                     if quickMenuOpen && currentOverlay != .askBevel {
@@ -194,29 +263,29 @@ struct ImprovingRootView: View {
             switch req.destination {
             case .hoy:
                 selectedTab = .hoy
-                overlayStack = []
+                hoyPath = []
             case .diario:
                 selectedTab = .diario
-                overlayStack = []
+                diarioPath = []
             case .fitness:
                 selectedTab = .fitness
-                overlayStack = []
+                fitnessPath = []
             case .biologia:
                 selectedTab = .biologia
-                overlayStack = []
+                biologiaPath = []
             case .nutricion:
                 selectedTab = .hoy
-                overlayStack = [.nutricion]
+                hoyPath = [.nutricion]
             case .sueno:
                 selectedTab = .hoy
-                overlayStack = [.suenoDetail]
+                hoyPath = [.suenoDetail]
             case .esfuerzo:
                 selectedTab = .hoy
-                overlayStack = [.esfuerzo]
+                hoyPath = [.esfuerzo]
             case .dispositivos:
-                overlayStack = [.dispositivos]
+                setActivePath([.dispositivos])
             case .askBevel:
-                overlayStack = [.askBevel]
+                setActivePath([.askBevel])
             }
             store.pendingDeepLinkRoute = nil
         }
@@ -432,9 +501,21 @@ struct ImprovingRootView: View {
         }
     }
 
+    private func setActivePath(_ routes: [OverlayRoute]) {
+        switch selectedTab {
+        case .hoy: hoyPath = routes
+        case .diario: diarioPath = routes
+        case .fitness: fitnessPath = routes
+        case .biologia: biologiaPath = routes
+        }
+    }
+
     private func selectTab(_ tab: MainTab) {
-        selectedTab = tab
-        overlayStack.removeAll()
+        if selectedTab == tab {
+            setActivePath([])
+        } else {
+            selectedTab = tab
+        }
         quickMenuOpen = false
         isBottomBarCollapsed = false
     }
@@ -442,15 +523,19 @@ struct ImprovingRootView: View {
     private func push(_ route: OverlayRoute) {
         quickMenuOpen = false
         isBottomBarCollapsed = false
-        if overlayStack.last != route {
-            overlayStack.append(route)
+        if activePath.last != route {
+            var next = activePath
+            next.append(route)
+            setActivePath(next)
         }
     }
 
     private func pop() {
         isBottomBarCollapsed = false
-        if !overlayStack.isEmpty {
-            overlayStack.removeLast()
+        var next = activePath
+        if !next.isEmpty {
+            next.removeLast()
+            setActivePath(next)
         }
     }
 }

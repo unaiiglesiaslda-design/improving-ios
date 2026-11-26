@@ -1113,6 +1113,8 @@ struct CardioMetricDetailScreen: View {
     @State private var windowPageOffset: Int = 0
     @State private var isBarMode: Bool = false
     @State private var selectedActivityFilter: String = "Todas"
+    @State private var showActivitySearch: Bool = false
+    @State private var activitySearchQuery: String = ""
     @State private var selectedActivityKpi: Int = 0 // 0=Dur, 1=Dist, 2=Elev, 3=Kcal, 4=Pace, 5=Speed, 6=HR, 7=Power, 8=Cadence
     @State private var selectedStrengthKpi: Int = 0 // 0=Series, 1=Volumen, 2=Carga
     @State private var sortNewestFirst: Bool = true
@@ -2829,31 +2831,57 @@ struct CardioMetricDetailScreen: View {
     // MARK: - Shared Helpers
 
     private var activityFilterChipsBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(BevelColors.textPrimary)
-                    .frame(width: 36, height: 36)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-
-                ForEach(availableActivityNames, id: \.self) { name in
-                    let active = selectedActivityFilter == name
+        VStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
                     Button {
                         UISelectionFeedbackGenerator().selectionChanged()
-                        selectedActivityFilter = name
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showActivitySearch.toggle()
+                            if !showActivitySearch { activitySearchQuery = "" }
+                        }
                     } label: {
-                        Text(name)
-                            .font(ImprovingFont.cardTitle(13))
-                            .foregroundColor(active ? .white : BevelColors.textSecondary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Capsule().fill(active ? Color(hex: 0x6A6E7A) : Color.white.opacity(0.06)))
-                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.7))
+                        Image(systemName: showActivitySearch ? "xmark" : "magnifyingglass")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(showActivitySearch ? .white : BevelColors.textPrimary)
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(showActivitySearch ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                    }
+                    .accessibilityLabel("Filtrar actividades por nombre")
+
+                    let filteredNames = activitySearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? availableActivityNames
+                        : availableActivityNames.filter { $0.localizedCaseInsensitiveContains(activitySearchQuery) || $0 == "Todas" }
+
+                    ForEach(filteredNames, id: \.self) { name in
+                        let active = selectedActivityFilter == name
+                        Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            selectedActivityFilter = name
+                        } label: {
+                            Text(name)
+                                .font(ImprovingFont.cardTitle(13))
+                                .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(Capsule().fill(active ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                                .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.7))
+                        }
                     }
                 }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
+
+            if showActivitySearch {
+                TextField("Buscar deporte o actividad…", text: $activitySearchQuery)
+                    .font(ImprovingFont.body(14))
+                    .foregroundColor(BevelColors.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.card))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                    .padding(.horizontal, 16)
+            }
         }
     }
 

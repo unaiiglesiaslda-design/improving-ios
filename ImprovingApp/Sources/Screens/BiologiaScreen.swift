@@ -39,7 +39,7 @@ struct BiologiaScreen: View {
         let latestBiomarkers = store.latestBiomarkersByName
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 // 1. Atmospheric Biological Age Hero (P2: Real Action Menu on ···)
                 ZStack(alignment: .top) {
                     LinearGradient(

@@ -1181,6 +1181,7 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var hrRecoveryBpm: Double?
     var glucoseMgDl: Int?
     var activeKcal: Int?
+    var basalKcal: Int? = nil
     var daylightMinutes: Int?
     var sleepNoiseOver50Db: Bool?
     var bodyWeightKg: Double?

@@ -245,11 +245,25 @@ struct OnboardingExperienceView: View {
                         .font(ImprovingFont.caption(12.5))
                         .fontWeight(.semibold)
                         .foregroundColor(BevelColors.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
                 }
+                .frame(minWidth: 44, minHeight: 44)
             } else {
-                Spacer().frame(width: 48)
+                Button {
+                    var finalProfile = draftProfile
+                    finalProfile.profileSetupVersion = 2
+                    finalProfile.onboardingCompleted = true
+                    onFinish(finalProfile)
+                } label: {
+                    Text("Omitir")
+                        .font(ImprovingFont.caption(12.5))
+                        .fontWeight(.semibold)
+                        .foregroundColor(BevelColors.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
+                }
+                .frame(minWidth: 44, minHeight: 44)
             }
         }
         .padding(.horizontal, 18)

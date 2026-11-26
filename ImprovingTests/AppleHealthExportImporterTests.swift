@@ -2,6 +2,14 @@ import XCTest
 @testable import Improving
 
 final class AppleHealthExportImporterTests: XCTestCase {
+    @MainActor
+    private func makeIsolatedStore(url: URL? = nil) -> ImprovingStore {
+        let u = url ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("improving_unit_\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("store.json")
+        return ImprovingStore(persistenceURL: u)
+    }
+
 
     private let sampleXml = """
     <?xml version="1.0" encoding="UTF-8"?>
@@ -164,7 +172,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testDiario20ManualItemsCompletionAnd30DayInsightLock() {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         store.hiddenJournalHabitIds = []
         store.customJournalHabits = []
@@ -473,7 +481,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(items.first(where: { $0.name == "name" })?.value, "Sync Improving (Automático)")
         XCTAssertEqual(items.first(where: { $0.name == "x-success" })?.value, "improving://sync?from=shortcut_ok")
 
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.presentSyncBanner(.syncing("Sincronizando…"))
         XCTAssertEqual(store.syncBannerState, .syncing("Sincronizando…"))
 
@@ -653,7 +661,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testStoreRecomputesStoredHistoryImmediatelyWhenProfileAgeOrSexChanges() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         // First-ever launch MUST show onboarding carousel!
         XCTAssertFalse(store.userProfile.onboardingCompleted)
 
@@ -724,7 +732,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testLiveStressScoreTracksLatestReadingWhileAvgTracksDailyMean() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         let todayIso = store.selectedDateIso
 
@@ -808,7 +816,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testEwmaTrainingLoadVo2StandardizationTrendsMuscleFreshnessAndRoutines() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         let profile = UserPhysiologyProfile(userName: "Unai", ageYears: 22, sex: .male, weightKg: 72, heightCm: 178)
         store.userProfile = profile
@@ -924,7 +932,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertFalse(ranked.contains(where: { $0.contains("tts") || $0.contains("embedding") || $0.contains("gemma") || $0.contains("imagen") }))
 
         // Trend extractors map every Esfuerzo / Recuperación / Sueño / Estrés trend ID to its OWN real metric (never HRV!)
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         var day = RealBiometricDaySummary(dateIso: "2026-11-24")
         day.strainPct = 44
         day.recoveryPct = 78
@@ -1045,7 +1053,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertNotNil(day3.recoveryPct)
 
         // Scenario 4: Retroactive store recompute heals an already-persisted +4% day to full physiological recharge
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         var buggyToday = day1
         buggyToday.energySamples5m = [
@@ -1062,7 +1070,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testDirectUrlEncodedDataPayloadSyncsWithoutPasteboard() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         let json = #"{"rhr_values":"48.0","rhr_dates":"24 nov 2026, 06:00","hr_values":"74","hr_dates":"24 nov 2026, 18:10"}"#
         var comps = URLComponents()
         comps.scheme = "improving"
@@ -1191,7 +1199,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testPersistedMealsEditDeleteAndManualNutrients() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.mealsByDate = [:]
         store.hydrationGlassesByDate = [:]
         store.manualNutrientsByDate = [:]
@@ -1238,7 +1246,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testCustomizableDiarioHabitsAndDailyNotePersistence() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hiddenJournalHabitIds = []
         store.customJournalHabits = []
         store.journalNotesByDate = [:]
@@ -1281,7 +1289,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testIndividualWorkoutEditDeleteAndShareCardPayload() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         let iso = store.selectedDateIso
         let initialWk = EffortEventItem(
@@ -1366,7 +1374,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(est.qualityFactors.excessSugar, -8.2, accuracy: 0.01)
 
         // 2. Store daily factors, Net Energy, Mis Alimentos library & Custom Goals
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.mealsByDate = [:]
         store.savedFoodsLibrary = []
         store.customNutritionGoals = CustomNutritionGoals()
@@ -1389,11 +1397,12 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(aggFactors.wholeGrains, 2.0, accuracy: 0.01)
         XCTAssertEqual(aggFactors.excessSugar, -8.2, accuracy: 0.01)
 
-        // Net energy = consumed - burned (deficit when only 310 kcal consumed!)
+        // Net energy = consumed - burned (today pro-rates BMR by elapsed time; completed yesterday uses full BMR!)
         let net = store.netEnergyKcal(for: iso)
         XCTAssertEqual(net.consumed, 310)
-        XCTAssertGreaterThan(net.burned, 1000)
-        XCTAssertLessThan(net.net, 0)
+        XCTAssertGreaterThan(net.burned, 100)
+        let yesterdayIso = AppFormatters.isoDayString(from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!)
+        XCTAssertGreaterThan(store.burnedCalories(for: yesterdayIso), 1000)
 
         // Favorite library & 1-tap log
         store.toggleMealFavorite(meal)
@@ -1497,7 +1506,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testHomeLayoutWeeklyReviewScaleLabsAndCoachPersistenceRoundTrip() throws {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
@@ -1564,7 +1573,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
         // Flush async persistence and verify reload
         store.flushPersistenceNow()
-        let reloaded = ImprovingStore()
+        let reloaded = ImprovingStore(persistenceURL: reloadUrl)
         XCTAssertFalse(reloaded.homeLayout.isSectionVisible(.recentActivity))
         XCTAssertTrue(reloaded.latestBiomarkersByName.contains(where: { $0.name == "Vitamina D" }))
 
@@ -1578,7 +1587,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testZeroStrainAlwaysComputesOptimalRangeAndShowsSinEsfuerzo() {
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         let iso = store.selectedDateIso
         // Day with recovery & sleep but ZERO workouts/active kcal/strain!
@@ -1745,7 +1754,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(withRisk.fitnessDelta, AppleHealthExportImporter.round1(withRisk.vo2Delta + withRisk.rhrDelta), accuracy: 0.05)
 
         // Store-level biologicalAgeSnapshot() activates even from blood tests alone!
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.realHistory = [:]
         store.labReports = [
             LabReportRecord(id: "rep_bio", dateIso: "2026-11-25", title: "Analítica", sourceLabel: "Test", summary: "Test", biomarkers: optimalLabs)
@@ -1760,7 +1769,8 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testOptionalDiarioHabitEventTimeSetEditClearAndPersistence() {
-        let store = ImprovingStore()
+        let reloadUrl2 = FileManager.default.temporaryDirectory.appendingPathComponent("improving_reload_2_\(UUID().uuidString)", isDirectory: true).appendingPathComponent("store.json")
+        let store = ImprovingStore(persistenceURL: reloadUrl2)
         let iso = store.selectedDateIso
         store.journalCheckinsByDate[iso] = [:]
         store.journalEventTimesByDate[iso] = [:]
@@ -1775,7 +1785,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(store.journalEventTime(habitId: "caffeine"), "16:30")
         store.flushPersistenceNow()
 
-        let reloaded = ImprovingStore()
+        let reloaded = ImprovingStore(persistenceURL: reloadUrl2)
         XCTAssertEqual(reloaded.journalEventTime(habitId: "caffeine", for: iso), "16:30")
 
         // 3. Clearing event time keeps habit Yes while removing timestamp
@@ -1799,7 +1809,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
     func testAgenticCoachToolCallsAndOneTapUndoRoundTrip() throws {
         XCTAssertEqual(GeminiCoachService.coachToolDeclarations.count, 11)
 
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         let todayIso = store.selectedDateIso
         let cal = Calendar.current
         let yesterdayIso = store.isoFormatter.string(from: cal.date(byAdding: .day, value: -1, to: store.selectedDate)!)
@@ -1953,7 +1963,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertEqual(youngWithHistory.upperBound, midWithHistory.upperBound, accuracy: 0.001)
 
         // 5. Store integration: 20 prior moderate days (34% strain) calibrate today's optimalEffortRange lower than fixed table!
-        let store = ImprovingStore()
+        let store = makeIsolatedStore()
         store.hasImportedOrPairedRealData = true
         store.realHistory = [:]
         let cal = Calendar.current
@@ -2158,5 +2168,95 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let built = AppleHealthExportImporter.buildSummaries(from: ["2026-11-11": rmssdDay], sourceName: "Test", profile: UserPhysiologyProfile(), priorHistory: priorHistory)
         // Because RMSSD pool is separated from SDNN 110ms pool, 62ms RMSSD must NOT be crushed to red (<30%)!
         XCTAssertGreaterThanOrEqual(built.days["2026-11-11"]?.recoveryPct ?? 0, 45)
+    }
+
+    @MainActor
+    func testP2MifflinBmrCumulativeSleepDebtRecoveryColdStartZip64PartitionedPersistenceAndRestTimer() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("improving_p2_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        // 1. Mifflin-St Jeor BMR formula precision (male 30y, 75kg, 180cm -> 10*75 + 6.25*180 - 5*30 + 5 = 1730 kcal)
+        var prof = UserPhysiologyProfile()
+        prof.ageYears = 30
+        prof.birthDateIso = nil
+        prof.sex = .male
+        prof.weightKg = 75
+        prof.heightCm = 180
+        XCTAssertEqual(WhoopPhysiologyEngine.computeBmrKcalPerDay(profile: prof), 1730)
+
+        // 2. Cumulative rolling sleep debt accumulates across consecutive short nights & decays on surplus recovery night
+        var debt = 0
+        for _ in 0..<4 {
+            debt = WhoopPhysiologyEngine.updateCumulativeSleepDebt(previousDebtMinutes: Double(debt), asleepMinutes: 360, targetMinutes: 480)
+        }
+        XCTAssertGreaterThan(debt, 240) // 4 consecutive 6h nights build > 4h cumulative sleep debt!
+        let afterPayback = WhoopPhysiologyEngine.updateCumulativeSleepDebt(previousDebtMinutes: Double(debt), asleepMinutes: 570, targetMinutes: 480)
+        XCTAssertLessThan(afterPayback, debt)
+
+        // 3. Sleep Score continuity awards full continuity when staged sleep has 0 awakenings (instead of dropping 10% weight!)
+        let uninterrupted = WhoopPhysiologyEngine.computeBevelSleepScore(
+            asleepMinutes: 480, inBedMinutes: 485, deepMinutes: 90, remMinutes: 105,
+            awakeMinutes: 0, awakeCount: 0, hrDipPct: 14.0, targetMinutes: 480
+        )
+        let fragmented = WhoopPhysiologyEngine.computeBevelSleepScore(
+            asleepMinutes: 480, inBedMinutes: 525, deepMinutes: 90, remMinutes: 105,
+            awakeMinutes: 45, awakeCount: 6, hrDipPct: 14.0, targetMinutes: 480
+        )
+        XCTAssertGreaterThan(uninterrupted, fragmented + 5)
+
+        // 4. Pre-midnight bedtime energy continuity recharges evening sleep samples instead of draining!
+        let dayStart: Int64 = 1_795_000_000
+        let bedtimeEp = dayStart + 22 * 3600
+        let samples = [
+            TimedBiometricPoint(minuteOfDay: 21 * 60, value: 20, epochSec: dayStart + 21 * 3600),
+            TimedBiometricPoint(minuteOfDay: 22 * 60, value: 18, epochSec: bedtimeEp),
+            TimedBiometricPoint(minuteOfDay: 23 * 60, value: 16, epochSec: bedtimeEp + 3600),
+            TimedBiometricPoint(minuteOfDay: 23 * 60 + 45, value: 14, epochSec: bedtimeEp + 6300),
+        ]
+        let energyCurve = AppleHealthExportImporter.buildContinuousFiveMinuteEnergySamples(
+            stressSamples: samples,
+            startingEnergy: 32.0,
+            recoveryPct: 75,
+            sleepPct: 85,
+            sleepStartEpoch: nil,
+            sleepEndEpoch: nil,
+            asleepMinutes: 480,
+            dayStartEpoch: dayStart,
+            nextSleepStartEpoch: bedtimeEp
+        )
+        XCTAssertGreaterThan(energyCurve.last?.value ?? 0, 32.0)
+
+        // 5. Partitioned persistence writes companion _biometrics.json & _coach.json and reloads losslessly!
+        let coreUrl = tmpDir.appendingPathComponent("part_store.json")
+        let store = ImprovingStore(persistenceURL: coreUrl)
+        store.hasImportedOrPairedRealData = true
+        store.realHistory["2026-11-22"] = RealBiometricDaySummary(dateIso: "2026-11-22", restingHrBpm: 51, hrvMs: 78, recoveryPct: 84)
+        store.coachThreads = [CoachChatThread(id: "t1", title: "Test", dateIso: "2026-11-22", updatedAtLabel: "10:00", messages: [CoachChatMessage(id: "m1", isUser: true, text: "Hola", timestampLabel: "10:00", isSuggestionChip: false)])]
+        store.activeCoachThreadId = "t1"
+        store.flushPersistenceNow()
+
+        let bioFile = tmpDir.appendingPathComponent("part_store_biometrics.json")
+        let coachFile = tmpDir.appendingPathComponent("part_store_coach.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bioFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: coachFile.path))
+
+        let reloaded = ImprovingStore(persistenceURL: coreUrl)
+        XCTAssertEqual(reloaded.realHistory["2026-11-22"]?.hrvMs, 78)
+        XCTAssertEqual(reloaded.coachThreads.first?.id, "t1")
+
+        // 6. Background-proof rest timer tracks wall-clock end date cleanly
+        store.toggleRestTimer()
+        XCTAssertTrue(store.restTimerRunning)
+        XCTAssertGreaterThan(store.restTimerSeconds, 0)
+        store.refreshBackgroundRestTimer()
+        XCTAssertTrue(store.restTimerRunning)
+        store.toggleRestTimer()
+        XCTAssertFalse(store.restTimerRunning)
+
+        // 7. ZipArchiveReader rejects corrupt/invalid archive cleanly without crashing
+        let badZip = tmpDir.appendingPathComponent("corrupt.zip")
+        try Data("NOT_A_VALID_ZIP".utf8).write(to: badZip)
+        XCTAssertThrowsError(try ZipArchiveReader.listEntries(in: badZip))
     }
 }

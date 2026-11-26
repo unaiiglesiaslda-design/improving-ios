@@ -64,6 +64,7 @@ public struct DailyHealthSnapshot: Sendable {
     public let vitals: ProcessedNocturnalVitals
     public let steps: Int?
     public let activeCalories: Double?
+    public let basalCalories: Double?
     public let workouts: [WorkoutSummary]
     public let liveHeartRate: Double?
     public let intradayHrSamples: [TimedHealthSample]
@@ -225,6 +226,11 @@ public final class HealthKitReader: ObservableObject {
     @Published public private(set) var currentLiveHR: Double? = nil
     @Published public private(set) var latestSnapshot: DailyHealthSnapshot? = nil
 
+    /// Real user physiological parameters configured from `ImprovingStore.userProfile`
+    /// so HR-zone computation uses the user's true age & resting HR instead of a hardcoded default.
+    public var configuredAgeYears: Int = 24
+    public var configuredRestingHrBpm: Double = 55.0
+
     private var activeObserverQueries: [HKObserverQuery] = []
 
     public init() {}
@@ -248,6 +254,7 @@ public final class HealthKitReader: ObservableObject {
             .respiratoryRate,
             .oxygenSaturation,
             .activeEnergyBurned,
+            .basalEnergyBurned,
             .stepCount,
             .vo2Max,
             .heartRateRecoveryOneMinute,
@@ -377,6 +384,7 @@ public final class HealthKitReader: ObservableObject {
         let (hrData, sleepHrSamples, intradayHrSamples, daytimeMeanHr) = await extractHeartRates(sleepSession: sleepSession, targetDay: dayStart)
         let (vitalsData, sleepRespSamples, sleepSpo2Samples, sleepNoiseOver50) = await extractNocturnalVitals(sleepSession: sleepSession, targetDay: dayStart)
         let (steps, cals, workouts) = await extractDailyActivity(targetDay: dayStart)
+        let basalCals = await querySumQuantity(.basalEnergyBurned, unit: .kilocalorie(), start: dayStart, end: dayEnd)
 
         let vo2 = await queryMeanQuantity(.vo2Max, unit: HKUnit(from: "mL/kg*min"), start: dayStart, end: dayEnd)
         let hrr = await queryMeanQuantity(.heartRateRecoveryOneMinute, unit: HKUnit.count().unitDivided(by: .minute()), start: dayStart, end: dayEnd)
@@ -395,6 +403,7 @@ public final class HealthKitReader: ObservableObject {
             vitals: vitalsData,
             steps: steps,
             activeCalories: cals,
+            basalCalories: basalCals,
             workouts: workouts,
             liveHeartRate: daytimeMeanHr,
             intradayHrSamples: intradayHrSamples,
@@ -516,7 +525,8 @@ public final class HealthKitReader: ObservableObject {
         let totalAsleep = stagedAsleep > 0 ? stagedAsleep : unspecMin
         guard totalAsleep > 0 else { return nil }
 
-        let allAsleep = deepRanges + remRanges + coreRanges + unspecRanges
+        // Strict staged-sleep priority: when Watch staged sleep exists, drop overlapping iPhone `unspecRanges`!
+        let allAsleep = stagedAsleep > 0 ? (deepRanges + remRanges + coreRanges) : unspecRanges
         guard let asleepStart = allAsleep.map(\.0).min(),
               let asleepEnd = allAsleep.map(\.1).max() else { return nil }
         // Only keep InBed spans within 60m before falling asleep / 30m after waking (drops awake bedtime schedules)
@@ -872,7 +882,9 @@ public final class HealthKitReader: ObservableObject {
             return raw.map { TimedHealthSample(date: $0.startDate, value: $0.quantity.doubleValue(for: unit) * scale) }
         }
 
-        let tempSamples = await queryTimed(.appleSleepingWristTemperature, unit: .degreeCelsius(), from: dayStart, to: dayEnd)
+        // Sleeping wrist temperature often starts before midnight at bedtime and ends on wake-up morning
+        let tempWinStart = min(dayStart, sleepSession?.startDate.addingTimeInterval(-3600) ?? dayStart)
+        let tempSamples = await queryTimed(.appleSleepingWristTemperature, unit: .degreeCelsius(), from: tempWinStart, to: dayEnd)
             .filter { (28.0...42.0).contains($0.value) }
         let tempAbs: Double? = tempSamples.isEmpty ? nil : (tempSamples.map(\.value).reduce(0, +) / Double(tempSamples.count))
 
@@ -929,7 +941,7 @@ public final class HealthKitReader: ObservableObject {
             let durMin = max(Int((w.duration / 60.0).rounded()), 1)
             let kcal = Int((w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0.0).rounded())
             let (icon, name, isStrength) = workoutMetadata(for: w.workoutActivityType)
-            let hrDist = await computeWorkoutHRZones(workout: w, age: 24)
+            let hrDist = await computeWorkoutHRZones(workout: w, age: configuredAgeYears, restingHr: configuredRestingHrBpm)
             items.append(WorkoutSummary(
                 id: w.uuid,
                 activityType: w.workoutActivityType,
@@ -948,14 +960,15 @@ public final class HealthKitReader: ObservableObject {
         return (steps, activeCals, items)
     }
 
-    public func computeWorkoutHRZones(workout: HKWorkout, age: Int = 24) async -> WorkoutZoneDistribution {
+    public func computeWorkoutHRZones(workout: HKWorkout, age: Int? = nil, restingHr: Double? = nil) async -> WorkoutZoneDistribution {
         guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
             return WorkoutZoneDistribution(workoutId: workout.uuid, activityType: workout.workoutActivityType, durationMinutes: workout.duration / 60.0, activeCalories: 0, z1Minutes: 0, z2Minutes: 0, z3Minutes: 0, z4Minutes: 0, z5Minutes: 0, avgHeartRate: 0, maxHeartRate: 0)
         }
         let pred = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate, options: [])
+        let sortAsc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
         let bpmUnit = HKUnit.count().unitDivided(by: .minute())
         let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
-            let q = HKSampleQuery(sampleType: hrType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, res, _ in
+            let q = HKSampleQuery(sampleType: hrType, predicate: pred, limit: HKObjectQueryNoLimit, sortDescriptors: [sortAsc]) { _, res, _ in
                 continuation.resume(returning: (res as? [HKQuantitySample]) ?? [])
             }
             healthStore.execute(q)
@@ -964,33 +977,43 @@ public final class HealthKitReader: ObservableObject {
             return WorkoutZoneDistribution(workoutId: workout.uuid, activityType: workout.workoutActivityType, durationMinutes: workout.duration / 60.0, activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0, z1Minutes: 0, z2Minutes: 0, z3Minutes: 0, z4Minutes: 0, z5Minutes: 0, avgHeartRate: 0, maxHeartRate: 0)
         }
 
-        let maxHR = Double(208 - Int(0.7 * Double(age)))
-        var z1 = 0, z2 = 0, z3 = 0, z4 = 0, z5 = 0
-        var sumBpm = 0.0, peakBpm = 0.0
-        for s in samples {
+        let effAge = Double(min(max(age ?? configuredAgeYears, 13), 95))
+        let maxHR = max(125.0, 208.0 - 0.7 * effAge)
+        let rhr = min(max(restingHr ?? configuredRestingHrBpm, 38.0), 95.0)
+        let hrr = max(maxHR - rhr, 40.0)
+
+        // True dt-weighted Karvonen HRR zone integration (handles irregular Apple Watch sampling cadence!)
+        var z1Min = 0.0, z2Min = 0.0, z3Min = 0.0, z4Min = 0.0, z5Min = 0.0
+        var weightedBpmSum = 0.0, totalDtMin = 0.0, peakBpm = 0.0
+        for idx in 0..<samples.count {
+            let s = samples[idx]
             let bpm = s.quantity.doubleValue(for: bpmUnit)
-            sumBpm += bpm
             if bpm > peakBpm { peakBpm = bpm }
-            let pct = bpm / maxHR
-            if pct >= 0.90 { z5 += 1 }
-            else if pct >= 0.80 { z4 += 1 }
-            else if pct >= 0.70 { z3 += 1 }
-            else if pct >= 0.60 { z2 += 1 }
-            else if pct >= 0.50 { z1 += 1 }
+            let nextTime: Date = (idx + 1 < samples.count) ? samples[idx + 1].startDate : workout.endDate
+            let dtMin = min(max(nextTime.timeIntervalSince(s.startDate) / 60.0, 0.05), 2.5)
+            weightedBpmSum += bpm * dtMin
+            totalDtMin += dtMin
+
+            let hrrFrac = (bpm - rhr) / hrr
+            if hrrFrac >= 0.90 { z5Min += dtMin }
+            else if hrrFrac >= 0.80 { z4Min += dtMin }
+            else if hrrFrac >= 0.70 { z3Min += dtMin }
+            else if hrrFrac >= 0.60 { z2Min += dtMin }
+            else if hrrFrac >= 0.50 { z1Min += dtMin }
         }
         let durMin = workout.duration / 60.0
-        let frac = durMin / Double(samples.count)
+        let avgBpm = totalDtMin > 0 ? (weightedBpmSum / totalDtMin) : samples.map { $0.quantity.doubleValue(for: bpmUnit) }.reduce(0, +) / Double(samples.count)
         return WorkoutZoneDistribution(
             workoutId: workout.uuid,
             activityType: workout.workoutActivityType,
             durationMinutes: durMin,
             activeCalories: workout.totalEnergyBurned?.doubleValue(for: .kilocalorie()) ?? 0,
-            z1Minutes: Double(z1) * frac,
-            z2Minutes: Double(z2) * frac,
-            z3Minutes: Double(z3) * frac,
-            z4Minutes: Double(z4) * frac,
-            z5Minutes: Double(z5) * frac,
-            avgHeartRate: sumBpm / Double(samples.count),
+            z1Minutes: z1Min,
+            z2Minutes: z2Min,
+            z3Minutes: z3Min,
+            z4Minutes: z4Min,
+            z5Minutes: z5Min,
+            avgHeartRate: avgBpm,
             maxHeartRate: peakBpm
         )
     }

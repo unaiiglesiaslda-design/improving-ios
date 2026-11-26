@@ -7,6 +7,12 @@ import UIKit
 enum ProfilePhotoStorage {
     private static let filePrefix = "improving_avatar_"
     private static let targetSidePx: CGFloat = 512
+    private static let imageCache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 8
+        c.totalCostLimit = 8 * 1024 * 1024
+        return c
+    }()
 
     private static var avatarsDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -33,12 +39,21 @@ enum ProfilePhotoStorage {
     }
 
     static func loadImage(from storedPathOrName: String?) -> UIImage? {
-        guard let url = resolveURL(for: storedPathOrName),
-              let data = try? Data(contentsOf: url),
-              !data.isEmpty else {
+        guard let raw = storedPathOrName?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
-        return UIImage(data: data)
+        let cacheKey = (raw as NSString).lastPathComponent as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard let url = resolveURL(for: raw),
+              let data = try? Data(contentsOf: url),
+              !data.isEmpty,
+              let img = UIImage(data: data) else {
+            return nil
+        }
+        imageCache.setObject(img, forKey: cacheKey, cost: data.count)
+        return img
     }
 
     /// Normalizes orientation, center-crops to square, resizes to max 512x512, and saves JPEG cleanly.
@@ -59,6 +74,8 @@ enum ProfilePhotoStorage {
         let dest = dir.appendingPathComponent(filename)
         do {
             try jpeg.write(to: dest, options: .atomic)
+            imageCache.removeAllObjects()
+            imageCache.setObject(normalized, forKey: filename as NSString, cost: jpeg.count)
             return filename
         } catch {
             return nil
@@ -66,6 +83,7 @@ enum ProfilePhotoStorage {
     }
 
     static func deleteSavedPhotos() {
+        imageCache.removeAllObjects()
         let dir = avatarsDirectory
         if let existing = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
             for f in existing where f.lastPathComponent.hasPrefix(filePrefix) {

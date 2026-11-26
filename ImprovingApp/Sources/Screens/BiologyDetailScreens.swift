@@ -324,7 +324,6 @@ struct ManualScaleLoggerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Registrar báscula")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -584,7 +583,6 @@ struct LabReportScannerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Analítica de sangre IA")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -619,32 +617,43 @@ struct LabReportScannerSheet: View {
     }
 
     private func loadPdfDocument(url: URL) {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        guard let doc = PDFDocument(url: url) else {
-            errorMsg = "No se pudo abrir el PDF seleccionado."
-            return
-        }
-        var imgs: [UIImage] = []
-        var jpegs: [Data] = []
-        var fullText = ""
-        let maxPages = min(doc.pageCount, 4)
-        for idx in 0..<maxPages {
-            guard let page = doc.page(at: idx) else { continue }
-            if let t = page.string, !t.isEmpty {
-                fullText += t + "\n"
-            }
-            let thumb = page.thumbnail(of: CGSize(width: 1100, height: 1500), for: .mediaBox)
-            imgs.append(thumb)
-            if let jpg = MealPhotoStorage.prepareJpegData(from: thumb, maxDimension: 1400, quality: 0.80) {
-                jpegs.append(jpg)
-            }
-        }
-        pageImages = imgs
-        pageJpegs = jpegs
-        extractedPdfText = fullText
-        selectedSourceName = "\(url.lastPathComponent) (\(doc.pageCount) pág.)"
+        selectedSourceName = "Cargando PDF…"
         errorMsg = nil
+        Task.detached(priority: .userInitiated) {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            guard let doc = PDFDocument(url: url) else {
+                await MainActor.run {
+                    selectedSourceName = ""
+                    errorMsg = "No se pudo abrir el PDF seleccionado."
+                }
+                return
+            }
+            var imgs: [UIImage] = []
+            var jpegs: [Data] = []
+            var fullText = ""
+            let pageCount = doc.pageCount
+            let maxPages = min(pageCount, 4)
+            for idx in 0..<maxPages {
+                guard let page = doc.page(at: idx) else { continue }
+                if let t = page.string, !t.isEmpty {
+                    fullText += t + "\n"
+                }
+                let thumb = page.thumbnail(of: CGSize(width: 1100, height: 1500), for: .mediaBox)
+                imgs.append(thumb)
+                if let jpg = MealPhotoStorage.prepareJpegData(from: thumb, maxDimension: 1400, quality: 0.80) {
+                    jpegs.append(jpg)
+                }
+            }
+            let fileName = url.lastPathComponent
+            await MainActor.run {
+                pageImages = imgs
+                pageJpegs = jpegs
+                extractedPdfText = fullText
+                selectedSourceName = "\(fileName) (\(pageCount) pág.)"
+                errorMsg = nil
+            }
+        }
     }
 
     private func runLabExtraction() {

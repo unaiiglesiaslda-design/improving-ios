@@ -113,17 +113,46 @@ enum WhoopPhysiologyEngine {
         return min(max(max(tanaka, observedPeakBpm), 125), 225)
     }
 
+    /// Mifflin-St Jeor Resting Metabolic Rate (modern clinical standard, superior accuracy over 1919 Harris-Benedict).
     static func computeBmrKcalPerDay(profile: UserPhysiologyProfile) -> Int {
         let w = min(max(profile.weightKg, 32.0), 220.0)
         let h = min(max(profile.heightCm, 130.0), 225.0)
         let a = profile.effectiveAgeYears
+        let base = 10.0 * w + 6.25 * h - 5.0 * a
         let bmr: Double
         switch profile.sex {
-        case .male: bmr = 88.362 + 13.397 * w + 4.799 * h - 5.677 * a
-        case .female: bmr = 447.593 + 9.247 * w + 3.098 * h - 4.330 * a
-        case .nonBinary: bmr = 267.9775 + 11.322 * w + 3.9485 * h - 5.0035 * a
+        case .male: bmr = base + 5.0
+        case .female: bmr = base - 161.0
+        case .nonBinary: bmr = base - 78.0
         }
         return max(Int(bmr.rounded()), 1000)
+    }
+
+    // Unified rolling baseline priors across AppleHealthExportImporter, HealthKitReader & ImprovingStore
+    static let baselinePopulationHrvSigma = 0.24
+    static let baselineFloorHrvSigma = 0.14
+    static let baselinePopulationRhrSigma = 3.8
+    static let baselineFloorRhrSigma = 1.9
+    static let baselinePopulationRespSigma = 0.9
+    static let baselineFloorRespSigma = 0.45
+
+    /// Cumulative rolling sleep debt (minutes) with exponential daily carry-over (0.70 decay)
+    /// so consecutive short nights accumulate realistic sleep debt and good nights pay it back smoothly!
+    static func updateCumulativeSleepDebt(
+        previousDebtMinutes: Double,
+        asleepMinutes: Int,
+        targetMinutes: Double
+    ) -> Int {
+        let nightlyDiff = targetMinutes - Double(asleepMinutes) // >0 deficit, <0 surplus payback
+        let decayedPrev = max(0.0, previousDebtMinutes) * 0.70
+        let updated: Double
+        if nightlyDiff >= 0 {
+            updated = min(decayedPrev + nightlyDiff, 360.0)
+        } else {
+            // Surplus sleep pays down existing debt at 0.85x efficiency
+            updated = max(0.0, decayedPrev + nightlyDiff * 0.85)
+        }
+        return Int(updated.rounded())
     }
 
     /// Master clinical & sports-physiology personalization engine (exact parity with Android `WhoopPhysiologyEngine.kt`).
@@ -945,12 +974,16 @@ enum WhoopPhysiologyEngine {
             return min(max(Int(score.rounded()), 15), 92)
         }
 
-        // Blend 85% personal rolling baseline + 15% age/sex/body expected physiology so autonomic reserve
-        // reflects that e.g. 45 ms HRV has a different physiological meaning at 20 vs 62 years old!
-        let cohortWeight: Double = {
+        // Avoid cold-start double-dipping: when count < 7, `computeRollingBaseline` ALREADY blends
+        // population prior into `.mean`. Ramp cohort weight smoothly from 0% (count=0) to 15% (count>=7),
+        // independently for HRV and RHR using their own sample counts!
+        let hrvCohortWeight: Double = {
             guard profileNorms != nil else { return 0.0 }
-            if lnHrvBaseline.count < 7 { return 0.30 }
-            return 0.15
+            return min(Double(lnHrvBaseline.count) / 7.0, 1.0) * 0.15
+        }()
+        let rhrCohortWeight: Double = {
+            guard profileNorms != nil else { return 0.0 }
+            return min(Double(rhrBaseline.count) / 7.0, 1.0) * 0.15
         }()
 
         // Bevel weights: ~62% Sleeping HRV (log-normal z-score) + ~33% Sleeping RHR + ~5% secondary vitals
@@ -960,9 +993,9 @@ enum WhoopPhysiologyEngine {
         if let hrv = hrvMs, hrv > 2.0 {
             let personalZ = (log(hrv) - lnHrvBaseline.mean) / max(lnHrvBaseline.sigma, 0.12)
             let effZ: Double
-            if let norms = profileNorms, cohortWeight > 0 {
+            if let norms = profileNorms, hrvCohortWeight > 0 {
                 let cohortZ = (log(hrv) - log(max(norms.hrvExpectedMs, 15.0))) / 0.28
-                effZ = (1.0 - cohortWeight) * personalZ + cohortWeight * cohortZ
+                effZ = (1.0 - hrvCohortWeight) * personalZ + hrvCohortWeight * cohortZ
             } else {
                 effZ = personalZ
             }
@@ -974,9 +1007,9 @@ enum WhoopPhysiologyEngine {
         if let rhr = rhrBpm, rhr > 25.0 {
             let personalZ = (rhrBaseline.mean - rhr) / max(rhrBaseline.sigma, 1.8)
             let effZ: Double
-            if let norms = profileNorms, cohortWeight > 0 {
+            if let norms = profileNorms, rhrCohortWeight > 0 {
                 let cohortZ = (norms.restingHrExpected - rhr) / 5.0
-                effZ = (1.0 - cohortWeight) * personalZ + cohortWeight * cohortZ
+                effZ = (1.0 - rhrCohortWeight) * personalZ + rhrCohortWeight * cohortZ
             } else {
                 effZ = personalZ
             }
@@ -1179,9 +1212,13 @@ enum WhoopPhysiologyEngine {
             weightSum += 0.20
         }
 
-        // 4. Continuity (10% weight) — only if awake blocks exist
-        if let aw = awakeMinutes, awakeCount > 0 {
-            let contScore = Double(max(20, min(100, 100 - awakeCount * 7 - Int(Double(aw) * 0.8))))
+        // 4. Continuity (10% weight) — reward uninterrupted staged nights (awakeCount == 0 -> 100%) instead of dropping the weight!
+        let hasStageTracking = (deepMinutes != nil || remMinutes != nil || inBedMinutes != nil || awakeMinutes != nil)
+        if hasStageTracking {
+            let aw = max(awakeMinutes ?? 0, 0)
+            let contScore: Double = (awakeCount == 0 && aw == 0)
+                ? 100.0
+                : Double(max(20, min(100, 100 - awakeCount * 7 - Int(Double(aw) * 0.8))))
             scoreSum += 0.10 * contScore
             weightSum += 0.10
         }

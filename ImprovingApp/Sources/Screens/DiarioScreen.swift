@@ -174,15 +174,17 @@ struct DiarioScreen: View {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(BevelColors.textPrimary)
-                                .frame(width: 30, height: 30)
+                                .frame(width: 40, height: 40)
                                 .background(Circle().fill(BevelColors.card))
+                                .contentShape(Circle())
                         }
                         Button { if store.dayOffset > 0 { store.shiftDay(-1) } } label: {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(store.dayOffset > 0 ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
-                                .frame(width: 30, height: 30)
+                                .frame(width: 40, height: 40)
                                 .background(Circle().fill(BevelColors.card.opacity(store.dayOffset > 0 ? 1 : 0.45)))
+                                .contentShape(Circle())
                         }
                         .disabled(store.dayOffset == 0)
                     }
@@ -251,7 +253,9 @@ struct DiarioScreen: View {
                                 Capsule(style: .continuous)
                                     .fill(isSelected ? BevelColors.card : .clear)
                             )
+                            .opacity(isFuture ? 0.42 : 1.0)
                         }
+                        .disabled(isFuture)
                     }
                 }
             }
@@ -259,7 +263,6 @@ struct DiarioScreen: View {
             .padding(.top, 6)
             .padding(.bottom, 10)
             .background(BevelColors.sheetHeaderBg)
-        .scrollDismissesKeyboard(.interactively)
 
             Divider().background(BevelColors.divider)
 
@@ -493,10 +496,8 @@ struct DiarioScreen: View {
                 .padding(.bottom, 155)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
         }
         .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showCalendarSheet) {
             DatePickerSheetView(
                 selectedDate: Binding(
@@ -777,7 +778,7 @@ struct JournalInsightsScreen: View {
                 let manualSpan = store.manualDiarioSpanDays
                 let daysLogged = store.totalManualDiarioDaysLogged
 
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     if !hasUserFilledForm {
                         // Strict zero-metric empty state when user hasn't filled out the Diario form yet!
                         BevelCard(cornerRadius: 20) {
@@ -919,7 +920,6 @@ struct JournalInsightsScreen: View {
             }
         }
         .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
     }
 
     private var impactAxisHeader: some View {
@@ -1276,7 +1276,6 @@ private struct JournalCustomizeSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Personalizar Diario")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

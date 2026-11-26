@@ -641,18 +641,23 @@ struct SleepSchedule24hDial: View {
                 }
                 .frame(width: 222, height: 222)
 
-                HStack(spacing: 6) {
-                    Text("Despertar a las")
-                        .font(ImprovingFont.body(14))
-                        .foregroundColor(BevelColors.textSecondary)
-                    Text(wakeTimeText)
-                        .font(ImprovingFont.cardTitle(15))
-                        .monospacedDigit()
-                        .foregroundColor(BevelColors.textPrimary)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(BevelColors.textMuted)
+                Button(action: onOpenSleepNeed) {
+                    HStack(spacing: 6) {
+                        Text("Despertar a las")
+                            .font(ImprovingFont.body(14))
+                            .foregroundColor(BevelColors.textSecondary)
+                        Text(wakeTimeText)
+                            .font(ImprovingFont.cardTitle(15))
+                            .monospacedDigit()
+                            .foregroundColor(BevelColors.textPrimary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(BevelColors.textMuted)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
 
                 Divider().background(BevelColors.divider)
 

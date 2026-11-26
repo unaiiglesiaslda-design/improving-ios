@@ -224,10 +224,12 @@ struct FitnessScreen: View {
                                         )
                                         .overlay(
                                             Capsule(style: .continuous)
-                                                .strokeBorder(isSelected ? Color.white.opacity(0.18) : BevelColors.cardBorder, lineWidth: 0.8)
+                                                .strokeBorder(isSelected ? BevelColors.chartAxisStroke : BevelColors.cardBorder, lineWidth: 0.8)
                                         )
                                     }
+                                    .opacity(isFuture ? 0.42 : 1.0)
                                 }
+                                .disabled(isFuture)
                             }
                         }
                     }
@@ -235,7 +237,7 @@ struct FitnessScreen: View {
                     .padding(.top, 8)
                 }
 
-                VStack(alignment: .leading, spacing: 22) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     // 2. 4-Hour Time-Aware Fitness-Focused Live AI Coaching Card
                     LiveAiCoachingCard(
                         section: .fitness,

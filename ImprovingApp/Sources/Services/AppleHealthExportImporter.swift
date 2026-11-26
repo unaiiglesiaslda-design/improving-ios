@@ -263,10 +263,11 @@ enum AppleHealthExportImporter {
         var priorRhr: [Double] = []
         var priorResp: [Double] = []
 
-        // Continuous cross-day Energy Bank state seeded from previous day's ending value (NEVER jumps at midnight!)
+        // Continuous cross-day Energy Bank & Cumulative 7-day Rolling Sleep Debt state seeded from priorHistory!
         var prevDayDate: Date? = nil
         var prevDayEndEnergy: Double? = nil
         var prevDayEndEpoch: Int64? = nil
+        var runningSleepDebtMin: Double = 0.0
 
         for iso in priorHistory.keys.sorted() where iso < firstNewIso {
             if let old = priorHistory[iso] {
@@ -280,6 +281,15 @@ enum AppleHealthExportImporter {
                 }
                 if let r = old.restingHrBpm { priorRhr.append(r) }
                 if let rr = old.respRateRpm { priorResp.append(rr) }
+                if let asleep = old.asleepMinutes, asleep > 0 {
+                    runningSleepDebtMin = Double(WhoopPhysiologyEngine.updateCumulativeSleepDebt(
+                        previousDebtMinutes: runningSleepDebtMin,
+                        asleepMinutes: asleep,
+                        targetMinutes: targetSleepMin
+                    ))
+                } else if let prevDebt = old.sleepDebtMinutes {
+                    runningSleepDebtMin = Double(prevDebt)
+                }
                 if let lastE = old.energySamples5m.last?.value ?? old.energyBankPercent.map({ Double($0) }) {
                     prevDayEndEnergy = lastE
                     prevDayEndEpoch = old.energySamples5m.last?.epochSec
@@ -638,7 +648,15 @@ enum AppleHealthExportImporter {
                     remTargetPct: norms.remTargetPct
                 )
             }
-            let sleepDebt = asleepOrNil.map { max(Int(targetSleepMin.rounded()) - $0, 0) }
+            let sleepDebt: Int? = asleepOrNil.map { asleep in
+                let updated = WhoopPhysiologyEngine.updateCumulativeSleepDebt(
+                    previousDebtMinutes: runningSleepDebtMin,
+                    asleepMinutes: asleep,
+                    targetMinutes: targetSleepMin
+                )
+                runningSleepDebtMin = Double(updated)
+                return updated
+            }
 
             // 5. Causal 60-Day Personal Baselines -> Bevel Recovery % (Seeded with user's age/sex/body clinical priors!)
             // Match the day's HRV method (RMSSD vs SDNN) to its own dedicated baseline pool!
@@ -646,13 +664,22 @@ enum AppleHealthExportImporter {
             let activePriorLnHrv = dayIsSdnn ? priorLnHrvSdnn : priorLnHrvRmssd
             let hrvPopExpected = dayIsSdnn ? (norms.hrvExpectedMs * 1.18) : norms.hrvExpectedMs
             let lnHrvBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: activePriorLnHrv, populationMean: log(max(hrvPopExpected, 15.0)), populationSigma: 0.25, floorSigma: 0.14
+                priorValues: activePriorLnHrv,
+                populationMean: log(max(hrvPopExpected, 15.0)),
+                populationSigma: WhoopPhysiologyEngine.baselinePopulationHrvSigma,
+                floorSigma: WhoopPhysiologyEngine.baselineFloorHrvSigma
             )
             let rhrBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorRhr, populationMean: norms.restingHrExpected, populationSigma: 4.0, floorSigma: 1.8
+                priorValues: priorRhr,
+                populationMean: norms.restingHrExpected,
+                populationSigma: WhoopPhysiologyEngine.baselinePopulationRhrSigma,
+                floorSigma: WhoopPhysiologyEngine.baselineFloorRhrSigma
             )
             let respBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorResp, populationMean: respCenter, populationSigma: 0.9, floorSigma: 0.45
+                priorValues: priorResp,
+                populationMean: respCenter,
+                populationSigma: WhoopPhysiologyEngine.baselinePopulationRespSigma,
+                floorSigma: WhoopPhysiologyEngine.baselineFloorRespSigma
             )
 
             let recPct = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
@@ -826,6 +853,24 @@ enum AppleHealthExportImporter {
                 return Double(max(min((recPct ?? 65) - 24, 65), 22))
             }()
 
+            // Detect if the user went to sleep BEFORE midnight on this evening (next day's night starts >= 19:00 today)
+            let nextNightStartEpoch: Int64? = {
+                guard let dStart = dayStartEp else { return nil }
+                let eveningCut = dStart + 19 * 3600
+                let dayEnd = dStart + 86_400
+                var earliest: Int64? = nil
+                let candidates = raw.deepIntervals + raw.remIntervals + raw.coreIntervals + raw.asleepAnyIntervals
+                for sp in candidates where sp.lowerBound >= eveningCut && sp.lowerBound < dayEnd {
+                    if earliest == nil || sp.lowerBound < earliest! { earliest = sp.lowerBound }
+                }
+                if dayIdx + 1 < sortedIsos.count, let nextRaw = days[sortedIsos[dayIdx + 1]] {
+                    for sp in (nextRaw.deepIntervals + nextRaw.remIntervals + nextRaw.coreIntervals + nextRaw.asleepAnyIntervals) where sp.lowerBound >= eveningCut && sp.lowerBound < dayEnd {
+                        if earliest == nil || sp.lowerBound < earliest! { earliest = sp.lowerBound }
+                    }
+                }
+                return earliest
+            }()
+
             let energy5m = buildContinuousFiveMinuteEnergySamples(
                 stressSamples: stress5m,
                 startingEnergy: initialEnergy,
@@ -835,7 +880,8 @@ enum AppleHealthExportImporter {
                 sleepEndEpoch: sleepSession?.endEpochSec,
                 workoutSpans: effectiveWorkoutSpans,
                 asleepMinutes: asleepOrNil,
-                dayStartEpoch: dayStartEp
+                dayStartEpoch: dayStartEp,
+                nextSleepStartEpoch: nextNightStartEpoch
             )
 
             if let lastE = energy5m.last {
@@ -971,7 +1017,8 @@ enum AppleHealthExportImporter {
         sleepEndEpoch: Int64?,
         workoutSpans: [ClosedRange<Int64>] = [],
         asleepMinutes: Int? = nil,
-        dayStartEpoch: Int64? = nil
+        dayStartEpoch: Int64? = nil,
+        nextSleepStartEpoch: Int64? = nil
     ) -> [TimedBiometricPoint] {
         let hasRecordedSleepSpan: Bool = {
             if let s = sleepStartEpoch, let e = sleepEndEpoch, e > s { return true }
@@ -1157,8 +1204,15 @@ enum AppleHealthExportImporter {
                         return true
                     }
                 }
-                if let ep = ev.epochSec, let s = sleepStartEpoch, let e = sleepEndEpoch {
-                    return ep >= s && ep <= e
+                if let ep = ev.epochSec, let s = sleepStartEpoch, let e = sleepEndEpoch, ep >= s && ep <= e {
+                    return true
+                }
+                // Pre-midnight bedtime of the NEXT night: recharge instead of draining while asleep before 00:00!
+                if let ep = ev.epochSec, let nextStart = nextSleepStartEpoch,
+                   let dStart = resolvedDayStartEp,
+                   nextStart >= dStart + 19 * 3600, nextStart < dStart + 86_400,
+                   ep >= nextStart {
+                    return true
                 }
                 return ev.isSyntheticSleep
             }()

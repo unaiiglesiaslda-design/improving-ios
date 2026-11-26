@@ -5,6 +5,13 @@ import PhotosUI
 // MARK: - Meal Photo Storage Helper (Downscaled JPEG in Application Support)
 
 enum MealPhotoStorage {
+    private static let imageCache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 48
+        c.totalCostLimit = 32 * 1024 * 1024
+        return c
+    }()
+
     private static var folderURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -45,6 +52,11 @@ enum MealPhotoStorage {
         let url = folderURL.appendingPathComponent(name)
         do {
             try data.write(to: url, options: .atomic)
+            if let img = UIImage(data: data) {
+                imageCache.setObject(img, forKey: name as NSString, cost: data.count)
+            } else {
+                imageCache.removeObject(forKey: name as NSString)
+            }
             return name
         } catch {
             return nil
@@ -53,13 +65,19 @@ enum MealPhotoStorage {
 
     static func loadImage(filename: String?) -> UIImage? {
         guard let filename, !filename.isEmpty else { return nil }
+        let key = filename as NSString
+        if let cached = imageCache.object(forKey: key) {
+            return cached
+        }
         let url = folderURL.appendingPathComponent(filename)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return UIImage(data: data)
+        guard let data = try? Data(contentsOf: url), let img = UIImage(data: data) else { return nil }
+        imageCache.setObject(img, forKey: key, cost: data.count)
+        return img
     }
 
     static func deletePhoto(filename: String?) {
         guard let filename, !filename.isEmpty else { return }
+        imageCache.removeObject(forKey: filename as NSString)
         let url = folderURL.appendingPathComponent(filename)
         try? FileManager.default.removeItem(at: url)
     }
@@ -103,24 +121,39 @@ private struct CameraCaptureSheet: UIViewControllerRepresentable {
 
 // MARK: - Main Nutrition Screen (Exact Match to Screenshots 2–7 + Multimodal Gemini AI Scanner!)
 
+private enum NutritionActiveSheet: Identifiable {
+    case datePicker
+    case share
+    case info
+    case goals
+    case myFoods
+    case fullTimeline
+    case mealComposer(existing: NutritionMealItem?, mode: NutritionComposerInitialMode)
+    case factorInfo(FoodQualityFactorKind)
+
+    var id: String {
+        switch self {
+        case .datePicker: return "datePicker"
+        case .share: return "share"
+        case .info: return "info"
+        case .goals: return "goals"
+        case .myFoods: return "myFoods"
+        case .fullTimeline: return "fullTimeline"
+        case .mealComposer(let m, let mode): return "composer_\(m?.id ?? "new")_\(mode)"
+        case .factorInfo(let f): return "factor_\(f.id)"
+        }
+    }
+}
+
 struct NutricionScreen: View {
     @ObservedObject var store: ImprovingStore
     let onBack: () -> Void
     let onOpenNutrient: (String) -> Void
     var onOpenTrends: ((NutritionTrendTab) -> Void)? = nil
 
-    @State private var showDatePicker: Bool = false
-    @State private var showShareSheet: Bool = false
-    @State private var showInfoSheet: Bool = false
-    @State private var showGoalsSheet: Bool = false
-    @State private var showMyFoodsSheet: Bool = false
-    @State private var showFullTimelineSheet: Bool = false
-    @State private var showMealComposer: Bool = false
-    @State private var composerInitialMode: NutritionComposerInitialMode = .standard
-    @State private var mealToEdit: NutritionMealItem? = nil
+    @State private var activeSheet: NutritionActiveSheet? = nil
     @State private var macroDetailsInPercent: Bool = false
     @State private var factorsExpanded: Bool = false
-    @State private var selectedFactorForInfo: FoodQualityFactorKind? = nil
 
     var body: some View {
         let goals = store.effectiveNutritionGoals
@@ -170,32 +203,28 @@ struct NutricionScreen: View {
                             Spacer()
 
                             HStack(spacing: 16) {
-                                Button { showShareSheet = true } label: {
+                                Button { activeSheet = .share } label: {
                                     Image(systemName: "square.and.arrow.up")
                                         .font(.system(size: 15, weight: .medium))
                                         .foregroundColor(BevelColors.textPrimary)
                                 }
-                                Button { showInfoSheet = true } label: {
+                                Button { activeSheet = .info } label: {
                                     Image(systemName: "info.circle")
                                         .font(.system(size: 15, weight: .medium))
                                         .foregroundColor(BevelColors.textPrimary)
                                 }
                                 Menu {
                                     Button {
-                                        mealToEdit = nil
-                                        composerInitialMode = .standard
-                                        showMealComposer = true
+                                        activeSheet = .mealComposer(existing: nil, mode: .standard)
                                     } label: {
                                         Label("Registrar comida con IA (foto/texto)", systemImage: "camera.viewfinder")
                                     }
                                     Button {
-                                        mealToEdit = nil
-                                        composerInitialMode = .barcode
-                                        showMealComposer = true
+                                        activeSheet = .mealComposer(existing: nil, mode: .barcode)
                                     } label: {
                                         Label("Escanear código de barras (OpenFoodFacts)", systemImage: "barcode.viewfinder")
                                     }
-                                    Button { showGoalsSheet = true } label: {
+                                    Button { activeSheet = .goals } label: {
                                         Label("Editar objetivos diarios", systemImage: "target")
                                     }
                                     Divider()
@@ -231,7 +260,7 @@ struct NutricionScreen: View {
                                 .font(ImprovingFont.displayLarge(25))
                                 .foregroundColor(BevelColors.textPrimary)
 
-                            Button { showDatePicker = true } label: {
+                            Button { activeSheet = .datePicker } label: {
                                 HStack(spacing: 5) {
                                     Text(store.fullDateLabel)
                                         .font(ImprovingFont.body(14.5))
@@ -255,7 +284,7 @@ struct NutricionScreen: View {
 
                 VStack(alignment: .leading, spacing: 16) {
                     // 2. "Mis alimentos" Notebook-Bound Card (Exact Screenshot 2!)
-                    Button { showMyFoodsSheet = true } label: {
+                    Button { activeSheet = .myFoods } label: {
                         ZStack(alignment: .leading) {
                             BevelCard(cornerRadius: 20) {
                                 HStack {
@@ -300,7 +329,7 @@ struct NutricionScreen: View {
                     // 3. "Objetivos" Card (Calories 7-Day Mini Bars + 3 Macro Ring Cards — Exact Screenshot 2!)
                     BevelCard(cornerRadius: 22) {
                         VStack(alignment: .leading, spacing: 12) {
-                            Button { showGoalsSheet = true } label: {
+                            Button { activeSheet = .goals } label: {
                                 HStack {
                                     Text("Objetivos")
                                         .font(ImprovingFont.sectionTitle(17))
@@ -314,7 +343,7 @@ struct NutricionScreen: View {
                             .buttonStyle(.plain)
 
                             // Calorías Inner Card with 7-day mini bars + dotted goal line
-                            Button { showGoalsSheet = true } label: {
+                            Button { activeSheet = .goals } label: {
                                 HStack(alignment: .center, spacing: 12) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("Calorías")
@@ -481,10 +510,12 @@ struct NutricionScreen: View {
                                 .foregroundColor(BevelColors.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            Button { showInfoSheet = true } label: {
+                            Button { activeSheet = .info } label: {
                                 Image(systemName: "info.circle")
                                     .font(.system(size: 15))
                                     .foregroundColor(BevelColors.textMuted)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                             }
                         }
                         .padding(.top, 6)
@@ -497,7 +528,7 @@ struct NutricionScreen: View {
                             FoodQualityFactorRow(
                                 kind: factor,
                                 value: dailyFactors.value(for: factor),
-                                onTap: { selectedFactorForInfo = factor }
+                                onTap: { activeSheet = .factorInfo(factor) }
                             )
                         }
 
@@ -549,26 +580,22 @@ struct NutricionScreen: View {
                             Spacer()
                             HStack(spacing: 8) {
                                 Button {
-                                    mealToEdit = nil
-                                    composerInitialMode = .barcode
-                                    showMealComposer = true
+                                    activeSheet = .mealComposer(existing: nil, mode: .barcode)
                                 } label: {
                                     Image(systemName: "barcode.viewfinder")
-                                        .font(.system(size: 15, weight: .semibold))
+                                        .font(.system(size: 16, weight: .semibold))
                                         .foregroundColor(BevelColors.textPrimary)
-                                        .frame(width: 36, height: 36)
+                                        .frame(width: 44, height: 44)
                                         .background(Circle().fill(BevelColors.card))
                                         .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
                                 }
                                 Button {
-                                    mealToEdit = nil
-                                    composerInitialMode = .standard
-                                    showMealComposer = true
+                                    activeSheet = .mealComposer(existing: nil, mode: .standard)
                                 } label: {
                                     Image(systemName: "plus")
-                                        .font(.system(size: 15, weight: .bold))
+                                        .font(.system(size: 16, weight: .bold))
                                         .foregroundColor(BevelColors.textPrimary)
-                                        .frame(width: 36, height: 36)
+                                        .frame(width: 44, height: 44)
                                         .background(Circle().fill(BevelColors.card))
                                         .overlay(Circle().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
                                 }
@@ -577,15 +604,14 @@ struct NutricionScreen: View {
                         .padding(.top, 8)
 
                         BevelCard(cornerRadius: 22) {
-                            VStack(spacing: 0) {
+                            LazyVStack(spacing: 0) {
                                 if meals.isEmpty {
                                     VStack(alignment: .leading, spacing: 10) {
                                         Text("Sin eventos nutricionales registrados este día.")
                                             .font(ImprovingFont.body(14))
                                             .foregroundColor(BevelColors.textSecondary)
                                         Button {
-                                            mealToEdit = nil
-                                            showMealComposer = true
+                                            activeSheet = .mealComposer(existing: nil, mode: .standard)
                                         } label: {
                                             Label("Escanear plato con IA o registrar manual", systemImage: "camera.viewfinder")
                                                 .font(ImprovingFont.cardTitle(13.5))
@@ -599,8 +625,7 @@ struct NutricionScreen: View {
                                 } else {
                                     ForEach(Array(meals.enumerated()), id: \.element.id) { idx, meal in
                                         Button {
-                                            mealToEdit = meal
-                                            showMealComposer = true
+                                            activeSheet = .mealComposer(existing: meal, mode: .standard)
                                         } label: {
                                             timelineMealRow(meal: meal)
                                         }
@@ -613,7 +638,7 @@ struct NutricionScreen: View {
                                         }
                                     }
 
-                                    Button { showFullTimelineSheet = true } label: {
+                                    Button { activeSheet = .fullTimeline } label: {
                                         Text("Ver cronología")
                                             .font(ImprovingFont.cardTitle(14.5))
                                             .foregroundColor(BevelColors.textPrimary)
@@ -652,73 +677,65 @@ struct NutricionScreen: View {
         }
         .background(BevelColors.canvas)
         .scrollDismissesKeyboard(.interactively)
-        .sheet(isPresented: $showDatePicker) {
-            DatePickerSheetView(
-                selectedDate: Binding(
-                    get: { store.selectedDate },
-                    set: { d in store.selectDate(d); showDatePicker = false }
-                ),
-                onJumpToday: { store.selectDayOffset(0); showDatePicker = false },
-                onClose: { showDatePicker = false }
-            )
-        }
-        .sheet(isPresented: $showShareSheet) {
-            ShareSummaryCardSheet(store: store, kind: .nutrition, onClose: { showShareSheet = false })
-        }
-        .sheet(isPresented: $showMealComposer) {
-            MealComposerSheet(
-                store: store,
-                existingMeal: mealToEdit,
-                initialMode: composerInitialMode,
-                onClose: {
-                    showMealComposer = false
-                    mealToEdit = nil
-                    composerInitialMode = .standard
-                }
-            )
-        }
         .onAppear {
             if let pending = store.pendingNutritionLaunchMode {
                 store.pendingNutritionLaunchMode = nil
-                mealToEdit = nil
-                composerInitialMode = pending
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    showMealComposer = true
+                    activeSheet = .mealComposer(existing: nil, mode: pending)
                 }
             }
         }
-        .sheet(isPresented: $showGoalsSheet) {
-            NutritionGoalsSheet(store: store, onClose: { showGoalsSheet = false })
-        }
-        .sheet(isPresented: $showMyFoodsSheet) {
-            MisAlimentosSheet(store: store, onClose: { showMyFoodsSheet = false })
-        }
-        .sheet(isPresented: $showFullTimelineSheet) {
-            FullNutritionTimelineSheet(
-                store: store,
-                onEditMeal: { m in
-                    showFullTimelineSheet = false
-                    mealToEdit = m
-                    showMealComposer = true
-                },
-                onAddMeal: {
-                    showFullTimelineSheet = false
-                    mealToEdit = nil
-                    showMealComposer = true
-                },
-                onClose: { showFullTimelineSheet = false }
-            )
-        }
-        .sheet(isPresented: $showInfoSheet) {
-            NutritionInfoSheet(onClose: { showInfoSheet = false })
-        }
-        .sheet(item: $selectedFactorForInfo) { factor in
-            FactorBreakdownSheet(
-                store: store,
-                factor: factor,
-                dailyValue: dailyFactors.value(for: factor),
-                onClose: { selectedFactorForInfo = nil }
-            )
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .datePicker:
+                DatePickerSheetView(
+                    selectedDate: Binding(
+                        get: { store.selectedDate },
+                        set: { d in store.selectDate(d); activeSheet = nil }
+                    ),
+                    onJumpToday: { store.selectDayOffset(0); activeSheet = nil },
+                    onClose: { activeSheet = nil }
+                )
+            case .share:
+                ShareSummaryCardSheet(store: store, kind: .nutrition, onClose: { activeSheet = nil })
+            case .info:
+                NutritionInfoSheet(onClose: { activeSheet = nil })
+            case .goals:
+                NutritionGoalsSheet(store: store, onClose: { activeSheet = nil })
+            case .myFoods:
+                MisAlimentosSheet(store: store, onClose: { activeSheet = nil })
+            case .fullTimeline:
+                FullNutritionTimelineSheet(
+                    store: store,
+                    onEditMeal: { m in
+                        activeSheet = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                            activeSheet = .mealComposer(existing: m, mode: .standard)
+                        }
+                    },
+                    onAddMeal: {
+                        activeSheet = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                            activeSheet = .mealComposer(existing: nil, mode: .standard)
+                        }
+                    },
+                    onClose: { activeSheet = nil }
+                )
+            case .mealComposer(let existing, let mode):
+                MealComposerSheet(
+                    store: store,
+                    existingMeal: existing,
+                    initialMode: mode,
+                    onClose: { activeSheet = nil }
+                )
+            case .factorInfo(let factor):
+                FactorBreakdownSheet(
+                    store: store,
+                    factor: factor,
+                    dailyValue: dailyFactors.value(for: factor),
+                    onClose: { activeSheet = nil }
+                )
+            }
         }
     }
 
@@ -1232,7 +1249,6 @@ private struct MisAlimentosSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Mis alimentos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1339,7 +1355,6 @@ private struct NutritionGoalsSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Objetivos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1452,7 +1467,6 @@ private struct FactorBreakdownSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle(factor.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
@@ -1530,7 +1544,6 @@ private struct FullNutritionTimelineSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Cronología nutricional")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1572,7 +1585,6 @@ private struct NutritionInfoSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Guía de Nutrición")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
@@ -1839,7 +1851,6 @@ private struct MealComposerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle(existingMeal == nil ? "Registrar comida" : "Editar comida")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
@@ -2296,7 +2307,6 @@ private struct BarcodeScannerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Escanear código de barras")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -2532,7 +2542,6 @@ struct NutrientDetailScreen: View {
             .padding(.bottom, 98)
         }
         .background(BevelColors.sheetHeaderBg)
-        .scrollDismissesKeyboard(.interactively)
         .confirmationDialog("¿Restablecer el registro manual de \(spec.displayTitle.lowercased()) de este día?", isPresented: $showResetConfirmation, titleVisibility: .visible) {
             Button("Restablecer a 0", role: .destructive) { store.resetNutrientAmount(key: key) }
             Button("Cancelar", role: .cancel) {}
@@ -2569,7 +2578,6 @@ struct NutrientDetailScreen: View {
                 }
                 .padding(20)
                 .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
                 .navigationTitle("Añadir \(spec.displayTitle)")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar") { showCustomInputSheet = false } } }

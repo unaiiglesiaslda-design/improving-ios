@@ -13,6 +13,7 @@ struct DispositivosScreen: View {
     @State private var apiKeyDraft: String = ""
     @State private var selectedModelDraft: String = "auto"
     @State private var shortcutNameDraft: String = "Sync Improving"
+    @State private var shortcutDebounceTask: Task<Void, Never>? = nil
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
     @State private var widgetSyncToast: String? = nil
@@ -271,10 +272,18 @@ struct DispositivosScreen: View {
                                 .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
                                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(BevelColors.cardBorder, lineWidth: 0.7))
                                 .onSubmit {
+                                    shortcutDebounceTask?.cancel()
                                     store.updateShortcutSyncConfig(name: shortcutNameDraft, autoRunOnOpen: autoRunShortcutToggle)
                                 }
                                 .onChange(of: shortcutNameDraft) { _, newVal in
-                                    store.updateShortcutSyncConfig(name: newVal, autoRunOnOpen: autoRunShortcutToggle)
+                                    shortcutDebounceTask?.cancel()
+                                    shortcutDebounceTask = Task {
+                                        try? await Task.sleep(nanoseconds: 450_000_000)
+                                        guard !Task.isCancelled else { return }
+                                        await MainActor.run {
+                                            store.updateShortcutSyncConfig(name: newVal, autoRunOnOpen: autoRunShortcutToggle)
+                                        }
+                                    }
                                 }
                         }
 
@@ -991,7 +1000,6 @@ struct DispositivosScreen: View {
             .padding(.bottom, 120)
         }
         .background(BevelColors.canvas)
-        .scrollDismissesKeyboard(.interactively)
         .onAppear {
             profileDraft = store.userProfile
             birthDateDraft = store.userProfile.birthDate

@@ -14,11 +14,15 @@ enum ZipArchiveReader {
         let localHeaderOffset: UInt64
     }
 
+    /// Safety cap against ZIP bombs while permitting multi-year Apple Health XML exports (up to 1.5 GB uncompressed).
+    static let maxUncompressedBytes: UInt64 = 1_500_000_000
+
     enum ZipError: LocalizedError {
         case invalidArchive
         case unsupportedCompression(UInt16)
         case decompressionFailed
         case entryNotFound
+        case archiveTooLarge
 
         var errorDescription: String? {
             switch self {
@@ -26,6 +30,7 @@ enum ZipArchiveReader {
             case .unsupportedCompression(let m): return "Método de compresión ZIP no soportado (\(m))."
             case .decompressionFailed: return "No se pudo descomprimir el archivo dentro del ZIP."
             case .entryNotFound: return "No se encontró el archivo esperado dentro del ZIP."
+            case .archiveTooLarge: return "El archivo descomprimido supera el límite seguro de tamaño."
             }
         }
     }
@@ -38,7 +43,8 @@ enum ZipArchiveReader {
         guard fileSize >= 22 else { throw ZipError.invalidArchive }
 
         let searchLen = min(fileSize, 66_000)
-        try handle.seek(toOffset: fileSize - searchLen)
+        let tailFileStart = fileSize - searchLen
+        try handle.seek(toOffset: tailFileStart)
         let tailData = handle.readData(ofLength: Int(searchLen))
 
         // Locate EOCD signature 0x06054b50 from the end
@@ -56,10 +62,33 @@ enum ZipArchiveReader {
         }
         guard let eocdIdx = eocdOffsetInTail else { throw ZipError.invalidArchive }
 
-        let entryCount = Int(readUInt16LE(bytes, eocdIdx + 10))
-        let cdSize = UInt64(readUInt32LE(bytes, eocdIdx + 12))
-        let cdOffset = UInt64(readUInt32LE(bytes, eocdIdx + 16))
-        guard cdOffset + cdSize <= fileSize else { throw ZipError.invalidArchive }
+        var entryCount = Int(readUInt16LE(bytes, eocdIdx + 10))
+        var cdSize = UInt64(readUInt32LE(bytes, eocdIdx + 12))
+        var cdOffset = UInt64(readUInt32LE(bytes, eocdIdx + 16))
+
+        // ZIP64 End of Central Directory Locator (0x07064b50) & ZIP64 EOCD Record (0x06064b50) support
+        if entryCount == 0xFFFF || cdSize == 0xFFFF_FFFF || cdOffset == 0xFFFF_FFFF {
+            let locIdx = eocdIdx - 20
+            if locIdx >= 0,
+               bytes[locIdx] == 0x50, bytes[locIdx + 1] == 0x4B,
+               bytes[locIdx + 2] == 0x06, bytes[locIdx + 3] == 0x07 {
+                let zip64EocdOffset = readUInt64LE(bytes, locIdx + 8)
+                if zip64EocdOffset + 56 <= fileSize {
+                    try handle.seek(toOffset: zip64EocdOffset)
+                    let z64Data = handle.readData(ofLength: 56)
+                    let z64 = [UInt8](z64Data)
+                    if z64.count == 56, z64[0] == 0x50, z64[1] == 0x4B, z64[2] == 0x06, z64[3] == 0x06 {
+                        let z64Count = readUInt64LE(z64, 32)
+                        if z64Count <= 500_000 {
+                            entryCount = Int(z64Count)
+                        }
+                        cdSize = readUInt64LE(z64, 40)
+                        cdOffset = readUInt64LE(z64, 48)
+                    }
+                }
+            }
+        }
+        guard cdOffset + cdSize <= fileSize, cdSize <= 128_000_000 else { throw ZipError.invalidArchive }
 
         try handle.seek(toOffset: cdOffset)
         let cdData = handle.readData(ofLength: Int(cdSize))
@@ -144,11 +173,23 @@ enum ZipArchiveReader {
         let payloadOffset = entry.localHeaderOffset + UInt64(30 + fnameLen + fextraLen)
         try handle.seek(toOffset: payloadOffset)
 
+        if entry.uncompressedSize > maxUncompressedBytes {
+            throw ZipError.archiveTooLarge
+        }
+
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("improving_unzip_\(UUID().uuidString)_\((entry.name as NSString).lastPathComponent)")
         FileManager.default.createFile(atPath: outURL.path, contents: nil)
+        var extractionSucceeded = false
+        defer {
+            if !extractionSucceeded {
+                try? FileManager.default.removeItem(at: outURL)
+            }
+        }
         let outHandle = try FileHandle(forWritingTo: outURL)
         defer { try? outHandle.close() }
+
+        var totalWritten: UInt64 = 0
 
         if entry.compressionMethod == 0 {
             var remaining = entry.compressedSize
@@ -157,9 +198,14 @@ enum ZipArchiveReader {
                 let toRead = Int(min(remaining, UInt64(chunkCap)))
                 let chunk = handle.readData(ofLength: toRead)
                 if chunk.isEmpty { break }
+                totalWritten += UInt64(chunk.count)
+                if totalWritten > maxUncompressedBytes {
+                    throw ZipError.archiveTooLarge
+                }
                 outHandle.write(chunk)
                 remaining -= UInt64(chunk.count)
             }
+            extractionSucceeded = true
             return outURL
         }
 
@@ -191,6 +237,7 @@ enum ZipArchiveReader {
 
         var remaining = entry.compressedSize
         var done = false
+        var exceededLimit = false
 
         while !done {
             let toRead = Int(min(remaining, UInt64(inCap)))
@@ -210,6 +257,12 @@ enum ZipArchiveReader {
                     let status = compression_stream_process(&dummyStream, flags)
                     let produced = outCap - dummyStream.dst_size
                     if produced > 0 {
+                        totalWritten += UInt64(produced)
+                        let suspiciousRatio = totalWritten > 200_000_000 && entry.compressedSize > 0 && (totalWritten / max(entry.compressedSize, 1)) > 250
+                        if totalWritten > maxUncompressedBytes || suspiciousRatio {
+                            exceededLimit = true
+                            return COMPRESSION_STATUS_ERROR
+                        }
                         outHandle.write(Data(bytes: outBuf, count: produced))
                     }
                     if status == COMPRESSION_STATUS_END {
@@ -224,6 +277,9 @@ enum ZipArchiveReader {
                     }
                 }
             }
+            if exceededLimit {
+                throw ZipError.archiveTooLarge
+            }
             if stepResult == COMPRESSION_STATUS_ERROR {
                 throw ZipError.decompressionFailed
             }
@@ -231,6 +287,7 @@ enum ZipArchiveReader {
                 break
             }
         }
+        extractionSucceeded = true
         return outURL
     }
 

@@ -30,6 +30,26 @@ enum ShareSummaryKind: Identifiable {
     }
 }
 
+final class PhotoLibrarySaveHelper: NSObject {
+    private var completion: ((Error?) -> Void)?
+    private var retainedSelf: PhotoLibrarySaveHelper?
+
+    static func save(_ image: UIImage, completion: @escaping @MainActor (Error?) -> Void) {
+        let helper = PhotoLibrarySaveHelper()
+        helper.retainedSelf = helper
+        helper.completion = { err in
+            Task { @MainActor in completion(err) }
+        }
+        UIImageWriteToSavedPhotosAlbum(image, helper, #selector(didFinishSaving(_:didFinishSavingWithError:contextInfo:)), nil)
+    }
+
+    @objc private func didFinishSaving(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeMutableRawPointer?) {
+        completion?(error)
+        completion = nil
+        retainedSelf = nil
+    }
+}
+
 struct RenderedShareCardImage: Transferable {
     let pngData: Data
     let suggestedFilename: String
@@ -517,8 +537,15 @@ struct ShareSummaryCardSheet: View {
 
                         Button {
                             guard let img = renderedUIImage else { return }
-                            UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
-                            feedbackMessage = "✓ Guardada en tu Fototeca"
+                            feedbackMessage = "Guardando en Fotos…"
+                            PhotoLibrarySaveHelper.save(img) { error in
+                                if let error {
+                                    feedbackMessage = "No se pudo guardar en Fotos: \(error.localizedDescription)"
+                                } else {
+                                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                                    feedbackMessage = "✓ Guardada en tu Fototeca"
+                                }
+                            }
                         } label: {
                             Label("Guardar en Fotos", systemImage: "arrow.down.to.line")
                                 .font(ImprovingFont.caption(13))
