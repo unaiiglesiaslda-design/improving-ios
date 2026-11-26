@@ -1506,7 +1506,10 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testHomeLayoutWeeklyReviewScaleLabsAndCoachPersistenceRoundTrip() throws {
-        let store = makeIsolatedStore()
+        let reloadUrl = FileManager.default.temporaryDirectory
+            .appendingPathComponent("improving_reload_1_\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("store.json")
+        let store = makeIsolatedStore(url: reloadUrl)
         store.hasImportedOrPairedRealData = true
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
