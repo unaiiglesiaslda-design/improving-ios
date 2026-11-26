@@ -69,6 +69,12 @@ final class ImprovingStore: ObservableObject {
         var redactPIIFromAI: Bool?
         var healthKitPreviouslyAuthorized: Bool?
         var napMinutesByDate: [String: Int]?
+        var journalQuantitiesByDate: [String: [String: Double]]?
+        var coachMemoryNotes: [String]?
+        var globalGoalMode: GlobalGoalMode?
+        var nutritionRecipes: [NutritionRecipeTemplate]?
+        var cycleTrackingSettings: CycleTrackingSettings?
+        var autoDeloadModeActive: Bool?
     }
 
     static weak var activeSharedStore: ImprovingStore?
@@ -114,6 +120,12 @@ final class ImprovingStore: ObservableObject {
     @Published var wakeOffsetMinutes: Int = 0
     @Published var sleepGoalPct: Int = 100
     @Published var napMinutesByDate: [String: Int] = [:]
+    @Published var journalQuantitiesByDate: [String: [String: Double]] = [:]
+    @Published var coachMemoryNotes: [String] = []
+    @Published var globalGoalMode: GlobalGoalMode = .longevidad
+    @Published var nutritionRecipes: [NutritionRecipeTemplate] = []
+    @Published var cycleTrackingSettings: CycleTrackingSettings = CycleTrackingSettings()
+    @Published var autoDeloadModeActive: Bool = false
     @Published var visibleTabs: Set<MainTab> = Set(MainTab.allCases)
 
     @Published var whoopConnected: Bool = false
@@ -158,7 +170,7 @@ final class ImprovingStore: ObservableObject {
     var cachedVitalBands: [HealthMetricKind: (low: Double, high: Double, isPersonal: Bool)] = [:]
 
     func ensureDerivedCacheFresh() {
-        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)#\(napMinutesByDate.count)#\(sleepGoalPct)"
+        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)#\(napMinutesByDate.count)#\(sleepGoalPct)#\(globalGoalMode.rawValue)#\(autoDeloadModeActive)#\(cycleTrackingSettings.isEnabled)"
         if derivedCacheFingerprint != fp {
             derivedCacheFingerprint = fp
             cachedTrainingLoad.removeAll(keepingCapacity: true)
@@ -723,11 +735,16 @@ final class ImprovingStore: ObservableObject {
 
     var effectiveNutritionGoals: (kcal: Int, fatG: Int, carbsG: Int, proteinG: Int) {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let w = latestBodyWeightKg ?? userProfile.weightKg
+        let modeKcal = Int((Double(norms.maintenanceCaloriesKcal) * globalGoalMode.kcalMultiplier).rounded())
+        let modeProt = Int((w * globalGoalMode.proteinGramsPerKg).rounded())
+        let modeFat = max(Int((Double(modeKcal) * 0.27 / 9.0).rounded()), 45)
+        let modeCarbs = max((modeKcal - modeProt * 4 - modeFat * 9) / 4, 80)
         return (
-            kcal: customNutritionGoals.caloriesKcal ?? norms.maintenanceCaloriesKcal,
-            fatG: customNutritionGoals.fatG ?? norms.fatGoalG,
-            carbsG: customNutritionGoals.carbsG ?? norms.carbsGoalG,
-            proteinG: customNutritionGoals.proteinG ?? norms.proteinGoalG
+            kcal: customNutritionGoals.caloriesKcal ?? modeKcal,
+            fatG: customNutritionGoals.fatG ?? modeFat,
+            carbsG: customNutritionGoals.carbsG ?? modeCarbs,
+            proteinG: customNutritionGoals.proteinG ?? modeProt
         )
     }
 
@@ -1024,7 +1041,7 @@ final class ImprovingStore: ObservableObject {
 
         let debtMin = targetDay?.sleepDebtMinutes
         let vitalAlert = healthMonitorAlert(for: targetIso)
-        let range = WhoopPhysiologyEngine.optimalTargetRange(
+        let baseRange = WhoopPhysiologyEngine.optimalTargetRange(
             for: recBasis,
             profile: userProfile,
             baselineStrainPct: baseMean,
@@ -1034,6 +1051,11 @@ final class ImprovingStore: ObservableObject {
             recent3DayAvgStrainPct: r3Mean,
             unhealthyVitalsCount: vitalAlert.count
         )
+        let deloadMult = autoDeloadModeActive ? 0.85 : 1.0
+        let modeDelta = globalGoalMode.strainAdjustmentDelta
+        let adjLow = min(max((baseRange.lowerBound + modeDelta * 0.6) * deloadMult, 0.10), 0.78)
+        let adjHigh = min(max((baseRange.upperBound + modeDelta) * deloadMult, adjLow + 0.12), 0.96)
+        let range = adjLow...adjHigh
         let res = (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
         cachedEffortTargets[cacheKey] = res
         return res
@@ -1046,6 +1068,8 @@ final class ImprovingStore: ObservableObject {
             return HealthMonitorPhysiologicalAlert(flaggedVitals: [], count: 0, isCritical: false, strainReductionPct: 0, headline: "", advice: "")
         }
         var flagged: [String] = []
+        let lutealCalibrated = currentCyclePhaseSnapshot?.isLutealCalibrationActive == true
+        let lutealTempAllowance = lutealCalibrated ? 0.38 : 0.0
 
         if let hrv = d.hrvMs, hrv > 2.0 {
             let b = personalVitalNormalBand(for: .hrv)
@@ -1078,7 +1102,7 @@ final class ImprovingStore: ObservableObject {
         let tempAbs: Double? = d.wristTempAbsoluteC ?? d.wristTempDeltaC.map { AppleHealthExportImporter.round1(35.8 + $0) }
         if let t = tempAbs {
             let b = personalVitalNormalBand(for: .wristTemperature)
-            let ev = WhoopPhysiologyEngine.evaluateVital(value: t, bandLow: b.low, bandHigh: b.high, hasData: true)
+            let ev = WhoopPhysiologyEngine.evaluateVital(value: t, bandLow: b.low, bandHigh: b.high + lutealTempAllowance, hasData: true)
             if (ev.isAboveBand || ev.isBelowBand) && (ev.severity == .borderlineWarning || ev.severity == .alertOutOfRange) {
                 flagged.append(ev.isAboveBand ? "Temp. elevada" : "Temp. baja")
             }
@@ -1133,6 +1157,10 @@ final class ImprovingStore: ObservableObject {
         let info = personalizedEffortTarget(for: selectedDateIso)
         let alert = healthMonitorAlert(for: selectedDateIso)
         var parts: [String] = ["Rec. \(info.recBasis)%"]
+        parts.append("Modo \(globalGoalMode.rawValue)")
+        if autoDeloadModeActive {
+            parts.append("Descarga -15%")
+        }
         if alert.isCritical {
             parts.append("protección -\(alert.strainReductionPct)% (\(alert.count) constantes)")
         }
@@ -1146,6 +1174,87 @@ final class ImprovingStore: ObservableObject {
             parts.append("deuda sueño \(debt) min")
         }
         return "Calibrado a ti · " + parts.joined(separator: " · ")
+    }
+
+    // MARK: - Global Goal Mode, Cycle Tracking, Auto-Deload, Morning Briefing & Strength Overload
+
+    func setGlobalGoalMode(_ mode: GlobalGoalMode) {
+        globalGoalMode = mode
+        sleepGoalPct = mode.recommendedSleepMode.rawValue
+        invalidateSectionCoachingCache(sections: CoachingSection.allCases)
+        dataRevision += 1
+        persistState()
+        refreshSmartNotificationSchedules(promptPermission: false)
+    }
+
+    func toggleAutoDeloadMode(_ active: Bool? = nil) {
+        autoDeloadModeActive = active ?? !autoDeloadModeActive
+        invalidateSectionCoachingCache(sections: [.hoy, .esfuerzo, .fitness])
+        dataRevision += 1
+        persistState()
+    }
+
+    var currentCyclePhaseSnapshot: CyclePhaseSnapshot? {
+        var cfg = cycleTrackingSettings
+        if !cfg.isEnabled && userProfile.sex == .female && !cfg.lastPeriodStartIso.isEmpty {
+            cfg.isEnabled = true
+        }
+        return WhoopPhysiologyEngine.computeCyclePhase(settings: cfg, referenceDate: selectedDate)
+    }
+
+    func updateCycleTrackingSettings(_ settings: CycleTrackingSettings) {
+        cycleTrackingSettings = settings
+        dataRevision += 1
+        persistState()
+    }
+
+    var overtrainingAssessment: OvertrainingDeloadAssessment {
+        let recent = trailingCalendarSummaries(days: 10).compactMap(\.summary)
+        let cardioAnalysis = trainingLoadAnalysis(tab: .cardio, spanDays: 30, windowPageOffset: 0)
+        let chronic = max(Double(cardioAnalysis.points.last?.chronicLoad ?? 35), 15.0)
+        let acute = Double(cardioAnalysis.currentLoad)
+        let acwr = cardioAnalysis.hasAnyData ? (acute / chronic) : 1.0
+        return WhoopPhysiologyEngine.computeOvertrainingDeloadAssessment(
+            recentDays: recent,
+            acwr: acwr,
+            deloadModeActive: autoDeloadModeActive
+        )
+    }
+
+    func exercisePerformanceSnapshot(for exerciseName: String) -> ExercisePerformanceSnapshot {
+        let rec = dataAvailability.hasRecoveryData ? recoveryPercent : 70
+        return WhoopPhysiologyEngine.computeExercisePerformanceSnapshot(
+            exerciseName: exerciseName,
+            logs: strengthLogs,
+            recoveryPct: rec,
+            deloadActive: autoDeloadModeActive || overtrainingAssessment.riskLevel == 2
+        )
+    }
+
+    var morningBriefingSnapshot: MorningBriefingSnapshot {
+        let av = dataAvailability
+        let name = userProfile.displayFirstName.isEmpty ? "Atleta" : userProfile.displayFirstName
+        let recText = av.hasRecoveryData ? "Recuperación \(recoveryPercent)%" : "Sin lectura de recuperación"
+        let need = tonightSleepNeedBreakdown
+        let plan = computedSleepPlan
+        let sleepText = av.hasSleepData
+            ? "Dormiste \(sleepDurationText) (\(sleepPercent)%). Esta noche necesitas \(need.totalMin / 60)h \(String(format: "%02d", need.totalMin % 60))m (acuéstate a las \(plan.bedtimeLabel))."
+            : "Objetivo de sueño para hoy: \(need.totalMin / 60)h \(String(format: "%02d", need.totalMin % 60))m (hora recomendada \(plan.bedtimeLabel))."
+        let effortText = "Rango de esfuerzo óptimo hoy: \(effortTargetRangeText)\(autoDeloadModeActive ? " (Semana de Descarga −15%)" : "")."
+        let goals = effectiveNutritionGoals
+        let nutText = "Meta Modo \(globalGoalMode.rawValue): \(goals.kcal) kcal · \(goals.proteinG)g proteína · \(goals.carbsG)g carbos · \(goals.fatG)g grasas."
+        let vAlert = healthMonitorAlert(for: selectedDateIso)
+        let deload = overtrainingAssessment
+        return MorningBriefingSnapshot(
+            greetingTitle: "Briefing del día · \(name)",
+            recoveryBadge: recText,
+            sleepSummary: sleepText,
+            effortPlanText: effortText,
+            nutritionPlanText: nutText,
+            vitalAlertText: vAlert.isCritical ? vAlert.headline + ": " + vAlert.flaggedVitals.joined(separator: ", ") : nil,
+            deloadAlertText: deload.riskLevel >= 1 ? "\(deload.statusTitle) (ACWR \(String(format: "%.2f", locale: Locale(identifier: "es_ES"), deload.acwr)))" : nil,
+            goalMode: globalGoalMode
+        )
     }
 
 }

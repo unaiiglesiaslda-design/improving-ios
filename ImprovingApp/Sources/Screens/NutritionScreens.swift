@@ -91,6 +91,7 @@ private enum NutritionActiveSheet: Identifiable {
     case info
     case goals
     case myFoods
+    case recipeBuilder
     case fullTimeline
     case mealComposer(existing: NutritionMealItem?, mode: NutritionComposerInitialMode)
     case factorInfo(FoodQualityFactorKind)
@@ -102,6 +103,7 @@ private enum NutritionActiveSheet: Identifiable {
         case .info: return "info"
         case .goals: return "goals"
         case .myFoods: return "myFoods"
+        case .recipeBuilder: return "recipeBuilder"
         case .fullTimeline: return "fullTimeline"
         case .mealComposer(let m, let mode): return "composer_\(m?.id ?? "new")_\(mode)"
         case .factorInfo(let f): return "factor_\(f.id)"
@@ -543,6 +545,42 @@ struct NutricionScreen: View {
                             }
                             Spacer()
                             HStack(spacing: 8) {
+                                let yestCount = store.yesterdayMealsForSelectedDate.count
+                                if yestCount > 0 {
+                                    Button {
+                                        AppHaptics.selection()
+                                        _ = store.repeatYesterdayMeals()
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "arrow.counterclockwise")
+                                                .font(.system(size: 11, weight: .bold))
+                                            Text("Repetir ayer (\(yestCount))")
+                                                .font(ImprovingFont.caption(11.5))
+                                                .fontWeight(.bold)
+                                        }
+                                        .foregroundColor(BevelColors.skyBlue)
+                                        .padding(.horizontal, 10)
+                                        .frame(height: 36)
+                                        .background(Capsule().fill(BevelColors.card))
+                                        .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                                    }
+                                }
+                                Button {
+                                    activeSheet = .recipeBuilder
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "frying.pan.fill")
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                        Text("Recetas")
+                                            .font(ImprovingFont.caption(11.5))
+                                            .fontWeight(.bold)
+                                    }
+                                    .foregroundColor(BevelColors.amberStart)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 36)
+                                    .background(Capsule().fill(BevelColors.card))
+                                    .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                                }
                                 Button {
                                     activeSheet = .mealComposer(existing: nil, mode: .barcode)
                                 } label: {
@@ -618,6 +656,9 @@ struct NutricionScreen: View {
                         }
                     }
 
+                    // 7B. Ventana de Ayuno Intermitente + Panel de 8 Micronutrientes Cuantificados (Apartado 1.5)
+                    FastingAndMicronutrientsSection(store: store)
+
                     // 8. "Tendencias" — 3 Exact Cards (Screenshots 6 & 7!)
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Tendencias")
@@ -668,6 +709,8 @@ struct NutricionScreen: View {
                 NutritionGoalsSheet(store: store, onClose: { activeSheet = nil })
             case .myFoods:
                 MisAlimentosSheet(store: store, onClose: { activeSheet = nil })
+            case .recipeBuilder:
+                MultiIngredientRecipeBuilderSheet(store: store, onClose: { activeSheet = nil })
             case .fullTimeline:
                 FullNutritionTimelineSheet(
                     store: store,
@@ -1071,5 +1114,341 @@ struct NutricionScreen: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Fasting Window, Meal-to-Bedtime Gap, Quantified Micronutrients & Multi-Ingredient Recipe Builder (Apartado 1.5)
+
+struct FastingAndMicronutrientsSection: View {
+    @ObservedObject var store: ImprovingStore
+    @State private var showAllMicros: Bool = false
+
+    var body: some View {
+        let timing = store.caffeineAndMealTimingToday
+        let micros = store.dailyMicronutrientsSnapshot
+        let visibleMicros = showAllMicros ? micros : Array(micros.prefix(4))
+
+        VStack(alignment: .leading, spacing: 12) {
+            // 1. Ventana de Alimentación / Ayuno Intermitente & Digestión Nocturna
+            BevelCard(cornerRadius: 20) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Image(systemName: "clock.badge.checkmark.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(BevelColors.bioTeal)
+                        Text("VENTANA DE ALIMENTACIÓN Y AYUNO")
+                            .font(ImprovingFont.microLabel(10))
+                            .foregroundColor(BevelColors.textMuted)
+                        Spacer()
+                        if let fast = timing.fastingHours, let win = timing.eatingWindowHours {
+                            Text("Ayuno \(Int(fast.rounded())):\(Int(win.rounded()))")
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundColor(fast >= 13.5 ? BevelColors.greenPrimary : BevelColors.skyBlue)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(BevelColors.cardSubtle))
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Primera comida")
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(timing.firstMealTimeLabel ?? "--:--")
+                                .font(ImprovingFont.cardTitle(15))
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Última comida")
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(timing.lastMealTimeLabel ?? "--:--")
+                                .font(ImprovingFont.cardTitle(15))
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("Margen al sueño")
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(timing.hoursFromLastMealToBedtime.map { String(format: "%.1f h", locale: Locale(identifier: "es_ES"), $0) } ?? "--")
+                                .font(ImprovingFont.cardTitle(15))
+                                .monospacedDigit()
+                                .foregroundColor((timing.hoursFromLastMealToBedtime ?? 3.0) >= 2.8 ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                        }
+                    }
+
+                    Text(timing.statusSummary)
+                        .font(ImprovingFont.caption(11.5))
+                        .foregroundColor(BevelColors.textSecondary)
+                }
+                .padding(16)
+            }
+
+            // 2. Panel de 8 Micronutrientes Cuantificados con Objetivos Diarios
+            HStack {
+                Text("Micronutrientes cuantificados")
+                    .font(ImprovingFont.sectionTitle(18))
+                    .foregroundColor(BevelColors.textPrimary)
+                Spacer()
+                Button(showAllMicros ? "Ver menos" : "Ver los 8") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAllMicros.toggle()
+                    }
+                }
+                .font(ImprovingFont.caption(12))
+                .fontWeight(.semibold)
+                .foregroundColor(BevelColors.skyBlue)
+            }
+            .padding(.top, 4)
+
+            BevelCard(cornerRadius: 20) {
+                VStack(spacing: 12) {
+                    ForEach(visibleMicros) { item in
+                        let col = Color(hex: item.accentHex)
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Image(systemName: item.icon)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(col)
+                                Text(item.name)
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                Text("\(String(format: item.currentValue >= 100 ? "%.0f" : "%.1f", locale: Locale(identifier: "es_ES"), item.currentValue)) / \(String(format: item.targetValue >= 100 ? "%.0f" : "%.1f", locale: Locale(identifier: "es_ES"), item.targetValue)) \(item.unit)")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                                    .foregroundColor(item.isUpperLimit && item.currentValue > item.targetValue ? BevelColors.coralHigh : BevelColors.textPrimary)
+                            }
+                            GeometryReader { geo in
+                                let w = max(geo.size.width, 1)
+                                let frac = min(item.progressFraction, 1.0)
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(BevelColors.chartTrackSubtle).frame(height: 6)
+                                    Capsule()
+                                        .fill(item.isUpperLimit && item.currentValue > item.targetValue ? BevelColors.coralHigh : col)
+                                        .frame(width: max(6, w * CGFloat(frac)), height: 6)
+                                }
+                            }
+                            .frame(height: 6)
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+    }
+}
+
+struct MultiIngredientRecipeBuilderSheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onClose: () -> Void
+
+    @State private var recipeTitle: String = "Bowl proteico post-entreno"
+    @State private var recipeEmoji: String = "🍲"
+    @State private var servings: Int = 2
+    @State private var ingredients: [NutritionRecipeIngredient] = [
+        NutritionRecipeIngredient(id: "i1", name: "Pechuga de pollo / Tofu", grams: 300, kcal: 495, proteinG: 93, carbsG: 0, fatG: 11, fiberG: 0),
+        NutritionRecipeIngredient(id: "i2", name: "Arroz integral cocido", grams: 250, kcal: 280, proteinG: 6, carbsG: 58, fatG: 2, fiberG: 4.5),
+        NutritionRecipeIngredient(id: "i3", name: "Aguacate y verduras", grams: 150, kcal: 190, proteinG: 3, carbsG: 10, fatG: 16, fiberG: 6.5)
+    ]
+    @State private var ingName: String = ""
+    @State private var ingGrams: Int = 100
+    @State private var ingKcal: Int = 150
+    @State private var ingProt: Int = 12
+    @State private var ingCarbs: Int = 15
+    @State private var ingFat: Int = 5
+
+    var body: some View {
+        let draftTemplate = NutritionRecipeTemplate(
+            id: UUID().uuidString,
+            title: recipeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Receta casera" : recipeTitle,
+            emoji: recipeEmoji,
+            servings: max(servings, 1),
+            ingredients: ingredients
+        )
+
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("CREAR RECETA MULTI-INGREDIENTE")
+                                .font(ImprovingFont.microLabel(10))
+                                .foregroundColor(BevelColors.textMuted)
+                            HStack(spacing: 8) {
+                                TextField("🍲", text: $recipeEmoji)
+                                    .frame(width: 44)
+                                    .multilineTextAlignment(.center)
+                                    .padding(8)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                                TextField("Nombre de la receta", text: $recipeTitle)
+                                    .font(ImprovingFont.cardTitle(14.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                            }
+                            Stepper("Raciones totales: \(servings)", value: $servings, in: 1...12)
+                                .font(ImprovingFont.caption(13))
+                                .foregroundColor(BevelColors.textPrimary)
+
+                            HStack {
+                                Text("Por ración (1/\(servings)):")
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                Spacer()
+                                Text("\(draftTemplate.kcalPerServing) kcal · \(draftTemplate.proteinPerServing)g P · \(draftTemplate.carbsPerServing)g C · \(draftTemplate.fatPerServing)g G")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.greenPrimary)
+                            }
+                        }
+                        .padding(14)
+                    }
+
+                    // Add Ingredient Card
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("AÑADIR INGREDIENTE")
+                                .font(ImprovingFont.microLabel(10))
+                                .foregroundColor(BevelColors.textMuted)
+                            TextField("Ingrediente (ej. Avena, Huevos, Salmón…)", text: $ingName)
+                                .font(ImprovingFont.body(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .padding(9)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                            Stepper("Peso: \(ingGrams) g · \(ingKcal) kcal", value: $ingKcal, in: 10...1500, step: 25)
+                                .font(ImprovingFont.caption(12))
+                            HStack {
+                                Stepper("P: \(ingProt)g", value: $ingProt, in: 0...150, step: 2)
+                                Stepper("C: \(ingCarbs)g", value: $ingCarbs, in: 0...200, step: 5)
+                                Stepper("G: \(ingFat)g", value: $ingFat, in: 0...100, step: 2)
+                            }
+                            .font(ImprovingFont.caption(11.5))
+
+                            Button {
+                                let clean = ingName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                ingredients.append(NutritionRecipeIngredient(
+                                    id: UUID().uuidString,
+                                    name: clean.isEmpty ? "Ingrediente" : clean,
+                                    grams: ingGrams,
+                                    kcal: ingKcal,
+                                    proteinG: ingProt,
+                                    carbsG: ingCarbs,
+                                    fatG: ingFat,
+                                    fiberG: Double(ingCarbs) * 0.12
+                                ))
+                                ingName = ""
+                                AppHaptics.selection()
+                            } label: {
+                                Text("+ Añadir ingrediente a la receta")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.skyBlue)
+                            }
+                        }
+                        .padding(14)
+                    }
+
+                    ForEach(ingredients) { ing in
+                        BevelCard(cornerRadius: 14) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(ing.name).font(ImprovingFont.cardTitle(13.5)).foregroundColor(BevelColors.textPrimary)
+                                    Text("\(ing.kcal) kcal · \(ing.proteinG)g P · \(ing.carbsG)g C · \(ing.fatG)g G")
+                                        .font(ImprovingFont.caption(11.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                                Spacer()
+                                Button {
+                                    ingredients.removeAll { $0.id == ing.id }
+                                } label: {
+                                    Image(systemName: "trash").font(.system(size: 12.5)).foregroundColor(BevelColors.coralHigh)
+                                }
+                            }
+                            .padding(12)
+                        }
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            store.saveNutritionRecipe(draftTemplate)
+                            AppHaptics.success()
+                        } label: {
+                            Text("Guardar en Recetas")
+                                .font(ImprovingFont.cardTitle(13.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.card))
+                        }
+                        Button {
+                            store.saveNutritionRecipe(draftTemplate)
+                            store.logRecipeServing(draftTemplate, servingsCount: 1.0)
+                            AppHaptics.success()
+                            onClose()
+                        } label: {
+                            Text("Registrar 1 ración hoy")
+                                .font(ImprovingFont.cardTitle(13.5))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 13)
+                                .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.emeraldEnd))
+                        }
+                    }
+
+                    if !store.nutritionRecipes.isEmpty {
+                        Text("Mis recetas guardadas (\(store.nutritionRecipes.count))")
+                            .font(ImprovingFont.sectionTitle(16))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .padding(.top, 6)
+
+                        ForEach(store.nutritionRecipes) { rec in
+                            BevelCard(cornerRadius: 16) {
+                                HStack {
+                                    Text(rec.emoji).font(.system(size: 20))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(rec.title).font(ImprovingFont.cardTitle(14)).foregroundColor(BevelColors.textPrimary)
+                                        Text("1/\(rec.safeServings) rac: \(rec.kcalPerServing) kcal · \(rec.proteinPerServing)g P · \(rec.carbsPerServing)g C · \(rec.fatPerServing)g G")
+                                            .font(ImprovingFont.caption(11.5))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                    }
+                                    Spacer()
+                                    Button("+ 1 rac.") {
+                                        store.logRecipeServing(rec, servingsCount: 1.0)
+                                        AppHaptics.success()
+                                        onClose()
+                                    }
+                                    .font(ImprovingFont.caption(11.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(BevelColors.indigoEnd))
+                                }
+                                .padding(12)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle("Constructor de Recetas")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cerrar", action: onClose)
+                }
+            }
+        }
     }
 }

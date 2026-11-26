@@ -250,6 +250,9 @@ struct HoyScreen: View {
                     .buttonStyle(.plain)
                 }
 
+                // Proactive Morning Briefing & Global Goal Mode Synchronizer (Apartados 1.4 & 2.3)
+                MorningBriefingAndGoalModeCard(store: store, onNavigate: onNavigate)
+
                 // Customizable Ordered Home Sections (N2!)
                 ForEach(store.homeLayout.normalizedOrder) { section in
                     if store.homeLayout.isSectionVisible(section) {
@@ -961,5 +964,137 @@ struct DatePickerSheetView: View {
         }
         .background(BevelColors.sheetHeaderBg.ignoresSafeArea())
         .presentationDetents([.medium, .large])
+    }
+}
+
+// MARK: - Morning Briefing Check-In & Global Goal Mode Selector Card (Apartados 1.4 & 2.3)
+
+struct MorningBriefingAndGoalModeCard: View {
+    @ObservedObject var store: ImprovingStore
+    let onNavigate: (OverlayRoute) -> Void
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        let brief = store.morningBriefingSnapshot
+
+        BevelCard(cornerRadius: 20) {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(spacing: 10) {
+                    Image(systemName: brief.goalMode.icon)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(BevelColors.skyBlue)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(BevelColors.skySoftBg))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("BRIEFING MATUTINO Y OBJETIVO")
+                                .font(ImprovingFont.microLabel(9.5))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(brief.recoveryBadge)
+                                .font(ImprovingFont.microLabel(9.5))
+                                .foregroundColor(BevelColors.greenPrimary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(BevelColors.greenSoftBg))
+                        }
+                        Text(brief.greetingTitle)
+                            .font(ImprovingFont.cardTitle(15))
+                            .foregroundColor(BevelColors.textPrimary)
+                    }
+                    Spacer()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(isExpanded ? "Ocultar" : "Plan hoy")
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.bold)
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .foregroundColor(BevelColors.skyBlue)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(BevelColors.skySoftBg))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // 5-Mode Global Goal Selector (synchronizes Macros + Optimal Strain + Sleep Coach + AI Coach)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(GlobalGoalMode.allCases) { mode in
+                            let sel = store.globalGoalMode == mode
+                            Button {
+                                AppHaptics.selection()
+                                store.setGlobalGoalMode(mode)
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: mode.icon)
+                                        .font(.system(size: 11, weight: .semibold))
+                                    Text(mode.rawValue)
+                                        .font(ImprovingFont.caption(12))
+                                        .fontWeight(.bold)
+                                }
+                                .foregroundColor(sel ? .white : BevelColors.textSecondary)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(sel ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if isExpanded {
+                    Divider().background(BevelColors.divider)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label(brief.sleepSummary, systemImage: "moon.stars.fill")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Label(brief.effortPlanText, systemImage: "flame.fill")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.amberStart)
+                        Label(brief.nutritionPlanText, systemImage: "fork.knife")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.greenPrimary)
+
+                        if let deloadTxt = brief.deloadAlertText {
+                            Label(deloadTxt, systemImage: "bolt.shield.fill")
+                                .font(ImprovingFont.caption(12))
+                                .foregroundColor(BevelColors.coralHigh)
+                        }
+
+                        HStack {
+                            Text(brief.goalMode.shortSubtitle)
+                                .font(ImprovingFont.caption(11))
+                                .foregroundColor(BevelColors.textMuted)
+                            Spacer()
+                            Button {
+                                onNavigate(.askBevel)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "sparkles")
+                                    Text("Consultar Coach")
+                                }
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(BevelColors.indigoEnd))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+            }
+            .padding(15)
+        }
     }
 }

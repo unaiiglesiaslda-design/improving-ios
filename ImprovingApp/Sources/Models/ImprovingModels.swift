@@ -794,6 +794,14 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
     var caffeineMg: Double? = nil
     var alcoholDrinks: Double? = nil
     var calciumMg: Double? = nil
+    var fiberG: Double? = nil
+    var sugarG: Double? = nil
+    var sodiumMg: Double? = nil
+    var potassiumMg: Double? = nil
+    var magnesiumMg: Double? = nil
+    var ironMg: Double? = nil
+    var vitaminDMcg: Double? = nil
+    var omega3G: Double? = nil
     var aiNotes: String? = nil
     var photoFilename: String? = nil
     var emoji: String? = nil
@@ -802,8 +810,9 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, timeLabel, kcal, proteinG, carbsG, fatG, qualityScore
-        case caffeineMg, alcoholDrinks, calciumMg, aiNotes, photoFilename
-        case emoji, qualityFactors, isFavorite
+        case caffeineMg, alcoholDrinks, calciumMg
+        case fiberG, sugarG, sodiumMg, potassiumMg, magnesiumMg, ironMg, vitaminDMcg, omega3G
+        case aiNotes, photoFilename, emoji, qualityFactors, isFavorite
     }
 
     init(
@@ -818,6 +827,14 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
         caffeineMg: Double? = nil,
         alcoholDrinks: Double? = nil,
         calciumMg: Double? = nil,
+        fiberG: Double? = nil,
+        sugarG: Double? = nil,
+        sodiumMg: Double? = nil,
+        potassiumMg: Double? = nil,
+        magnesiumMg: Double? = nil,
+        ironMg: Double? = nil,
+        vitaminDMcg: Double? = nil,
+        omega3G: Double? = nil,
         aiNotes: String? = nil,
         photoFilename: String? = nil,
         emoji: String? = nil,
@@ -835,6 +852,14 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
         self.caffeineMg = caffeineMg
         self.alcoholDrinks = alcoholDrinks
         self.calciumMg = calciumMg
+        self.fiberG = fiberG
+        self.sugarG = sugarG
+        self.sodiumMg = sodiumMg
+        self.potassiumMg = potassiumMg
+        self.magnesiumMg = magnesiumMg
+        self.ironMg = ironMg
+        self.vitaminDMcg = vitaminDMcg
+        self.omega3G = omega3G
         self.aiNotes = aiNotes
         self.photoFilename = photoFilename
         self.emoji = emoji
@@ -855,11 +880,71 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
         caffeineMg = try c.decodeIfPresent(Double.self, forKey: .caffeineMg)
         alcoholDrinks = try c.decodeIfPresent(Double.self, forKey: .alcoholDrinks)
         calciumMg = try c.decodeIfPresent(Double.self, forKey: .calciumMg)
+        fiberG = try c.decodeIfPresent(Double.self, forKey: .fiberG)
+        sugarG = try c.decodeIfPresent(Double.self, forKey: .sugarG)
+        sodiumMg = try c.decodeIfPresent(Double.self, forKey: .sodiumMg)
+        potassiumMg = try c.decodeIfPresent(Double.self, forKey: .potassiumMg)
+        magnesiumMg = try c.decodeIfPresent(Double.self, forKey: .magnesiumMg)
+        ironMg = try c.decodeIfPresent(Double.self, forKey: .ironMg)
+        vitaminDMcg = try c.decodeIfPresent(Double.self, forKey: .vitaminDMcg)
+        omega3G = try c.decodeIfPresent(Double.self, forKey: .omega3G)
         aiNotes = try c.decodeIfPresent(String.self, forKey: .aiNotes)
         photoFilename = try c.decodeIfPresent(String.self, forKey: .photoFilename)
         emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
         qualityFactors = try c.decodeIfPresent(NutritionQualityFactors.self, forKey: .qualityFactors)
         isFavorite = try c.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+    }
+
+    var effectiveFiberG: Double {
+        if let f = fiberG { return f }
+        let qf = qualityFactors
+        let base = Double(carbsG) * (qualityScore >= 80 ? 0.14 : 0.07)
+        let vegBonus = Double((qf?.vegetables ?? 0) + (qf?.wholeGrains ?? 0) + (qf?.fruits ?? 0)) * 3.2
+        return max(0, (base + vegBonus * 0.5).rounded())
+    }
+
+    var effectiveSugarG: Double {
+        if let s = sugarG { return s }
+        let excess = Double(qualityFactors?.excessSugar ?? 0) * 14.0
+        let fruit = Double(qualityFactors?.fruits ?? 0) * 8.0
+        return max(0, (Double(carbsG) * (qualityScore < 65 ? 0.28 : 0.11) + excess + fruit * 0.4).rounded())
+    }
+
+    var effectiveSodiumMg: Double {
+        if let na = sodiumMg { return na }
+        let excess = Double((qualityFactors?.excessSodium ?? 0) + (qualityFactors?.processedMeats ?? 0)) * 420.0
+        return max(0, (Double(kcal) * 0.85 + excess).rounded())
+    }
+
+    var effectivePotassiumMg: Double {
+        if let k = potassiumMg { return k }
+        let vegFruit = Double((qualityFactors?.vegetables ?? 0) + (qualityFactors?.fruits ?? 0)) * 340.0
+        return max(0, (Double(kcal) * 1.15 + vegFruit).rounded())
+    }
+
+    var effectiveMagnesiumMg: Double {
+        if let mg = magnesiumMg { return mg }
+        let whole = Double((qualityFactors?.wholeGrains ?? 0) + (qualityFactors?.vegetables ?? 0) + (qualityFactors?.healthyFats ?? 0)) * 42.0
+        return max(0, (Double(kcal) * 0.14 + whole).rounded())
+    }
+
+    var effectiveIronMg: Double {
+        if let fe = ironMg { return fe }
+        return max(0, ((Double(proteinG) * 0.11) + Double(qualityFactors?.vegetables ?? 0) * 1.1))
+    }
+
+    var effectiveVitaminDMcg: Double {
+        if let vd = vitaminDMcg { return vd }
+        let low = title.lowercased()
+        let rich = (low.contains("salmón") || low.contains("huevo") || low.contains("atún") || low.contains("lácteo") || low.contains("leche")) ? 4.5 : 0.8
+        return rich + Double(qualityFactors?.omega3 ?? 0) * 3.2
+    }
+
+    var effectiveOmega3G: Double {
+        if let o3 = omega3G { return o3 }
+        let low = title.lowercased()
+        let fishBonus = (low.contains("salmón") || low.contains("sardina") || low.contains("atún") || low.contains("nueces") || low.contains("chía")) ? 1.4 : 0.15
+        return fishBonus + Double(qualityFactors?.omega3 ?? 0) * 0.9
     }
 }
 
@@ -1693,6 +1778,24 @@ struct DeepLinkRequest: Equatable {
     let destination: Destination
 }
 
+enum StrengthSetKind: String, Codable, CaseIterable, Identifiable, Hashable {
+    case effective = "Efectiva"
+    case warmup = "Calentamiento"
+    case dropSet = "Drop set"
+    case superset = "Superserie"
+
+    var id: String { rawValue }
+
+    var shortBadge: String {
+        switch self {
+        case .effective: return "EF"
+        case .warmup: return "CAL"
+        case .dropSet: return "DROP"
+        case .superset: return "SS"
+        }
+    }
+}
+
 struct StrengthLoggedSet: Identifiable, Codable, Equatable, Hashable {
     let id: String
     let dateIso: String
@@ -1702,4 +1805,435 @@ struct StrengthLoggedSet: Identifiable, Codable, Equatable, Hashable {
     var primaryMuscles: [MuscleGroupKind]
     var secondaryMuscles: [MuscleGroupKind]
     var completed: Bool
+    var setKind: StrengthSetKind = .effective
+    var rpe: Int? = nil
+    var rir: Int? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, dateIso, exercise, reps, weightKg, primaryMuscles, secondaryMuscles, completed
+        case setKind, rpe, rir
+    }
+
+    init(
+        id: String,
+        dateIso: String,
+        exercise: String,
+        reps: Int,
+        weightKg: Double,
+        primaryMuscles: [MuscleGroupKind],
+        secondaryMuscles: [MuscleGroupKind],
+        completed: Bool,
+        setKind: StrengthSetKind = .effective,
+        rpe: Int? = nil,
+        rir: Int? = nil
+    ) {
+        self.id = id
+        self.dateIso = dateIso
+        self.exercise = exercise
+        self.reps = reps
+        self.weightKg = weightKg
+        self.primaryMuscles = primaryMuscles
+        self.secondaryMuscles = secondaryMuscles
+        self.completed = completed
+        self.setKind = setKind
+        self.rpe = rpe
+        self.rir = rir
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        dateIso = try c.decode(String.self, forKey: .dateIso)
+        exercise = try c.decode(String.self, forKey: .exercise)
+        reps = try c.decodeIfPresent(Int.self, forKey: .reps) ?? 10
+        weightKg = try c.decodeIfPresent(Double.self, forKey: .weightKg) ?? 0
+        primaryMuscles = try c.decodeIfPresent([MuscleGroupKind].self, forKey: .primaryMuscles) ?? [.pectorales]
+        secondaryMuscles = try c.decodeIfPresent([MuscleGroupKind].self, forKey: .secondaryMuscles) ?? []
+        completed = try c.decodeIfPresent(Bool.self, forKey: .completed) ?? true
+        setKind = try c.decodeIfPresent(StrengthSetKind.self, forKey: .setKind) ?? .effective
+        rpe = try c.decodeIfPresent(Int.self, forKey: .rpe)
+        rir = try c.decodeIfPresent(Int.self, forKey: .rir)
+    }
+
+    /// Epley 1-Rep Max estimation (`weight * (1 + reps / 30)`).
+    var estimatedOneRepMaxKg: Double {
+        guard weightKg > 0, reps > 0 else { return 0 }
+        if reps == 1 { return weightKg }
+        return weightKg * (1.0 + Double(min(reps, 20)) / 30.0)
+    }
+}
+
+struct StrengthCatalogExercise: Identifiable, Equatable, Hashable {
+    let id: String
+    let name: String
+    let category: String // "Empuje", "Tirón", "Pierna", "Core y Accesorios"
+    let equipment: String // "Barra", "Mancuernas", "Máquina / Polea", "Peso corporal"
+    let primaryMuscles: [MuscleGroupKind]
+    let secondaryMuscles: [MuscleGroupKind]
+    let defaultWeightKg: Double
+    let defaultReps: Int
+
+    static let all: [StrengthCatalogExercise] = [
+        // Empuje (Pecho, Hombros, Tríceps)
+        StrengthCatalogExercise(id: "press_banca_barra", name: "Press banca con barra", category: "Empuje", equipment: "Barra", primaryMuscles: [.pectorales], secondaryMuscles: [.triceps, .hombros], defaultWeightKg: 60, defaultReps: 8),
+        StrengthCatalogExercise(id: "press_inclinado_manc", name: "Press inclinado con mancuernas", category: "Empuje", equipment: "Mancuernas", primaryMuscles: [.pectorales, .hombros], secondaryMuscles: [.triceps], defaultWeightKg: 24, defaultReps: 10),
+        StrengthCatalogExercise(id: "fondos_paralelas", name: "Fondos en paralelas", category: "Empuje", equipment: "Peso corporal", primaryMuscles: [.pectorales, .triceps], secondaryMuscles: [.hombros], defaultWeightKg: 10, defaultReps: 10),
+        StrengthCatalogExercise(id: "aperturas_polea", name: "Cruces en polea", category: "Empuje", equipment: "Máquina / Polea", primaryMuscles: [.pectorales], secondaryMuscles: [.hombros], defaultWeightKg: 20, defaultReps: 12),
+        StrengthCatalogExercise(id: "press_militar_barra", name: "Press militar de pie", category: "Empuje", equipment: "Barra", primaryMuscles: [.hombros], secondaryMuscles: [.triceps, .trapecio, .abdominales], defaultWeightKg: 40, defaultReps: 8),
+        StrengthCatalogExercise(id: "press_hombro_manc", name: "Press de hombros con mancuernas", category: "Empuje", equipment: "Mancuernas", primaryMuscles: [.hombros], secondaryMuscles: [.triceps], defaultWeightKg: 18, defaultReps: 10),
+        StrengthCatalogExercise(id: "elevaciones_laterales", name: "Elevaciones laterales", category: "Empuje", equipment: "Mancuernas", primaryMuscles: [.hombros], secondaryMuscles: [.trapecio], defaultWeightKg: 10, defaultReps: 15),
+        StrengthCatalogExercise(id: "extension_triceps_polea", name: "Extensión de tríceps en polea", category: "Empuje", equipment: "Máquina / Polea", primaryMuscles: [.triceps], secondaryMuscles: [.antebrazo], defaultWeightKg: 25, defaultReps: 12),
+        StrengthCatalogExercise(id: "press_frances", name: "Press francés (rompecráneos)", category: "Empuje", equipment: "Barra", primaryMuscles: [.triceps], secondaryMuscles: [.antebrazo], defaultWeightKg: 28, defaultReps: 10),
+        StrengthCatalogExercise(id: "flexiones", name: "Flexiones de pecho", category: "Empuje", equipment: "Peso corporal", primaryMuscles: [.pectorales], secondaryMuscles: [.triceps, .hombros, .abdominales], defaultWeightKg: 0, defaultReps: 15),
+
+        // Tirón (Espalda, Bíceps, Trapecio, Manguito)
+        StrengthCatalogExercise(id: "dominadas", name: "Dominadas", category: "Tirón", equipment: "Peso corporal", primaryMuscles: [.dorsales, .espaldaAlta], secondaryMuscles: [.biceps, .antebrazo], defaultWeightKg: 0, defaultReps: 8),
+        StrengthCatalogExercise(id: "jalon_pecho", name: "Jalón al pecho en polea", category: "Tirón", equipment: "Máquina / Polea", primaryMuscles: [.dorsales], secondaryMuscles: [.biceps, .espaldaAlta], defaultWeightKg: 55, defaultReps: 10),
+        StrengthCatalogExercise(id: "remo_barra", name: "Remo con barra Pendlay", category: "Tirón", equipment: "Barra", primaryMuscles: [.espaldaAlta, .dorsales], secondaryMuscles: [.lumbares, .biceps, .trapecio], defaultWeightKg: 60, defaultReps: 8),
+        StrengthCatalogExercise(id: "remo_mancuerna", name: "Remo con mancuerna a una mano", category: "Tirón", equipment: "Mancuernas", primaryMuscles: [.dorsales, .espaldaAlta], secondaryMuscles: [.biceps, .antebrazo], defaultWeightKg: 28, defaultReps: 10),
+        StrengthCatalogExercise(id: "remo_gironda", name: "Remo sentado en polea baja", category: "Tirón", equipment: "Máquina / Polea", primaryMuscles: [.espaldaAlta, .dorsales], secondaryMuscles: [.biceps, .trapecio], defaultWeightKg: 50, defaultReps: 12),
+        StrengthCatalogExercise(id: "face_pull", name: "Face Pull en polea alta", category: "Tirón", equipment: "Máquina / Polea", primaryMuscles: [.manguitoRotador, .espaldaAlta], secondaryMuscles: [.trapecio, .hombros], defaultWeightKg: 22, defaultReps: 15),
+        StrengthCatalogExercise(id: "encogimientos_trapecio", name: "Encogimientos de trapecio", category: "Tirón", equipment: "Mancuernas", primaryMuscles: [.trapecio], secondaryMuscles: [.antebrazo], defaultWeightKg: 30, defaultReps: 12),
+        StrengthCatalogExercise(id: "curl_biceps_barra", name: "Curl de bíceps con barra Z", category: "Tirón", equipment: "Barra", primaryMuscles: [.biceps], secondaryMuscles: [.antebrazo], defaultWeightKg: 30, defaultReps: 10),
+        StrengthCatalogExercise(id: "curl_martillo", name: "Curl martillo con mancuernas", category: "Tirón", equipment: "Mancuernas", primaryMuscles: [.biceps, .antebrazo], secondaryMuscles: [], defaultWeightKg: 14, defaultReps: 12),
+
+        // Pierna (Cuádriceps, Isquiotibiales, Glúteos, Pantorrillas, Lumbares)
+        StrengthCatalogExercise(id: "sentadilla_barra", name: "Sentadilla trasera con barra", category: "Pierna", equipment: "Barra", primaryMuscles: [.cuadriceps, .gluteos], secondaryMuscles: [.lumbares, .isquiotibiales, .abdominales], defaultWeightKg: 85, defaultReps: 8),
+        StrengthCatalogExercise(id: "prensa_piernas", name: "Prensa de piernas 45°", category: "Pierna", equipment: "Máquina / Polea", primaryMuscles: [.cuadriceps, .gluteos], secondaryMuscles: [.isquiotibiales], defaultWeightKg: 140, defaultReps: 10),
+        StrengthCatalogExercise(id: "sentadilla_bulgara", name: "Sentadilla búlgara con mancuernas", category: "Pierna", equipment: "Mancuernas", primaryMuscles: [.cuadriceps, .gluteos], secondaryMuscles: [.isquiotibiales, .flexoresCadera], defaultWeightKg: 18, defaultReps: 10),
+        StrengthCatalogExercise(id: "peso_muerto_rumano", name: "Peso muerto rumano (RDL)", category: "Pierna", equipment: "Barra", primaryMuscles: [.isquiotibiales, .gluteos], secondaryMuscles: [.lumbares, .antebrazo, .trapecio], defaultWeightKg: 80, defaultReps: 8),
+        StrengthCatalogExercise(id: "peso_muerto_conv", name: "Peso muerto convencional", category: "Pierna", equipment: "Barra", primaryMuscles: [.gluteos, .isquiotibiales, .lumbares], secondaryMuscles: [.trapecio, .espaldaAlta, .antebrazo], defaultWeightKg: 100, defaultReps: 5),
+        StrengthCatalogExercise(id: "hip_thrust", name: "Hip Thrust con barra", category: "Pierna", equipment: "Barra", primaryMuscles: [.gluteos], secondaryMuscles: [.isquiotibiales, .lumbares], defaultWeightKg: 90, defaultReps: 10),
+        StrengthCatalogExercise(id: "extension_cuadriceps", name: "Extensión de cuádriceps en máquina", category: "Pierna", equipment: "Máquina / Polea", primaryMuscles: [.cuadriceps], secondaryMuscles: [], defaultWeightKg: 50, defaultReps: 12),
+        StrengthCatalogExercise(id: "curl_femoral", name: "Curl femoral tumbado/sentado", category: "Pierna", equipment: "Máquina / Polea", primaryMuscles: [.isquiotibiales], secondaryMuscles: [.pantorrillas], defaultWeightKg: 45, defaultReps: 12),
+        StrengthCatalogExercise(id: "elevacion_talones", name: "Elevación de gemelos de pie", category: "Pierna", equipment: "Máquina / Polea", primaryMuscles: [.pantorrillas], secondaryMuscles: [], defaultWeightKg: 60, defaultReps: 15),
+
+        // Core y Accesorios
+        StrengthCatalogExercise(id: "plancha_abdominal", name: "Plancha abdominal isométrica", category: "Core y Accesorios", equipment: "Peso corporal", primaryMuscles: [.abdominales, .oblicuos], secondaryMuscles: [.lumbares, .hombros], defaultWeightKg: 0, defaultReps: 45),
+        StrengthCatalogExercise(id: "elevacion_piernas", name: "Elevación de piernas colgado", category: "Core y Accesorios", equipment: "Peso corporal", primaryMuscles: [.abdominales, .flexoresCadera], secondaryMuscles: [.antebrazo, .oblicuos], defaultWeightKg: 0, defaultReps: 12),
+        StrengthCatalogExercise(id: "crunch_polea", name: "Crunch abdominal en polea alta", category: "Core y Accesorios", equipment: "Máquina / Polea", primaryMuscles: [.abdominales], secondaryMuscles: [.oblicuos], defaultWeightKg: 35, defaultReps: 15),
+        StrengthCatalogExercise(id: "paseo_granjero", name: "Paseo del granjero (Farmer's Walk)", category: "Core y Accesorios", equipment: "Mancuernas", primaryMuscles: [.antebrazo, .trapecio], secondaryMuscles: [.abdominales, .oblicuos, .pantorrillas], defaultWeightKg: 28, defaultReps: 30)
+    ]
+}
+
+struct ExercisePerformanceSnapshot: Equatable {
+    let exerciseName: String
+    let lastDateIso: String?
+    let lastWeightKg: Double?
+    let lastReps: Int?
+    let bestWeightKg: Double
+    let bestOneRepMaxKg: Double
+    let totalHistoricalSets: Int
+    let suggestedWeightKg: Double
+    let suggestedReps: Int
+    let progressionBadge: String
+    let progressionAdvice: String
+}
+
+// MARK: - Quantified Journal & Caffeine / Meal Timing Models (Apartado 1.2)
+
+struct JournalHabitDosageSpec: Equatable {
+    let habitId: String
+    let unit: String
+    let step: Double
+    let minVal: Double
+    let maxVal: Double
+    let defaultYesValue: Double
+    let highThreshold: Double
+    let presets: [Double]
+
+    static func spec(for habitId: String) -> JournalHabitDosageSpec? {
+        switch habitId {
+        case "caffeine":
+            return JournalHabitDosageSpec(habitId: "caffeine", unit: "mg", step: 40, minVal: 40, maxVal: 600, defaultYesValue: 120, highThreshold: 200, presets: [80, 160, 240, 320])
+        case "alcohol":
+            return JournalHabitDosageSpec(habitId: "alcohol", unit: "copas", step: 1, minVal: 1, maxVal: 10, defaultYesValue: 1, highThreshold: 2, presets: [1, 2, 3, 4])
+        case "hydration":
+            return JournalHabitDosageSpec(habitId: "hydration", unit: "L", step: 0.5, minVal: 0.5, maxVal: 6.0, defaultYesValue: 2.5, highThreshold: 2.5, presets: [1.5, 2.0, 2.5, 3.0])
+        case "late_meal":
+            return JournalHabitDosageSpec(habitId: "late_meal", unit: "h antes", step: 0.5, minVal: 0.5, maxVal: 5.0, defaultYesValue: 1.5, highThreshold: 2.5, presets: [1.0, 1.5, 2.0, 3.0])
+        case "screens":
+            return JournalHabitDosageSpec(habitId: "screens", unit: "min", step: 15, minVal: 15, maxVal: 180, defaultYesValue: 45, highThreshold: 60, presets: [15, 30, 60, 90])
+        case "sauna", "cold_shower", "meditation", "stretching", "reading":
+            return JournalHabitDosageSpec(habitId: habitId, unit: "min", step: 5, minVal: 5, maxVal: 90, defaultYesValue: 15, highThreshold: 20, presets: [10, 15, 20, 30])
+        default:
+            return nil
+        }
+    }
+
+    func formatValue(_ v: Double) -> String {
+        if step < 1.0 {
+            return String(format: "%.1f %@", locale: Locale(identifier: "es_ES"), v, unit)
+        }
+        return "\(Int(v.rounded())) \(unit)"
+    }
+}
+
+struct CaffeineAndMealTimingSnapshot: Equatable {
+    let totalCaffeineTodayMg: Double
+    let lastCaffeineTimeLabel: String?
+    let estimatedCaffeineAtBedtimeMg: Double
+    let caffeineClearForSleep: Bool
+    let firstMealTimeLabel: String?
+    let lastMealTimeLabel: String?
+    let eatingWindowHours: Double?
+    let fastingHours: Double?
+    let hoursFromLastMealToBedtime: Double?
+    let statusSummary: String
+}
+
+// MARK: - Global Goal Modes, Coach Memory & Morning Briefing (Apartado 1.4 & 2.3)
+
+enum GlobalGoalMode: String, Codable, CaseIterable, Identifiable, Hashable {
+    case rendimiento = "Rendimiento"
+    case longevidad = "Longevidad"
+    case definicion = "Definición"
+    case volumen = "Volumen"
+    case recuperacion = "Recuperación"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .rendimiento: return "bolt.heart.fill"
+        case .longevidad: return "hourglass.badge.plus"
+        case .definicion: return "flame.fill"
+        case .volumen: return "figure.strengthtraining.traditional"
+        case .recuperacion: return "leaf.fill"
+        }
+    }
+
+    var shortSubtitle: String {
+        switch self {
+        case .rendimiento: return "Máxima potencia aeróbica y fuerza; carbohidratos peri-entreno"
+        case .longevidad: return "Optimiza VO₂ máx., Zona 2, fibra, sueño y ritmo de envejecimiento"
+        case .definicion: return "Déficit calórico controlado (−15%) con alta proteína (2,2 g/kg)"
+        case .volumen: return "Superávit limpio (+12%) y sobrecarga progresiva hipertrofia"
+        case .recuperacion: return "Prioriza reparación autónoma, sueño al 100% y baja inflamación"
+        }
+    }
+
+    var kcalMultiplier: Double {
+        switch self {
+        case .rendimiento: return 1.04
+        case .longevidad: return 0.98
+        case .definicion: return 0.85
+        case .volumen: return 1.12
+        case .recuperacion: return 1.00
+        }
+    }
+
+    var proteinGramsPerKg: Double {
+        switch self {
+        case .rendimiento: return 1.9
+        case .longevidad: return 1.8
+        case .definicion: return 2.2
+        case .volumen: return 2.0
+        case .recuperacion: return 1.8
+        }
+    }
+
+    var strainAdjustmentDelta: Double {
+        switch self {
+        case .rendimiento: return 0.05
+        case .longevidad: return 0.0
+        case .definicion: return -0.02
+        case .volumen: return 0.03
+        case .recuperacion: return -0.12
+        }
+    }
+
+    var recommendedSleepMode: SleepCoachMode {
+        switch self {
+        case .rendimiento, .recuperacion: return .peak
+        case .longevidad, .volumen, .definicion: return .perform
+        }
+    }
+
+    var coachSystemDirective: String {
+        switch self {
+        case .rendimiento:
+            return "MODO ACTIVO: RENDIMIENTO. Prioriza periodización de intensidad, recarga de glucógeno y máxima potencia en días verdes."
+        case .longevidad:
+            return "MODO ACTIVO: LONGEVIDAD. Prioriza ≥150 min/sem en Zona 2, VO2 máx., consistencia del sueño, fibra ≥30g y reducir el Ritmo de Envejecimiento."
+        case .definicion:
+            return "MODO ACTIVO: DEFINICIÓN. Prioriza saciedad, déficit del 15%, proteína a 2.2 g/kg y preservar fuerza muscular sin sobreentrenar."
+        case .volumen:
+            return "MODO ACTIVO: VOLUMEN MUSCULAR. Prioriza superávit limpio (+12%), progresión de cargas en Strength Builder y sueño profundo reparador."
+        case .recuperacion:
+            return "MODO ACTIVO: RECUPERACIÓN. Prioriza bajar estrés simpático, sueño al 100%, hidratación, movilidad y evitar picos de esfuerzo."
+        }
+    }
+}
+
+struct MorningBriefingSnapshot: Equatable {
+    let greetingTitle: String
+    let recoveryBadge: String
+    let sleepSummary: String
+    let effortPlanText: String
+    let nutritionPlanText: String
+    let vitalAlertText: String?
+    let deloadAlertText: String?
+    let goalMode: GlobalGoalMode
+}
+
+// MARK: - Multi-Ingredient Recipes & Quantified Micronutrients (Apartado 1.5)
+
+struct NutritionRecipeIngredient: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var name: String
+    var grams: Int
+    var kcal: Int
+    var proteinG: Int
+    var carbsG: Int
+    var fatG: Int
+    var fiberG: Double = 0
+}
+
+struct NutritionRecipeTemplate: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    var title: String
+    var emoji: String
+    var servings: Int
+    var ingredients: [NutritionRecipeIngredient]
+
+    var safeServings: Int { max(servings, 1) }
+    var kcalPerServing: Int { ingredients.reduce(0) { $0 + $1.kcal } / safeServings }
+    var proteinPerServing: Int { ingredients.reduce(0) { $0 + $1.proteinG } / safeServings }
+    var carbsPerServing: Int { ingredients.reduce(0) { $0 + $1.carbsG } / safeServings }
+    var fatPerServing: Int { ingredients.reduce(0) { $0 + $1.fatG } / safeServings }
+    var fiberPerServing: Double { ingredients.reduce(0.0) { $0 + $1.fiberG } / Double(safeServings) }
+}
+
+struct MicronutrientDailySnapshot: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let unit: String
+    let currentValue: Double
+    let targetValue: Double
+    let isUpperLimit: Bool
+    let icon: String
+    let accentHex: UInt64
+
+    var progressFraction: Double {
+        guard targetValue > 0 else { return 0 }
+        return min(max(currentValue / targetValue, 0.0), 1.35)
+    }
+
+    var statusText: String {
+        if isUpperLimit {
+            return currentValue <= targetValue ? "Dentro del límite" : "Exceso"
+        }
+        let pct = Int(((currentValue / max(targetValue, 1)) * 100).rounded())
+        return "\(pct)% de la meta"
+    }
+}
+
+// MARK: - Monthly Performance Assessment (MPA 7d/30d/90d) & Longevity Zones (Apartado 1.6)
+
+enum PerformanceAssessmentPeriod: Int, CaseIterable, Identifiable {
+    case weekly7d = 7
+    case monthly30d = 30
+    case quarterly90d = 90
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .weekly7d: return "7 días"
+        case .monthly30d: return "30 días (MPA)"
+        case .quarterly90d: return "90 días"
+        }
+    }
+
+    var badgeTitle: String {
+        switch self {
+        case .weekly7d: return "EVALUACIÓN SEMANAL"
+        case .monthly30d: return "EVALUACIÓN MENSUAL (MPA)"
+        case .quarterly90d: return "EVALUACIÓN TRIMESTRAL"
+        }
+    }
+}
+
+struct LongevityZoneProgressSnapshot: Equatable {
+    let weeklyZone1To3Minutes: Int
+    let targetZone1To3Minutes: Int
+    let weeklyZone4To5Minutes: Int
+    let targetZone4To5Minutes: Int
+    let weeklyStrengthSessions: Int
+    let targetStrengthSessions: Int
+    let weeklyStrengthMinutes: Int
+    let overallCompliancePct: Int
+}
+
+// MARK: - Sleep Latency, Circadian Alignment & Menstrual Cycle (Apartado 1.7 & 1.8)
+
+struct CircadianAndLatencySnapshot: Equatable {
+    let estimatedLatencyMinutes: Int?
+    let latencyStatus: String
+    let alignmentPct: Int?
+    let midpointDeviationMinutes: Int?
+    let typicalMidpointLabel: String?
+    let lastNightMidpointLabel: String?
+    let summaryText: String
+}
+
+enum MenstrualCyclePhase: String, Codable, CaseIterable, Identifiable, Hashable {
+    case menstrual = "Menstrual"
+    case follicular = "Folicular"
+    case ovulatory = "Ovulatoria"
+    case luteal = "Lútea"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .menstrual: return "drop.circle.fill"
+        case .follicular: return "sparkles"
+        case .ovulatory: return "sun.max.fill"
+        case .luteal: return "moon.circle.fill"
+        }
+    }
+}
+
+struct CycleTrackingSettings: Codable, Equatable, Hashable {
+    var isEnabled: Bool = false
+    var lastPeriodStartIso: String = ""
+    var cycleLengthDays: Int = 28
+    var periodDurationDays: Int = 5
+}
+
+struct CyclePhaseSnapshot: Equatable {
+    let phase: MenstrualCyclePhase
+    let dayOfCycle: Int
+    let cycleLengthDays: Int
+    let daysUntilNextPeriod: Int
+    let expectedTempShiftC: Double
+    let trainingAdvice: String
+    let nutritionAdvice: String
+    let isLutealCalibrationActive: Bool
+}
+
+// MARK: - Unified Cross-Domain Causal Engine & Auto-Deload Detector (Apartado 2.1 & 2.2)
+
+struct UnifiedCausalInsight: Identifiable, Equatable {
+    let id: String
+    let categoryBadge: String
+    let icon: String
+    let title: String
+    let impactBadge: String
+    let isPositive: Bool
+    let detail: String
+    let sampleDays: Int
+}
+
+struct OvertrainingDeloadAssessment: Equatable {
+    let riskLevel: Int // 0 = Óptimo, 1 = Vigilancia, 2 = Descarga Recomendada
+    let statusTitle: String
+    let acwr: Double
+    let hrv3DaySlopeMs: Double
+    let recentAvgRpe: Double
+    let triggers: [String]
+    let recommendation: String
+    let deloadWeightFactor: Double
 }

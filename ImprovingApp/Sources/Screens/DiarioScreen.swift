@@ -343,6 +343,9 @@ struct DiarioScreen: View {
                         .padding(13)
                     }
 
+                    // Curva de vida media de cafeína (5h), ventana cena → sueño y auto-sincronización desde Nutrición (Apartado 1.2)
+                    CaffeineHalfLifeAndAutoSyncCard(store: store)
+
                     HStack {
                         Text("Marca tus hábitos activos (\(store.requiredManualCountForCompletion) para completar el día).")
                             .font(ImprovingFont.caption(12))
@@ -365,6 +368,7 @@ struct DiarioScreen: View {
                         switch entry.kind {
                         case .triState(let hid):
                             triStateRow(
+                                habitId: hid,
                                 emoji: entry.emoji,
                                 title: entry.title,
                                 state: dayMap[hid] ?? .unset,
@@ -444,6 +448,7 @@ struct DiarioScreen: View {
                     ForEach(visibleNightEntries) { entry in
                         if case .triState(let hid) = entry.kind {
                             triStateRow(
+                                habitId: hid,
                                 emoji: entry.emoji,
                                 title: entry.title,
                                 state: dayMap[hid] ?? .unset,
@@ -573,6 +578,7 @@ struct DiarioScreen: View {
     }
 
     private func triStateRow(
+        habitId: String,
         emoji: String,
         title: String,
         state: JournalCheckState,
@@ -580,15 +586,29 @@ struct DiarioScreen: View {
         onSelect: @escaping (JournalCheckState) -> Void,
         onTapTime: @escaping () -> Void
     ) -> some View {
-        BevelCard(cornerRadius: 16) {
+        let dosageSpec = JournalHabitDosageSpec.spec(for: habitId)
+        let currentQuantity = store.journalQuantity(habitId: habitId) ?? dosageSpec?.defaultYesValue
+        return BevelCard(cornerRadius: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
                     Text(emoji).font(.system(size: 18))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(ImprovingFont.cardTitle(14.5))
-                            .foregroundColor(BevelColors.textPrimary)
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(title)
+                                .font(ImprovingFont.cardTitle(14.5))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .lineLimit(1)
+                            if state == .yes, let spec = dosageSpec, let q = currentQuantity {
+                                Text(spec.formatValue(q))
+                                    .font(ImprovingFont.caption(10.5))
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                                    .foregroundColor(q >= spec.highThreshold ? BevelColors.amberStart : BevelColors.skyBlue)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                            }
+                        }
 
                         if state == .yes {
                             Button {
@@ -640,6 +660,47 @@ struct DiarioScreen: View {
                     .padding(2)
                     .background(RoundedRectangle(cornerRadius: 11).fill(BevelColors.cardSubtle))
                     .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+                }
+
+                // Quantified Dosage Selector when marked Yes (WHOOP / Bevel style!)
+                if state == .yes, let spec = dosageSpec {
+                    let activeVal = currentQuantity ?? spec.defaultYesValue
+                    HStack(spacing: 6) {
+                        Text("Dosis:")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
+                        ForEach(spec.presets, id: \.self) { preset in
+                            let sel = abs(activeVal - preset) < 0.05
+                            Button {
+                                AppHaptics.selection()
+                                store.setJournalQuantity(habitId: habitId, quantity: preset)
+                            } label: {
+                                Text(spec.formatValue(preset))
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(.semibold)
+                                    .monospacedDigit()
+                                    .foregroundColor(sel ? .white : BevelColors.textSecondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Capsule().fill(sel ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Spacer()
+                        Button {
+                            store.setJournalQuantity(habitId: habitId, quantity: max(spec.minVal, activeVal - spec.step))
+                        } label: {
+                            Image(systemName: "minus.circle.fill").foregroundColor(BevelColors.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                        Button {
+                            store.setJournalQuantity(habitId: habitId, quantity: min(spec.maxVal, activeVal + spec.step))
+                        } label: {
+                            Image(systemName: "plus.circle.fill").foregroundColor(BevelColors.skyBlue)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 2)
                 }
             }
             .padding(.horizontal, 14)
@@ -779,6 +840,9 @@ struct JournalInsightsScreen: View {
                 let daysLogged = store.totalManualDiarioDaysLogged
 
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    // Motor Causal Unificado: Nutrición × Fuerza × Sangre × Sueño D -> D+1 (Apartado 2.1)
+                    UnifiedCausalInsightsSection(store: store)
+
                     if !hasUserFilledForm {
                         // Strict zero-metric empty state when user hasn't filled out the Diario form yet!
                         BevelCard(cornerRadius: 20) {
@@ -1455,6 +1519,136 @@ private struct JournalHabitTimePickerSheet: View {
                 .padding(.vertical, 6)
                 .background(Capsule().fill(BevelColors.card))
                 .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.8))
+        }
+    }
+}
+
+// MARK: - Caffeine 5h Half-Life Curve, Meal-to-Bedtime Window & Auto-Sync Card (Apartado 1.2)
+
+struct CaffeineHalfLifeAndAutoSyncCard: View {
+    @ObservedObject var store: ImprovingStore
+
+    var body: some View {
+        let timing = store.caffeineAndMealTimingToday
+        let caffColor: Color = timing.caffeineClearForSleep ? BevelColors.greenPrimary : BevelColors.amberStart
+
+        BevelCard(cornerRadius: 18) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 8) {
+                    Image(systemName: "cup.and.saucer.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(caffColor)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(caffColor.opacity(0.14)))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("CURVA DE CAFEÍNA (T½ 5H) Y VENTANA CENA → SUEÑO")
+                            .font(ImprovingFont.microLabel(9.5))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(timing.statusSummary)
+                            .font(ImprovingFont.caption(12))
+                            .fontWeight(.semibold)
+                            .foregroundColor(BevelColors.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 4)
+                    if !store.mealsToday.isEmpty {
+                        Button {
+                            AppHaptics.selection()
+                            store.syncAutoJournalHabits(for: store.selectedDateIso)
+                            store.persistState()
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 10, weight: .bold))
+                                Text("Auto")
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(.bold)
+                            }
+                            .foregroundColor(BevelColors.skyBlue)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(BevelColors.skySoftBg))
+                        }
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Label("Ingerida: \(Int(timing.totalCaffeineTodayMg)) mg", systemImage: "bolt.fill")
+                    Label("Al dormir: ~\(Int(timing.estimatedCaffeineAtBedtimeMg)) mg", systemImage: "moon.zzz.fill")
+                        .foregroundColor(caffColor)
+                    if let gap = timing.hoursFromLastMealToBedtime {
+                        Label("Digestión: \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), gap)) h", systemImage: "fork.knife")
+                            .foregroundColor(gap >= 2.8 ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                    }
+                }
+                .font(ImprovingFont.caption(11.5))
+                .monospacedDigit()
+                .foregroundColor(BevelColors.textSecondary)
+            }
+            .padding(13)
+        }
+    }
+}
+
+// MARK: - Unified Cross-Domain Causal Engine Section (Apartado 2.1: Nutrition × Strength × Blood × Sleep D -> D+1)
+
+struct UnifiedCausalInsightsSection: View {
+    @ObservedObject var store: ImprovingStore
+
+    var body: some View {
+        let insights = store.unifiedCausalInsights
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "waveform.and.magnifyingglass")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(BevelColors.bioTeal)
+                Text("Sinergia Causal Cruzada (D → D+1)")
+                    .font(ImprovingFont.sectionTitle(17.5))
+                    .foregroundColor(BevelColors.textPrimary)
+                Spacer()
+                Text("Nutrición × Fuerza × Sangre")
+                    .font(ImprovingFont.microLabel(9.5))
+                    .foregroundColor(BevelColors.bioTeal)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(BevelColors.bioTeal.opacity(0.14)))
+            }
+            .padding(.top, 8)
+
+            ForEach(insights) { item in
+                let accent = item.isPositive ? BevelColors.greenPrimary : BevelColors.amberStart
+                BevelCard(cornerRadius: 18) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack {
+                            HStack(spacing: 5) {
+                                Image(systemName: item.icon)
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(accent)
+                                Text(item.categoryBadge)
+                                    .font(ImprovingFont.microLabel(10))
+                                    .foregroundColor(accent)
+                            }
+                            Spacer()
+                            Text(item.impactBadge)
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.bold)
+                                .monospacedDigit()
+                                .foregroundColor(accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(accent.opacity(0.14)))
+                        }
+                        Text(item.title)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(item.detail)
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+                }
+            }
         }
     }
 }

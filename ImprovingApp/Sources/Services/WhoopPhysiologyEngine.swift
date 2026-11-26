@@ -81,6 +81,12 @@ struct BiologicalAgeEvaluation: Equatable {
     let hasHrv: Bool
     let hasBody: Bool
     let hasBloodLabs: Bool
+    var sleepConsistencyDelta: Double = 0.0
+    var weeklyZonesDelta: Double = 0.0
+    var weeklyStrengthDelta: Double = 0.0
+    var hasSleepConsistency: Bool = false
+    var hasWeeklyZones: Bool = false
+    var hasWeeklyStrength: Bool = false
 }
 
 struct PersonalBaselineStats: Equatable {
@@ -528,7 +534,11 @@ enum WhoopPhysiologyEngine {
         vo2Max: Double?,
         latestWeightKg: Double? = nil,
         latestBodyFatPct: Double? = nil,
-        labBiomarkers: [LabBiomarkerItem] = []
+        labBiomarkers: [LabBiomarkerItem] = [],
+        sleepConsistencyPct: Int? = nil,
+        weeklyZone1To3Min: Int? = nil,
+        weeklyZone4To5Min: Int? = nil,
+        weeklyStrengthMin: Int? = nil
     ) -> BiologicalAgeEvaluation {
         let norms = computePersonalizedNorms(profile: profile)
         let chrono = profile.effectiveAgeYears
@@ -553,10 +563,39 @@ enum WhoopPhysiologyEngine {
             }
         }
 
+        // WHOOP Healthspan Pillar 2: Sleep Consistency % (-0.6 to +0.8 yrs)
+        var sleepConsDelta = 0.0
+        if let cons = sleepConsistencyPct {
+            if cons >= 80 {
+                sleepConsDelta = -min(Double(cons - 75) * 0.024, 0.6)
+            } else if cons < 68 {
+                sleepConsDelta = min(Double(68 - cons) * 0.025, 0.8)
+            }
+        }
+
         var activityDelta = 0.0
         if let st = meanSteps {
             let ratio = Double(st) / Double(max(norms.dailyStepsGoal, 4000))
             activityDelta = min(max((1.0 - ratio) * 1.8, -1.6), 2.0)
+        }
+
+        // WHOOP Healthspan Pillars: Weekly HR Zones (1-3 aerobic >= 150m, 4-5 VO2 >= 25m) & Weekly Strength (>= 60m)
+        var zonesDelta = 0.0
+        let hasZones = (weeklyZone1To3Min != nil || weeklyZone4To5Min != nil)
+        if hasZones {
+            let z13 = Double(weeklyZone1To3Min ?? 0)
+            let z45 = Double(weeklyZone4To5Min ?? 0)
+            let aerobicScore = min(z13 / 150.0, 1.4)
+            let highScore = min(z45 / 25.0, 1.4)
+            let combined = aerobicScore * 0.65 + highScore * 0.35
+            zonesDelta = min(max((0.85 - combined) * 0.85, -0.7), 0.7)
+        }
+
+        var strengthDelta = 0.0
+        let hasStrength = weeklyStrengthMin != nil
+        if let sMin = weeklyStrengthMin {
+            let ratio = min(Double(sMin) / 75.0, 1.5)
+            strengthDelta = min(max((0.75 - ratio) * 0.65, -0.5), 0.5)
         }
 
         var vo2Delta = 0.0
@@ -602,14 +641,17 @@ enum WhoopPhysiologyEngine {
         let bloodLabsDelta = labsEval.totalDelta
 
         let rSleep = AppleHealthExportImporter.round1(sleepDelta)
+        let rSleepCons = AppleHealthExportImporter.round1(sleepConsDelta)
         let rActivity = AppleHealthExportImporter.round1(activityDelta)
+        let rZones = AppleHealthExportImporter.round1(zonesDelta)
+        let rStrength = AppleHealthExportImporter.round1(strengthDelta)
         let rVo2 = AppleHealthExportImporter.round1(vo2Delta)
         let rRhr = AppleHealthExportImporter.round1(rhrDelta)
         let rFitness = AppleHealthExportImporter.round1(rVo2 + rRhr)
         let rAutonomic = AppleHealthExportImporter.round1(autonomicDelta)
         let rBody = AppleHealthExportImporter.round1(bodyDelta)
 
-        let rawTotal = rSleep + rActivity + rFitness + rAutonomic + rBody + bloodLabsDelta
+        let rawTotal = rSleep + rSleepCons + rActivity + rZones + rStrength + rFitness + rAutonomic + rBody + bloodLabsDelta
         let clampedDelta = AppleHealthExportImporter.round1(min(max(rawTotal, -9.5), 9.5))
         let bioAge = AppleHealthExportImporter.round1(max(14.0, chrono + clampedDelta))
 
@@ -632,7 +674,13 @@ enum WhoopPhysiologyEngine {
             hasRhr: meanRhr != nil,
             hasHrv: (meanHrv ?? 0) > 2.0,
             hasBody: hasBody,
-            hasBloodLabs: !labBiomarkers.isEmpty
+            hasBloodLabs: !labBiomarkers.isEmpty,
+            sleepConsistencyDelta: rSleepCons,
+            weeklyZonesDelta: rZones,
+            weeklyStrengthDelta: rStrength,
+            hasSleepConsistency: sleepConsistencyPct != nil,
+            hasWeeklyZones: hasZones,
+            hasWeeklyStrength: hasStrength
         )
     }
 
@@ -2159,5 +2207,554 @@ enum WhoopPhysiologyEngine {
             return ([.abdominales, .oblicuos], [.lumbares, .flexoresCadera])
         }
         return ([.cuadriceps, .gluteos], [.abdominales, .pantorrillas])
+    }
+
+    // MARK: - Apartado 1.1: Strength Builder Progressive Overload, PR & 1RM Engine
+
+    static func computeExercisePerformanceSnapshot(
+        exerciseName: String,
+        logs: [StrengthLoggedSet],
+        recoveryPct: Int,
+        deloadActive: Bool = false
+    ) -> ExercisePerformanceSnapshot {
+        let key = exerciseName.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES")).trimmingCharacters(in: .whitespacesAndNewlines)
+        let matching = logs.filter {
+            $0.completed &&
+            $0.setKind != .warmup &&
+            $0.exercise.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES")).trimmingCharacters(in: .whitespacesAndNewlines) == key
+        }
+        let catalogDefault = StrengthCatalogExercise.all.first {
+            $0.name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES")) == key
+        }
+
+        guard !matching.isEmpty else {
+            let defW = catalogDefault?.defaultWeightKg ?? 40.0
+            let defR = catalogDefault?.defaultReps ?? 10
+            return ExercisePerformanceSnapshot(
+                exerciseName: exerciseName,
+                lastDateIso: nil,
+                lastWeightKg: nil,
+                lastReps: nil,
+                bestWeightKg: 0,
+                bestOneRepMaxKg: 0,
+                totalHistoricalSets: 0,
+                suggestedWeightKg: defW,
+                suggestedReps: defR,
+                progressionBadge: "Base inicial",
+                progressionAdvice: "Primer registro de este ejercicio: empieza con \(Int(defW)) kg × \(defR) reps a RIR 2."
+            )
+        }
+
+        let sortedByDate = matching.sorted { $0.dateIso > $1.dateIso }
+        let latestIso = sortedByDate.first?.dateIso
+        let latestSessionSets = sortedByDate.filter { $0.dateIso == latestIso }
+        let topLastSet = latestSessionSets.max(by: { $0.estimatedOneRepMaxKg < $1.estimatedOneRepMaxKg }) ?? sortedByDate[0]
+        let bestWeight = matching.map(\.weightKg).max() ?? topLastSet.weightKg
+        let best1RM = AppleHealthExportImporter.round1(matching.map(\.estimatedOneRepMaxKg).max() ?? topLastSet.estimatedOneRepMaxKg)
+
+        var sugW = topLastSet.weightKg
+        var sugR = topLastSet.reps
+        let badge: String
+        let advice: String
+
+        if deloadActive {
+            sugW = max(0, (topLastSet.weightKg * 0.85 / 2.5).rounded() * 2.5)
+            badge = "Descarga −15%"
+            advice = "Modo descarga activo: reduce carga a \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), sugW)) kg × \(sugR) reps para disipar fatiga neuromuscular."
+        } else if recoveryPct >= 67 {
+            if topLastSet.weightKg > 0 {
+                sugW = topLastSet.weightKg + 2.5
+                badge = "Sobrecarga +2,5 kg"
+                advice = "Recuperación óptima (\(recoveryPct)%): sube de \(Int(topLastSet.weightKg)) kg a \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), sugW)) kg o añade +1 rep para superar tu 1RM (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), best1RM)) kg)."
+            } else {
+                sugR = topLastSet.reps + 2
+                badge = "Sobrecarga +2 reps"
+                advice = "Recuperación óptima (\(recoveryPct)%): busca \(sugR) repeticiones (+2 vs última sesión)."
+            }
+        } else if recoveryPct >= 34 {
+            badge = "Consolidar (+1 rep)"
+            sugR = min(topLastSet.reps + 1, 20)
+            advice = "Recuperación moderada (\(recoveryPct)%): mantén \(Int(topLastSet.weightKg)) kg e intenta \(sugR) reps limpias."
+        } else {
+            sugW = max(0, (topLastSet.weightKg * 0.90 / 2.5).rounded() * 2.5)
+            badge = "Protección −10%"
+            advice = "Recuperación baja (\(recoveryPct)%): prioriza técnica con \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), sugW)) kg (RPE ≤ 7)."
+        }
+
+        return ExercisePerformanceSnapshot(
+            exerciseName: exerciseName,
+            lastDateIso: latestIso,
+            lastWeightKg: topLastSet.weightKg,
+            lastReps: topLastSet.reps,
+            bestWeightKg: bestWeight,
+            bestOneRepMaxKg: best1RM,
+            totalHistoricalSets: matching.count,
+            suggestedWeightKg: sugW,
+            suggestedReps: sugR,
+            progressionBadge: badge,
+            progressionAdvice: advice
+        )
+    }
+
+    // MARK: - Apartado 1.2 & 1.5: Caffeine Half-Life (5h) & Meal-to-Bedtime / Fasting Window Engine
+
+    static func parseTimeLabelToMinutes(_ label: String) -> Int? {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: ":")
+        guard parts.count >= 2,
+              let h = Int(parts[0].filter(\.isNumber)),
+              let m = Int(parts[1].prefix(2).filter(\.isNumber)),
+              (0...23).contains(h), (0...59).contains(m) else { return nil }
+        return h * 60 + m
+    }
+
+    static func computeCaffeineAndMealTiming(
+        meals: [NutritionMealItem],
+        bedtimeMinutesOfDay: Int = 23 * 60,
+        manualCaffeineMg: Double? = nil,
+        manualCaffeineTime: String? = nil
+    ) -> CaffeineAndMealTimingSnapshot {
+        // Half-life T_1/2 = 5.0 hours (300 minutes)
+        let halfLifeMin = 300.0
+        let bedAdj = bedtimeMinutesOfDay < 360 ? bedtimeMinutesOfDay + 1440 : bedtimeMinutesOfDay
+
+        var totalCaff = 0.0
+        var residualAtBed = 0.0
+        var latestCaffMin: Int? = nil
+        var latestCaffLabel: String? = nil
+
+        var mealMinutes: [(min: Int, label: String)] = []
+
+        for m in meals {
+            let tMin = parseTimeLabelToMinutes(m.timeLabel)
+            if let tm = tMin, m.kcal >= 40 {
+                mealMinutes.append((tm, m.timeLabel))
+            }
+            if let c = m.caffeineMg, c > 0 {
+                totalCaff += c
+                let intakeMin = tMin ?? (10 * 60)
+                let elapsedMin = Double(max(bedAdj - intakeMin, 30))
+                residualAtBed += c * pow(0.5, elapsedMin / halfLifeMin)
+                if latestCaffMin == nil || intakeMin > (latestCaffMin ?? 0) {
+                    latestCaffMin = intakeMin
+                    latestCaffLabel = m.timeLabel
+                }
+            }
+        }
+
+        if totalCaff == 0, let manC = manualCaffeineMg, manC > 0 {
+            totalCaff = manC
+            let intakeMin = manualCaffeineTime.flatMap(parseTimeLabelToMinutes) ?? (14 * 60)
+            let elapsedMin = Double(max(bedAdj - intakeMin, 30))
+            residualAtBed = manC * pow(0.5, elapsedMin / halfLifeMin)
+            latestCaffLabel = manualCaffeineTime ?? "14:00"
+        }
+
+        let sortedMeals = mealMinutes.sorted { $0.min < $1.min }
+        let firstMeal = sortedMeals.first
+        let lastMeal = sortedMeals.last
+
+        let eatingWindowH: Double? = {
+            guard let f = firstMeal, let l = lastMeal, l.min >= f.min else { return nil }
+            return AppleHealthExportImporter.round1(Double(l.min - f.min) / 60.0)
+        }()
+        let fastingH: Double? = eatingWindowH.map { AppleHealthExportImporter.round1(max(24.0 - $0, 8.0)) }
+        let mealToBedH: Double? = lastMeal.map { l in
+            let diffMin = max(bedAdj - l.min, 0)
+            return AppleHealthExportImporter.round1(Double(diffMin) / 60.0)
+        }
+
+        let rBedCaff = AppleHealthExportImporter.round1(residualAtBed)
+        let isCaffClear = rBedCaff <= 35.0
+
+        var summaryParts: [String] = []
+        if totalCaff > 0 {
+            summaryParts.append(isCaffClear
+                ? "Cafeína al dormir: \(Int(rBedCaff)) mg (óptimo ≤35 mg)"
+                : "Alerta cafeína: ~\(Int(rBedCaff)) mg activos al acostarte")
+        }
+        if let gap = mealToBedH {
+            summaryParts.append(gap >= 2.8
+                ? "Última comida \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), gap)) h antes de dormir (óptimo)"
+                : "Cena cercana al sueño (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), gap)) h antes)")
+        }
+        if let fast = fastingH, let win = eatingWindowH, sortedMeals.count >= 2 {
+            summaryParts.append("Ayuno \(Int(fast.rounded())):\(Int(win.rounded()))")
+        }
+
+        return CaffeineAndMealTimingSnapshot(
+            totalCaffeineTodayMg: AppleHealthExportImporter.round1(totalCaff),
+            lastCaffeineTimeLabel: latestCaffLabel,
+            estimatedCaffeineAtBedtimeMg: rBedCaff,
+            caffeineClearForSleep: isCaffClear,
+            firstMealTimeLabel: firstMeal?.label,
+            lastMealTimeLabel: lastMeal?.label,
+            eatingWindowHours: eatingWindowH,
+            fastingHours: fastingH,
+            hoursFromLastMealToBedtime: mealToBedH,
+            statusSummary: summaryParts.isEmpty ? "Sin cafeína ni cenas tardías registradas hoy" : summaryParts.joined(separator: " · ")
+        )
+    }
+
+    // MARK: - Apartado 1.7: Sleep Onset Latency & Circadian Midpoint Alignment Engine
+
+    static func computeCircadianAndLatency(
+        currentDay: RealBiometricDaySummary?,
+        recentSessions: [SleepSessionDetail]
+    ) -> CircadianAndLatencySnapshot {
+        let sess = currentDay?.sleepSession
+        let latencyOpt: Int? = {
+            guard let d = currentDay, let inBed = d.inBedMinutes, let asleep = d.asleepMinutes, inBed > asleep else {
+                if let awake = sess?.awakeSeconds, awake > 120 {
+                    return min(max(Int((Double(awake) / 60.0 * 0.38).rounded()), 5), 45)
+                }
+                return nil
+            }
+            let totalGap = max(inBed - asleep, 4)
+            let awakeMin = (sess?.awakeSeconds ?? 0) / 60
+            let onset = awakeMin > 0 && totalGap > awakeMin ? (totalGap - awakeMin / 2) : Int((Double(totalGap) * 0.45).rounded())
+            return min(max(onset, 4), 75)
+        }()
+
+        let latStatus: String = {
+            guard let lat = latencyOpt else { return "Sin datos" }
+            if lat < 8 { return "Muy rápida (posible deuda)" }
+            if lat <= 22 { return "Óptima (8–22 min)" }
+            if lat <= 35 { return "Moderada" }
+            return "Prolongada (>35 min)"
+        }()
+
+        func midpointMinutes(_ s: SleepSessionDetail) -> Int? {
+            guard let start = s.startTimeLabel.flatMap(parseTimeLabelToMinutes),
+                  let end = s.endTimeLabel.flatMap(parseTimeLabelToMinutes) else { return nil }
+            let adjStart = start < 720 ? start + 1440 : start
+            let adjEnd = end < adjStart ? end + 1440 : end
+            return ((adjStart + adjEnd) / 2) % 1440
+        }
+
+        func formatMinutes(_ m: Int) -> String {
+            let norm = ((m % 1440) + 1440) % 1440
+            return String(format: "%02d:%02d", norm / 60, norm % 60)
+        }
+
+        let validMidpoints = recentSessions.compactMap(midpointMinutes)
+        let currentMid = sess.flatMap(midpointMinutes)
+
+        var alignPct: Int? = nil
+        var devMin: Int? = nil
+        var typLabel: String? = nil
+        var curLabel: String? = currentMid.map(formatMinutes)
+
+        if validMidpoints.count >= 2, let curM = currentMid {
+            // Circular-safe average around midnight (00:00..06:00)
+            let shifted = validMidpoints.map { $0 > 720 ? $0 - 1440 : $0 }
+            let avgShifted = Int((Double(shifted.reduce(0, +)) / Double(shifted.count)).rounded())
+            let curShifted = curM > 720 ? curM - 1440 : curM
+            let diff = abs(curShifted - avgShifted)
+            devMin = diff
+            typLabel = formatMinutes(avgShifted)
+            let score = 100.0 * exp(-Double(diff) / 85.0)
+            alignPct = min(max(Int(score.rounded()), 15), 100)
+        }
+
+        let summary: String = {
+            if let a = alignPct, let d = devMin, let typ = typLabel {
+                return "Alineación circadiana \(a)% (desviación \(d) min vs punto medio habitual \(typ))"
+            }
+            if let lat = latencyOpt {
+                return "Latencia estimada para conciliar el sueño: \(lat) min (\(latStatus))"
+            }
+            return "Registra varias noches con horario para calibrar tu ritmo circadiano."
+        }()
+
+        return CircadianAndLatencySnapshot(
+            estimatedLatencyMinutes: latencyOpt,
+            latencyStatus: latStatus,
+            alignmentPct: alignPct,
+            midpointDeviationMinutes: devMin,
+            typicalMidpointLabel: typLabel,
+            lastNightMidpointLabel: curLabel,
+            summaryText: summary
+        )
+    }
+
+    // MARK: - Apartado 1.8: Menstrual Cycle Phase & Luteal Physiological Calibration Engine
+
+    static func computeCyclePhase(
+        settings: CycleTrackingSettings,
+        referenceDate: Date = Date()
+    ) -> CyclePhaseSnapshot? {
+        guard settings.isEnabled,
+              !settings.lastPeriodStartIso.isEmpty,
+              let startDt = AppFormatters.isoDay.date(from: settings.lastPeriodStartIso) else {
+            return nil
+        }
+        let cal = Calendar.current
+        let cycleLen = min(max(settings.cycleLengthDays, 21), 38)
+        let periodLen = min(max(settings.periodDurationDays, 3), 8)
+        let rawDays = cal.dateComponents([.day], from: cal.startOfDay(for: startDt), to: cal.startOfDay(for: referenceDate)).day ?? 0
+        let dayOfCycle = ((rawDays % cycleLen) + cycleLen) % cycleLen + 1
+        let daysUntilNext = max(cycleLen - dayOfCycle + 1, 1)
+        let ovulationDay = max(cycleLen - 14, periodLen + 3)
+
+        let phase: MenstrualCyclePhase
+        let tempShift: Double
+        let trainAdv: String
+        let nutAdv: String
+        let lutealCal: Bool
+
+        if dayOfCycle <= periodLen {
+            phase = .menstrual
+            tempShift = 0.0
+            lutealCal = false
+            trainAdv = "Fase menstrual (Día \(dayOfCycle)): hormonas en nivel basal. Buena tolerancia a fuerza moderada y Zona 2; escucha tu energía."
+            nutAdv = "Prioriza hierro biodisponible, vitamina C, magnesio y omega-3 antiinflamatorio."
+        } else if dayOfCycle < ovulationDay - 1 {
+            phase = .follicular
+            tempShift = -0.05
+            lutealCal = false
+            trainAdv = "Fase folicular (Día \(dayOfCycle)): máxima sensibilidad a la insulina y recuperación rápida. Ideal para PRs de fuerza y HIIT."
+            nutAdv = "Aprovecha mayor tolerancia a carbohidratos complejos peri-entreno y proteína alta."
+        } else if dayOfCycle <= ovulationDay + 1 {
+            phase = .ovulatory
+            tempShift = 0.10
+            lutealCal = false
+            trainAdv = "Fase ovulatoria (Día \(dayOfCycle)): pico de fuerza máxima. Cuida calentamiento articular y estabilidad de rodilla/hombro."
+            nutAdv = "Mantén hidratación alta (+400 ml) y antioxidantes naturales."
+        } else {
+            phase = .luteal
+            tempShift = 0.32
+            lutealCal = true
+            trainAdv = "Fase lútea (Día \(dayOfCycle)): progesterona alta eleva tu temperatura basal (+\(String(format: "%.2f", locale: Locale(identifier: "es_ES"), tempShift)) °C) y FCR. Prioriza Zona 2 y controla el RPE."
+            nutAdv = "Tu gasto basal sube ~100–200 kcal/día: prioriza proteína, fibra, magnesio y electrolitos antes de dormir."
+        }
+
+        return CyclePhaseSnapshot(
+            phase: phase,
+            dayOfCycle: dayOfCycle,
+            cycleLengthDays: cycleLen,
+            daysUntilNextPeriod: daysUntilNext,
+            expectedTempShiftC: tempShift,
+            trainingAdvice: trainAdv,
+            nutritionAdvice: nutAdv,
+            isLutealCalibrationActive: lutealCal
+        )
+    }
+
+    // MARK: - Apartado 2.2: Predictive Overtraining & Auto-Deload Engine
+
+    static func computeOvertrainingDeloadAssessment(
+        recentDays: [RealBiometricDaySummary],
+        acwr: Double,
+        deloadModeActive: Bool = false
+    ) -> OvertrainingDeloadAssessment {
+        let sorted = recentDays.sorted { $0.dateIso < $1.dateIso }
+        let last3Hrv = sorted.suffix(4).compactMap(\.hrvMs)
+        var hrvSlope = 0.0
+        if last3Hrv.count >= 3 {
+            let n = last3Hrv.count
+            hrvSlope = AppleHealthExportImporter.round1((last3Hrv[n - 1] - last3Hrv[0]) / Double(max(n - 1, 1)))
+        }
+
+        let recentWorkouts = sorted.suffix(7).flatMap(\.workouts)
+        let rpeValues = recentWorkouts.compactMap(\.rpe)
+        let avgRpe = rpeValues.isEmpty ? 7.0 : AppleHealthExportImporter.round1(Double(rpeValues.reduce(0, +)) / Double(rpeValues.count))
+        let latestDebt = sorted.last?.sleepDebtMinutes ?? 0
+
+        var triggers: [String] = []
+        var score = 0
+
+        if acwr > 1.32 {
+            score += 2
+            triggers.append(String(format: "Ratio Agudo/Crónico alto (ACWR %.2f > 1,30)", locale: Locale(identifier: "es_ES"), acwr))
+        } else if acwr > 1.18 {
+            score += 1
+            triggers.append(String(format: "Carga aguda creciente (ACWR %.2f)", locale: Locale(identifier: "es_ES"), acwr))
+        }
+
+        if last3Hrv.count >= 3 && hrvSlope <= -2.2 {
+            score += 2
+            triggers.append(String(format: "VFC descendente 3 noches (%+.1f ms/día)", locale: Locale(identifier: "es_ES"), hrvSlope))
+        }
+
+        if avgRpe >= 8.4 && rpeValues.count >= 2 {
+            score += 1
+            triggers.append(String(format: "RPE medio exigente (%.1f/10)", locale: Locale(identifier: "es_ES"), avgRpe))
+        }
+
+        if latestDebt >= 75 {
+            score += 1
+            triggers.append("Deuda de sueño acumulada (\(latestDebt) min)")
+        }
+
+        let riskLevel: Int
+        let title: String
+        let rec: String
+        if deloadModeActive {
+            riskLevel = 2
+            title = "Semana de Descarga Activa (−15%)"
+            rec = "El modo Auto-Deload está protegiendo tu sistema nervioso: las cargas del Strength Builder y tu objetivo de esfuerzo se han reducido un 15% para supercompensar."
+        } else if score >= 3 {
+            riskLevel = 2
+            title = "Descarga Recomendada (Riesgo de Sobreentrenamiento)"
+            rec = "Se acumulan señales de fatiga neuromuscular y autónoma. Activa la Semana de Descarga (−15% peso/esfuerzo durante 4–5 días) para evitar estancamiento o lesión."
+        } else if score >= 1 {
+            riskLevel = 1
+            title = "Carga Exigente en Vigilancia"
+            rec = "Tu carga de entrenamiento es alta pero asimilable si mantienes el sueño al 100% y moderas el RPE en sesiones accesorias."
+        } else {
+            riskLevel = 0
+            title = "Asimilación Neuromuscular Óptima"
+            rec = "Equilibrio agudo/crónico saludable y VFC estable: tienes vía libre para aplicar sobrecarga progresiva."
+        }
+
+        return OvertrainingDeloadAssessment(
+            riskLevel: riskLevel,
+            statusTitle: title,
+            acwr: AppleHealthExportImporter.round1(acwr),
+            hrv3DaySlopeMs: hrvSlope,
+            recentAvgRpe: avgRpe,
+            triggers: triggers,
+            recommendation: rec,
+            deloadWeightFactor: (deloadModeActive || riskLevel == 2) ? 0.85 : 1.0
+        )
+    }
+
+    // MARK: - Apartado 2.1: Unified Cross-Domain Causal Engine (Nutrition + Blood + Strength + Sleep D -> D+1)
+
+    static func computeUnifiedCausalInsights(
+        history: [String: RealBiometricDaySummary],
+        mealsByDate: [String: [NutritionMealItem]],
+        strengthLogs: [StrengthLoggedSet],
+        labReports: [LabReportRecord],
+        profile: UserPhysiologyProfile
+    ) -> [UnifiedCausalInsight] {
+        let sortedIsos = history.keys.sorted()
+        let cal = Calendar.current
+        var insights: [UnifiedCausalInsight] = []
+
+        func nextDaySummary(after iso: String) -> RealBiometricDaySummary? {
+            guard let dt = AppFormatters.isoDay.date(from: iso),
+                  let nextDt = cal.date(byAdding: .day, value: 1, to: dt) else { return nil }
+            let nextIso = AppFormatters.isoDay.string(from: nextDt)
+            return history[nextIso]
+        }
+
+        // 1. Protein adequacy (D) -> Next-Day Recovery & HRV (D+1)
+        let targetProt = Int((profile.weightKg * 1.7).rounded())
+        var highProtRec: [Double] = []
+        var lowProtRec: [Double] = []
+        var earlyMealDeep: [Double] = []
+        var lateMealDeep: [Double] = []
+
+        for (iso, meals) in mealsByDate where !meals.isEmpty {
+            guard let nextDay = nextDaySummary(after: iso) else { continue }
+            let totalProt = meals.reduce(0) { $0 + $1.proteinG }
+            if let rec = nextDay.recoveryPct {
+                if totalProt >= targetProt { highProtRec.append(Double(rec)) }
+                else { lowProtRec.append(Double(rec)) }
+            }
+            let timing = computeCaffeineAndMealTiming(meals: meals)
+            if let gap = timing.hoursFromLastMealToBedtime, let deepSec = nextDay.sleepSession?.deepSeconds {
+                let deepMin = Double(deepSec) / 60.0
+                if gap >= 2.8 { earlyMealDeep.append(deepMin) }
+                else { lateMealDeep.append(deepMin) }
+            }
+        }
+
+        if highProtRec.count >= 2 && lowProtRec.count >= 2 {
+            let avgH = highProtRec.reduce(0, +) / Double(highProtRec.count)
+            let avgL = lowProtRec.reduce(0, +) / Double(lowProtRec.count)
+            let diff = Int((avgH - avgL).rounded())
+            if abs(diff) >= 2 {
+                insights.append(UnifiedCausalInsight(
+                    id: "cross_protein_recovery",
+                    categoryBadge: "NUTRICIÓN → RECUPERACIÓN (D+1)",
+                    icon: "fork.knife",
+                    title: "Proteína ≥ \(targetProt) g y Recuperación al día siguiente",
+                    impactBadge: String(format: "%+d%% Rec.", diff),
+                    isPositive: diff >= 0,
+                    detail: "En tus días alcanzando ≥\(targetProt) g de proteína, tu Recuperación del día siguiente promedia \(Int(avgH.rounded()))% frente a \(Int(avgL.rounded()))% cuando quedas por debajo.",
+                    sampleDays: highProtRec.count + lowProtRec.count
+                ))
+            }
+        }
+
+        if earlyMealDeep.count >= 2 && lateMealDeep.count >= 2 {
+            let avgE = earlyMealDeep.reduce(0, +) / Double(earlyMealDeep.count)
+            let avgL = lateMealDeep.reduce(0, +) / Double(lateMealDeep.count)
+            let diff = Int((avgE - avgL).rounded())
+            if abs(diff) >= 3 {
+                insights.append(UnifiedCausalInsight(
+                    id: "cross_meal_timing_deep",
+                    categoryBadge: "CENA → SUEÑO PROFUNDO (D+1)",
+                    icon: "moon.stars.fill",
+                    title: "Cenar ≥ 3 h antes de dormir vs Sueño Profundo",
+                    impactBadge: String(format: "%+d min", diff),
+                    isPositive: diff >= 0,
+                    detail: "Dejar al menos 2,8–3 h de digestión antes de acostarte se asocia con \(Int(avgE.rounded())) min de sueño profundo frente a \(Int(avgL.rounded())) min en cenas tardías.",
+                    sampleDays: earlyMealDeep.count + lateMealDeep.count
+                ))
+            }
+        }
+
+        // 2. Zone 2 Aerobic Sessions (D) -> Next-Day HRV (D+1)
+        var z2Hrv: [Double] = []
+        var noZ2Hrv: [Double] = []
+        for iso in sortedIsos {
+            guard let day = history[iso], let nextDay = nextDaySummary(after: iso), let nextHrv = nextDay.hrvMs else { continue }
+            let z2Min = (day.hrZone1Minutes ?? 0) + (day.hrZone2Minutes ?? 0)
+            if z2Min >= 25 { z2Hrv.append(nextHrv) }
+            else { noZ2Hrv.append(nextHrv) }
+        }
+        if z2Hrv.count >= 2 && noZ2Hrv.count >= 2 {
+            let avgZ = z2Hrv.reduce(0, +) / Double(z2Hrv.count)
+            let avgN = noZ2Hrv.reduce(0, +) / Double(noZ2Hrv.count)
+            let diff = AppleHealthExportImporter.round1(avgZ - avgN)
+            if abs(diff) >= 1.0 {
+                insights.append(UnifiedCausalInsight(
+                    id: "cross_zone2_hrv",
+                    categoryBadge: "CARDIO ZONA 2 → VFC (D+1)",
+                    icon: "figure.run",
+                    title: "Sesiones en Zona 2 (≥25 min) y tono vagal",
+                    impactBadge: String(format: "%+.1f ms VFC", locale: Locale(identifier: "es_ES"), diff),
+                    isPositive: diff >= 0,
+                    detail: "Tras días con ≥25 min aeróbicos en Zona 1–2, tu VFC nocturna promedia \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgZ)) ms frente a \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgN)) ms.",
+                    sampleDays: z2Hrv.count + noZ2Hrv.count
+                ))
+            }
+        }
+
+        // 3. Strength Volume + Blood Biomarkers cross-insight
+        if let latestLab = labReports.sorted(by: { $0.dateIso > $1.dateIso }).first, !latestLab.biomarkers.isEmpty {
+            let outOfRange = latestLab.biomarkers.filter { $0.status != .normal }
+            if let firstFlag = outOfRange.first {
+                insights.append(UnifiedCausalInsight(
+                    id: "cross_blood_wearable",
+                    categoryBadge: "SANGRE × BIOMETRÍA",
+                    icon: "cross.case.fill",
+                    title: "Sinergia analítica: \(firstFlag.name) (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), firstFlag.value)) \(firstFlag.unit))",
+                    impactBadge: firstFlag.status.rawValue,
+                    isPositive: false,
+                    detail: "Tu biomarcador «\(firstFlag.name)» está fuera del rango óptimo en tu analítica (\(latestLab.dateIso)): optimizarlo junto con sueño ≥85% y Zona 2 reducirá directamente tu Edad Biológica.",
+                    sampleDays: max(sortedIsos.count, 1)
+                ))
+            }
+        }
+
+        if insights.isEmpty {
+            insights.append(UnifiedCausalInsight(
+                id: "cross_ready_calibration",
+                categoryBadge: "MOTOR CAUSAL UNIFICADO",
+                icon: "sparkles",
+                title: "Cruce Nutrición × Fuerza × Sangre × Sueño activo",
+                impactBadge: "D → D+1",
+                isPositive: true,
+                detail: "A medida que registres comidas, series de fuerza y sueño en días consecutivos, verás aquí cómo tus gramos de proteína, hora de cena y volumen muscular modifican tu VFC y sueño profundo del día siguiente.",
+                sampleDays: sortedIsos.count
+            ))
+        }
+
+        return insights
     }
 }

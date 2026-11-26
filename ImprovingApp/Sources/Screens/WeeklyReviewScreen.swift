@@ -1,6 +1,7 @@
 import SwiftUI
+import UIKit
 
-// MARK: - N5. Resumen Semanal Inteligente (7d vs Previous 7d + Gemini AI 3 Takeaways + Share Card)
+// MARK: - N5 + Apartado 1.6. Evaluación Semanal (7d), Mensual MPA (30d) y Trimestral (90d) + Exportación PDF Clínico y CSV
 
 struct WeeklyReviewScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -8,18 +9,55 @@ struct WeeklyReviewScreen: View {
     let onAskCoach: () -> Void
 
     @State private var showShareSheet: Bool = false
+    @State private var selectedPeriod: PerformanceAssessmentPeriod = .weekly7d
 
     private func formatHM(_ mins: Int) -> String {
         "\(mins / 60)h \(String(format: "%02d", mins % 60))m"
     }
 
+    private func computePeriodSummary(days: Int) -> (
+        avgRec: Int?, recDelta: Int?,
+        avgHrv: Double?, hrvDelta: Double?,
+        avgSleepMin: Int?, sleepDelta: Int?,
+        avgStrain: Int?, strainDelta: Int?,
+        daysWithData: Int
+    ) {
+        let window = store.trailingCalendarSummaries(days: days * 2)
+        let prev = Array(window.prefix(days))
+        let cur = Array(window.suffix(days))
+
+        func avgInt(_ vals: [Int]) -> Int? { vals.isEmpty ? nil : Int((Double(vals.reduce(0, +)) / Double(vals.count)).rounded()) }
+        func avgDbl(_ vals: [Double]) -> Double? { vals.isEmpty ? nil : (vals.reduce(0, +) / Double(vals.count)) }
+
+        let cRec = avgInt(cur.compactMap { $0.summary?.recoveryPct })
+        let pRec = avgInt(prev.compactMap { $0.summary?.recoveryPct })
+        let cHrv = avgDbl(cur.compactMap { $0.summary?.hrvMs })
+        let pHrv = avgDbl(prev.compactMap { $0.summary?.hrvMs })
+        let cSlp = avgInt(cur.compactMap { $0.summary?.asleepMinutes })
+        let pSlp = avgInt(prev.compactMap { $0.summary?.asleepMinutes })
+        let cStr = avgInt(cur.compactMap { $0.summary?.strainPct })
+        let pStr = avgInt(prev.compactMap { $0.summary?.strainPct })
+        let validDays = cur.filter { $0.summary?.recoveryPct != nil || $0.summary?.asleepMinutes != nil || $0.summary?.strainPct != nil }.count
+
+        return (
+            cRec, (cRec != nil && pRec != nil) ? (cRec! - pRec!) : nil,
+            cHrv, (cHrv != nil && pHrv != nil) ? (cHrv! - pHrv!) : nil,
+            cSlp, (cSlp != nil && pSlp != nil) ? (cSlp! - pSlp!) : nil,
+            cStr, (cStr != nil && pStr != nil) ? (cStr! - pStr!) : nil,
+            validDays
+        )
+    }
+
     var body: some View {
         let report = store.computeWeeklyReview()
         let aiInsight = store.weeklyAiInsightsCache[report.weekKey]
-        let last7 = store.trailingCalendarSummaries(days: 7)
-        let recSeries: [Double?] = last7.map { $0.summary?.recoveryPct.map { Double($0) } }
-        let sleepSeries: [Double?] = last7.map { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
-        let strainSeries: [Double?] = last7.map { $0.summary?.strainPct.map { Double($0) } }
+        let span = selectedPeriod.rawValue
+        let periodStats = computePeriodSummary(days: span)
+        let curWindow = store.trailingCalendarSummaries(days: span)
+        let recSeries: [Double?] = curWindow.map { $0.summary?.recoveryPct.map { Double($0) } }
+        let sleepSeries: [Double?] = curWindow.map { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
+        let strainSeries: [Double?] = curWindow.map { $0.summary?.strainPct.map { Double($0) } }
+        let zoneProg = store.longevityZoneProgress
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -63,16 +101,38 @@ struct WeeklyReviewScreen: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
 
-                        VStack(spacing: 4) {
-                            Text("RESUMEN SEMANAL")
+                        VStack(spacing: 6) {
+                            Text(selectedPeriod.badgeTitle)
                                 .font(ImprovingFont.microLabel(11))
                                 .foregroundColor(BevelColors.periwinkleStart)
-                            Text(report.dateRangeLabel)
+                            Text(selectedPeriod == .weekly7d ? report.dateRangeLabel : "Últimos \(selectedPeriod.rawValue) días")
                                 .font(ImprovingFont.displayLarge(26))
                                 .foregroundColor(BevelColors.textPrimary)
-                            Text("Comparado con los 7 días anteriores · \(report.daysWithData) días con lecturas reales")
+                            Text("Comparado con los \(selectedPeriod.rawValue) días anteriores · \(periodStats.daysWithData) días con lecturas reales")
                                 .font(ImprovingFont.caption(12.5))
                                 .foregroundColor(BevelColors.textSecondary)
+
+                            // 7d / 30d MPA / 90d Period Selector
+                            HStack(spacing: 8) {
+                                ForEach(PerformanceAssessmentPeriod.allCases) { p in
+                                    let sel = selectedPeriod == p
+                                    Button {
+                                        AppHaptics.selection()
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            selectedPeriod = p
+                                        }
+                                    } label: {
+                                        Text(p.title)
+                                            .font(ImprovingFont.caption(12))
+                                            .fontWeight(.bold)
+                                            .foregroundColor(sel ? .white : BevelColors.textSecondary)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(Capsule().fill(sel ? BevelColors.indigoEnd : BevelColors.card))
+                                    }
+                                }
+                            }
+                            .padding(.top, 4)
                         }
                         .padding(.bottom, 8)
                     }
@@ -163,8 +223,8 @@ struct WeeklyReviewScreen: View {
                         .padding(16)
                     }
 
-                    // 2. Core KPIs Grid (7d vs Prev 7d Deltas)
-                    Text("Evolución frente a la semana pasada")
+                    // 2. Core KPIs Grid (7d / 30d MPA / 90d vs Prev Period Deltas)
+                    Text("Evolución frente a los \(selectedPeriod.rawValue) días previos")
                         .font(ImprovingFont.sectionTitle(18))
                         .foregroundColor(BevelColors.textPrimary)
 
@@ -173,38 +233,84 @@ struct WeeklyReviewScreen: View {
                             title: "Recuperación",
                             icon: "leaf.fill",
                             accent: BevelColors.greenPrimary,
-                            value: report.avgRecovery.map { "\($0)%" } ?? "--",
-                            deltaText: report.recoveryDelta.map { "\($0 >= 0 ? "+" : "")\($0) pts" },
-                            isGoodDelta: (report.recoveryDelta ?? 0) >= 0,
+                            value: periodStats.avgRec.map { "\($0)%" } ?? "--",
+                            deltaText: periodStats.recDelta.map { "\($0 >= 0 ? "+" : "")\($0) pts" },
+                            isGoodDelta: (periodStats.recDelta ?? 0) >= 0,
                             spark: recSeries
                         )
                         kpiTile(
                             title: "VFC media",
                             icon: "waveform.path.ecg",
                             accent: BevelColors.bioTeal,
-                            value: report.avgHrv.map { String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), $0) } ?? "--",
-                            deltaText: report.hrvDelta.map { String(format: "%+.1f ms", locale: Locale(identifier: "es_ES"), $0) },
-                            isGoodDelta: (report.hrvDelta ?? 0) >= 0,
-                            spark: last7.map { $0.summary?.hrvMs }
+                            value: periodStats.avgHrv.map { String(format: "%.1f ms", locale: Locale(identifier: "es_ES"), $0) } ?? "--",
+                            deltaText: periodStats.hrvDelta.map { String(format: "%+.1f ms", locale: Locale(identifier: "es_ES"), $0) },
+                            isGoodDelta: (periodStats.hrvDelta ?? 0) >= 0,
+                            spark: curWindow.map { $0.summary?.hrvMs }
                         )
                         kpiTile(
                             title: "Sueño medio",
                             icon: "moon.stars.fill",
                             accent: BevelColors.periwinkleStart,
-                            value: report.avgSleepMinutes.map { formatHM($0) } ?? "--",
-                            deltaText: report.sleepMinutesDelta.map { "\($0 >= 0 ? "+" : "")\($0) min" },
-                            isGoodDelta: (report.sleepMinutesDelta ?? 0) >= 0,
+                            value: periodStats.avgSleepMin.map { formatHM($0) } ?? "--",
+                            deltaText: periodStats.sleepDelta.map { "\($0 >= 0 ? "+" : "")\($0) min" },
+                            isGoodDelta: (periodStats.sleepDelta ?? 0) >= 0,
                             spark: sleepSeries
                         )
                         kpiTile(
                             title: "Esfuerzo medio",
                             icon: "flame.fill",
                             accent: BevelColors.amberStart,
-                            value: report.avgStrainPct.map { "\($0)%" } ?? "--",
-                            deltaText: report.strainDelta.map { "\($0 >= 0 ? "+" : "")\($0) pts" },
+                            value: periodStats.avgStrain.map { "\($0)%" } ?? "--",
+                            deltaText: periodStats.strainDelta.map { "\($0 >= 0 ? "+" : "")\($0) pts" },
                             isGoodDelta: true,
                             spark: strainSeries
                         )
+                    }
+
+                    // 2B. Longevity HR Zones & Weekly Strength Compliance Card (Apartado 1.6)
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 11) {
+                            HStack {
+                                Image(systemName: "heart.text.square.fill")
+                                    .foregroundColor(BevelColors.greenPrimary)
+                                Text("METAS DE LONGEVIDAD SEMANAL (OMS / HEALTHSPAN)")
+                                    .font(ImprovingFont.microLabel(10))
+                                    .foregroundColor(BevelColors.textMuted)
+                                Spacer()
+                                Text("\(zoneProg.overallCompliancePct)% cumplido")
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(.bold)
+                                    .monospacedDigit()
+                                    .foregroundColor(zoneProg.overallCompliancePct >= 75 ? BevelColors.greenPrimary : BevelColors.amberStart)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill((zoneProg.overallCompliancePct >= 75 ? BevelColors.greenPrimary : BevelColors.amberStart).opacity(0.14)))
+                            }
+                            summaryMetricRow(
+                                icon: "figure.run",
+                                color: BevelColors.greenPrimary,
+                                label: "Zonas 1–3 Aeróbica (base mitocondrial)",
+                                value: "\(zoneProg.weeklyZone1To3Minutes) / \(zoneProg.targetZone1To3Minutes) min",
+                                sub: "Objetivo clínico ≥150 min/semana"
+                            )
+                            Divider().background(BevelColors.divider)
+                            summaryMetricRow(
+                                icon: "bolt.heart.fill",
+                                color: BevelColors.coralHigh,
+                                label: "Zonas 4–5 Alta intensidad (VO₂ máx.)",
+                                value: "\(zoneProg.weeklyZone4To5Minutes) / \(zoneProg.targetZone4To5Minutes) min",
+                                sub: "Objetivo pico ≥25 min/semana"
+                            )
+                            Divider().background(BevelColors.divider)
+                            summaryMetricRow(
+                                icon: "figure.strengthtraining.traditional",
+                                color: BevelColors.amberStart,
+                                label: "Fuerza muscular semanal",
+                                value: "\(zoneProg.weeklyStrengthSessions) / \(zoneProg.targetStrengthSessions) ses. (\(zoneProg.weeklyStrengthMinutes)m)",
+                                sub: "Objetivo ≥3 sesiones o ≥75 min/semana"
+                            )
+                        }
+                        .padding(16)
                     }
 
                     // 3. Training, Nutrition & Sleep Debt Breakdown
@@ -287,6 +393,9 @@ struct WeeklyReviewScreen: View {
                             .padding(14)
                         }
                     }
+
+                    // 5. Clinical PDF & CSV Export Card (Apartado 1.6)
+                    ClinicalReportExportCard(store: store, periodDays: selectedPeriod.rawValue)
                 }
                 .padding(.horizontal, 16)
             }
@@ -372,5 +481,152 @@ struct WeeklyReviewScreen: View {
                 .monospacedDigit()
                 .foregroundColor(BevelColors.textPrimary)
         }
+    }
+}
+
+// MARK: - Clinical PDF & CSV Exporter for Doctors, Nutritionists & Coaches (Apartado 1.6)
+
+struct ClinicalReportExportCard: View {
+    @ObservedObject var store: ImprovingStore
+    let periodDays: Int
+
+    var body: some View {
+        BevelCard(cornerRadius: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.richtext.fill")
+                        .foregroundColor(BevelColors.skyBlue)
+                    Text("EXPORTACIÓN CLÍNICA Y DEPORTIVA (PDF / CSV)")
+                        .font(ImprovingFont.microLabel(10))
+                        .foregroundColor(BevelColors.textMuted)
+                }
+                Text("Genera un informe clínico completo con tus medias de \(periodDays) días (VFC, FCR, Sueño, Esfuerzo, Zonas Cardíacas, Edad Biológica y última Analítica de Sangre) o una tabla CSV para Excel.")
+                    .font(ImprovingFont.caption(12))
+                    .foregroundColor(BevelColors.textSecondary)
+
+                HStack(spacing: 10) {
+                    if let pdfURL = try? ClinicalReportExporter.generateClinicalPDF(store: store, periodDays: periodDays) {
+                        ShareLink(item: pdfURL) {
+                            Label("Exportar PDF médico", systemImage: "doc.fill")
+                                .font(ImprovingFont.caption(12.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.indigoEnd))
+                        }
+                    }
+                    if let csvURL = try? ClinicalReportExporter.generateBiometricCSV(store: store, periodDays: periodDays) {
+                        ShareLink(item: csvURL) {
+                            Label("Exportar CSV", systemImage: "tablecells.fill")
+                                .font(ImprovingFont.caption(12.5))
+                                .fontWeight(.bold)
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 11)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+    }
+}
+
+enum ClinicalReportExporter {
+    static func generateBiometricCSV(store: ImprovingStore, periodDays: Int = 30) throws -> URL {
+        let items = store.trailingCalendarSummaries(days: periodDays)
+        var lines: [String] = [
+            "Fecha,Recuperacion_Pct,Sueno_Min,Sueno_Pct,Esfuerzo_Pct,Strain_21,VFC_ms,FCR_ppm,FR_rpm,SpO2_Pct,Temp_C,Pasos,Kcal_Ingeridas,Proteina_g"
+        ]
+        for item in items {
+            let d = item.summary
+            let nut = store.nutritionDayTotals(for: item.iso)
+            let row = [
+                item.iso,
+                d?.recoveryPct.map(String.init) ?? "",
+                d?.asleepMinutes.map(String.init) ?? "",
+                d?.sleepPct.map(String.init) ?? "",
+                d?.strainPct.map(String.init) ?? "",
+                d?.strain21.map { String(format: "%.1f", $0) } ?? "",
+                d?.hrvMs.map { String(format: "%.1f", $0) } ?? "",
+                d?.restingHrBpm.map { String(format: "%.1f", $0) } ?? "",
+                d?.respRateRpm.map { String(format: "%.1f", $0) } ?? "",
+                d?.spo2Percent.map { String(format: "%.1f", $0) } ?? "",
+                d?.wristTempAbsoluteC.map { String(format: "%.2f", $0) } ?? "",
+                d?.stepsCount.map(String.init) ?? "",
+                nut.kcal > 0 ? "\(nut.kcal)" : "",
+                nut.proteinG > 0 ? "\(Int(nut.proteinG.rounded()))" : ""
+            ].joined(separator: ",")
+            lines.append(row)
+        }
+        let csvData = Data(lines.joined(separator: "\n").utf8)
+        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("Improving_MPA_\(periodDays)d.csv")
+        try csvData.write(to: outURL, options: [.atomic, .completeFileProtection])
+        return outURL
+    }
+
+    static func generateClinicalPDF(store: ImprovingStore, periodDays: Int = 30) throws -> URL {
+        let pageRect = CGRect(x: 0, y: 0, width: 595, height: 842) // A4
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let items = store.trailingCalendarSummaries(days: periodDays)
+        let bio = store.biologicalAgeSnapshot()
+        let pace = store.paceOfAgingSnapshot()
+        let zp = store.longevityZoneProgress
+        let name = store.userProfile.fullName.isEmpty ? "Usuario Improving" : store.userProfile.fullName
+
+        let data = renderer.pdfData { ctx in
+            ctx.beginPage()
+            let titleAttrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: 18),
+                .foregroundColor: UIColor.black
+            ]
+            let sectionAttrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: 13),
+                .foregroundColor: UIColor.darkGray
+            ]
+            let bodyAttrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 11),
+                .foregroundColor: UIColor.black
+            ]
+
+            var y: CGFloat = 36
+            func draw(_ text: String, attrs: [NSAttributedString.Key: Any], spacing: CGFloat = 18) {
+                (text as NSString).draw(in: CGRect(x: 36, y: y, width: 523, height: 44), withAttributes: attrs)
+                y += spacing
+            }
+
+            draw("IMPROVING · INFORME CLÍNICO Y EVALUACIÓN DE RENDIMIENTO (\(periodDays) DÍAS)", attrs: titleAttrs, spacing: 26)
+            draw("Paciente / Atleta: \(name) · Edad cronológica: \(String(format: "%.1f", bio.eval.chronoAgeYears)) años · Modo: \(store.globalGoalMode.rawValue)", attrs: bodyAttrs, spacing: 20)
+            draw("Edad Biológica (9 pilares Healthspan): \(String(format: "%.1f", bio.eval.bioAgeYears)) años (Delta \(String(format: "%+.1f", bio.eval.deltaYears)) a) · Ritmo: \(pace.map { String(format: "%.2fx", $0.multiplier) } ?? "1.00x")", attrs: bodyAttrs, spacing: 24)
+
+            draw("1. MEDIAS FISIOLÓGICAS (\(periodDays) DÍAS)", attrs: sectionAttrs, spacing: 20)
+            let recs = items.compactMap { $0.summary?.recoveryPct }
+            let hrvs = items.compactMap { $0.summary?.hrvMs }
+            let rhrs = items.compactMap { $0.summary?.restingHrBpm }
+            let slps = items.compactMap { $0.summary?.asleepMinutes }
+            let avgRec = recs.isEmpty ? "--" : "\(recs.reduce(0, +) / recs.count)%"
+            let avgHrv = hrvs.isEmpty ? "--" : String(format: "%.1f ms", hrvs.reduce(0, +) / Double(hrvs.count))
+            let avgRhr = rhrs.isEmpty ? "--" : String(format: "%.1f ppm", rhrs.reduce(0, +) / Double(rhrs.count))
+            let avgSlp = slps.isEmpty ? "--" : String(format: "%.1f h", Double(slps.reduce(0, +)) / Double(slps.count) / 60.0)
+            draw("• Recuperación media: \(avgRec)   |   VFC media: \(avgHrv)   |   FCR media: \(avgRhr)   |   Sueño medio: \(avgSlp)", attrs: bodyAttrs, spacing: 22)
+
+            draw("2. CUMPLIMIENTO SEMANAL DE ZONAS CARDÍACAS Y FUERZA", attrs: sectionAttrs, spacing: 20)
+            draw("• Zonas 1–3 Aeróbica: \(zp.weeklyZone1To3Minutes) / 150 min   |   Zonas 4–5 VO2: \(zp.weeklyZone4To5Minutes) / 25 min   |   Fuerza: \(zp.weeklyStrengthSessions) sesiones (\(zp.weeklyStrengthMinutes) min)", attrs: bodyAttrs, spacing: 24)
+
+            let labs = store.latestBiomarkersByName
+            if !labs.isEmpty {
+                draw("3. ÚLTIMOS BIOMARCADORES DE SANGRE (\(labs.count))", attrs: sectionAttrs, spacing: 20)
+                for b in labs.prefix(12) {
+                    draw("• \(b.name): \(String(format: "%.1f", b.value)) \(b.unit) [\(b.status.rawValue)]", attrs: bodyAttrs, spacing: 16)
+                    if y > 780 { break }
+                }
+            }
+        }
+
+        let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("Improving_Informe_Clinico_\(periodDays)d.pdf")
+        try data.write(to: outURL, options: [.atomic, .completeFileProtection])
+        return outURL
     }
 }

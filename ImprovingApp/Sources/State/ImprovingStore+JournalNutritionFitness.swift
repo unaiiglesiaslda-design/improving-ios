@@ -562,19 +562,31 @@ extension ImprovingStore {
         journalCheckinsByDate[iso] = map
 
         if state != .yes {
-            // Clearing or marking No removes any optional event timestamp for this habit on this day
+            // Clearing or marking No removes any optional event timestamp and dosage for this habit on this day
             journalEventTimesByDate[iso]?.removeValue(forKey: habitId)
             if journalEventTimesByDate[iso]?.isEmpty == true {
                 journalEventTimesByDate.removeValue(forKey: iso)
             }
-        } else if let rawTime = eventTime {
-            let clean = rawTime.trimmingCharacters(in: .whitespacesAndNewlines)
-            if clean.isEmpty {
-                journalEventTimesByDate[iso]?.removeValue(forKey: habitId)
-            } else {
-                var tMap = journalEventTimesByDate[iso] ?? [:]
-                tMap[habitId] = clean
-                journalEventTimesByDate[iso] = tMap
+            journalQuantitiesByDate[iso]?.removeValue(forKey: habitId)
+            if journalQuantitiesByDate[iso]?.isEmpty == true {
+                journalQuantitiesByDate.removeValue(forKey: iso)
+            }
+        } else {
+            if let spec = JournalHabitDosageSpec.spec(for: habitId),
+               journalQuantitiesByDate[iso]?[habitId] == nil {
+                var qMap = journalQuantitiesByDate[iso] ?? [:]
+                qMap[habitId] = spec.defaultYesValue
+                journalQuantitiesByDate[iso] = qMap
+            }
+            if let rawTime = eventTime {
+                let clean = rawTime.trimmingCharacters(in: .whitespacesAndNewlines)
+                if clean.isEmpty {
+                    journalEventTimesByDate[iso]?.removeValue(forKey: habitId)
+                } else {
+                    var tMap = journalEventTimesByDate[iso] ?? [:]
+                    tMap[habitId] = clean
+                    journalEventTimesByDate[iso] = tMap
+                }
             }
         }
         invalidateSectionCoachingCache(sections: [.hoy, .recuperacion, .sueno])
@@ -751,6 +763,7 @@ extension ImprovingStore {
             list.insert(meal, at: 0)
         }
         mealsByDate[iso] = list
+        syncAutoJournalHabits(for: iso)
         invalidateSectionCoachingCache(sections: [.hoy, .energia])
         dataRevision += 1
         persistState()
@@ -1132,6 +1145,246 @@ extension ImprovingStore {
             restTimerEndDate = nil
             timerTask?.cancel()
         }
+    }
+
+    // MARK: - Quantified Journal Dosages, Auto-Fill & Caffeine Half-Life (Apartado 1.2)
+
+    func journalQuantity(habitId: String, for dateIso: String? = nil) -> Double? {
+        let iso = dateIso ?? selectedDateIso
+        return journalQuantitiesByDate[iso]?[habitId]
+    }
+
+    func setJournalQuantity(habitId: String, quantity: Double?, for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        if let q = quantity, q > 0 {
+            var qMap = journalQuantitiesByDate[iso] ?? [:]
+            qMap[habitId] = q
+            journalQuantitiesByDate[iso] = qMap
+            var cMap = journalCheckinsByDate[iso] ?? [:]
+            cMap[habitId] = .yes
+            journalCheckinsByDate[iso] = cMap
+        } else {
+            journalQuantitiesByDate[iso]?.removeValue(forKey: habitId)
+            if journalQuantitiesByDate[iso]?.isEmpty == true {
+                journalQuantitiesByDate.removeValue(forKey: iso)
+            }
+        }
+        dataRevision += 1
+        persistState()
+    }
+
+    /// Automatically populates Diario habits (`caffeine`, `alcohol`, `late_meal`, `added_sugar`, `dairy`) from logged meals without double entry.
+    func syncAutoJournalHabits(for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        let meals = mealsByDate[iso] ?? []
+        guard !meals.isEmpty else { return }
+
+        var checkMap = journalCheckinsByDate[iso] ?? [:]
+        var quantMap = journalQuantitiesByDate[iso] ?? [:]
+        var timeMap = journalEventTimesByDate[iso] ?? [:]
+
+        let timing = WhoopPhysiologyEngine.computeCaffeineAndMealTiming(
+            meals: meals,
+            bedtimeMinutesOfDay: computedSleepPlan.bedtimeHour * 60 + computedSleepPlan.bedtimeMinute
+        )
+
+        // 1. Caffeine auto-sync
+        if timing.totalCaffeineTodayMg >= 25 {
+            checkMap["caffeine"] = .yes
+            quantMap["caffeine"] = timing.totalCaffeineTodayMg
+            if let t = timing.lastCaffeineTimeLabel {
+                timeMap["caffeine"] = t
+            }
+        }
+
+        // 2. Alcohol auto-sync
+        let totalAlc = meals.reduce(0.0) { $0 + ($1.alcoholDrinks ?? 0) }
+        if totalAlc >= 0.5 {
+            checkMap["alcohol"] = .yes
+            quantMap["alcohol"] = totalAlc
+            if let lastAlcMeal = meals.first(where: { ($0.alcoholDrinks ?? 0) > 0 }) {
+                timeMap["alcohol"] = lastAlcMeal.timeLabel
+            }
+        }
+
+        // 3. Late meal auto-sync (meal < 2.8h before bedtime or >= 20:45)
+        if let gap = timing.hoursFromLastMealToBedtime, gap < 2.8, let lastT = timing.lastMealTimeLabel {
+            checkMap["late_meal"] = .yes
+            quantMap["late_meal"] = max(0.5, gap)
+            timeMap["late_meal"] = lastT
+        } else if let lastT = timing.lastMealTimeLabel,
+                  let minDay = WhoopPhysiologyEngine.parseTimeLabelToMinutes(lastT),
+                  minDay >= (20 * 60 + 45) {
+            checkMap["late_meal"] = .yes
+            quantMap["late_meal"] = timing.hoursFromLastMealToBedtime ?? 1.5
+            timeMap["late_meal"] = lastT
+        }
+
+        // 4. Added sugar auto-sync
+        let totalSugar = meals.reduce(0.0) { $0 + $1.effectiveSugarG }
+        let hasExcessSugarFactor = meals.contains { ($0.qualityFactors?.excessSugar ?? 0) > 0 }
+        if hasExcessSugarFactor || totalSugar >= 40 {
+            checkMap["added_sugar"] = .yes
+        }
+
+        journalCheckinsByDate[iso] = checkMap
+        if !quantMap.isEmpty { journalQuantitiesByDate[iso] = quantMap }
+        if !timeMap.isEmpty { journalEventTimesByDate[iso] = timeMap }
+    }
+
+    var caffeineAndMealTimingToday: CaffeineAndMealTimingSnapshot {
+        let iso = selectedDateIso
+        let meals = mealsByDate[iso] ?? []
+        let plan = computedSleepPlan
+        let bedMin = plan.bedtimeHour * 60 + plan.bedtimeMinute
+        let manCaff = journalQuantitiesByDate[iso]?["caffeine"] ?? (journalCheckinsByDate[iso]?["caffeine"] == .yes ? 120.0 : nil)
+        let manTime = journalEventTimesByDate[iso]?["caffeine"]
+        return WhoopPhysiologyEngine.computeCaffeineAndMealTiming(
+            meals: meals,
+            bedtimeMinutesOfDay: bedMin,
+            manualCaffeineMg: manCaff,
+            manualCaffeineTime: manTime
+        )
+    }
+
+    // MARK: - Zero-Friction Nutrition: Repeat Yesterday, Recipes & Micronutrients (Apartado 1.5)
+
+    var yesterdayMealsForSelectedDate: [NutritionMealItem] {
+        let cal = Calendar.current
+        guard let prevDate = cal.date(byAdding: .day, value: -1, to: selectedDate) else { return [] }
+        let prevIso = isoFormatter.string(from: prevDate)
+        return mealsByDate[prevIso] ?? []
+    }
+
+    @discardableResult
+    func repeatYesterdayMeals(for targetDateIso: String? = nil) -> Int {
+        let iso = targetDateIso ?? selectedDateIso
+        let cal = Calendar.current
+        let baseDate = isoFormatter.date(from: iso) ?? selectedDate
+        guard let prevDate = cal.date(byAdding: .day, value: -1, to: baseDate) else { return 0 }
+        let prevIso = isoFormatter.string(from: prevDate)
+        let prevMeals = mealsByDate[prevIso] ?? []
+        guard !prevMeals.isEmpty else { return 0 }
+
+        var curList = mealsByDate[iso] ?? []
+        for pm in prevMeals {
+            var copy = pm
+            copy = NutritionMealItem(
+                id: UUID().uuidString,
+                title: pm.title,
+                timeLabel: pm.timeLabel,
+                kcal: pm.kcal,
+                proteinG: pm.proteinG,
+                carbsG: pm.carbsG,
+                fatG: pm.fatG,
+                qualityScore: pm.qualityScore,
+                caffeineMg: pm.caffeineMg,
+                alcoholDrinks: pm.alcoholDrinks,
+                calciumMg: pm.calciumMg,
+                fiberG: pm.fiberG,
+                sugarG: pm.sugarG,
+                sodiumMg: pm.sodiumMg,
+                potassiumMg: pm.potassiumMg,
+                magnesiumMg: pm.magnesiumMg,
+                ironMg: pm.ironMg,
+                vitaminDMcg: pm.vitaminDMcg,
+                omega3G: pm.omega3G,
+                aiNotes: pm.aiNotes,
+                photoFilename: nil,
+                emoji: pm.emoji,
+                qualityFactors: pm.qualityFactors,
+                isFavorite: pm.isFavorite
+            )
+            curList.append(copy)
+        }
+        mealsByDate[iso] = curList
+        syncAutoJournalHabits(for: iso)
+        invalidateSectionCoachingCache(sections: [.hoy, .energia])
+        dataRevision += 1
+        persistState()
+        return prevMeals.count
+    }
+
+    func saveNutritionRecipe(_ recipe: NutritionRecipeTemplate) {
+        if let idx = nutritionRecipes.firstIndex(where: { $0.id == recipe.id }) {
+            nutritionRecipes[idx] = recipe
+        } else {
+            nutritionRecipes.insert(recipe, at: 0)
+        }
+        // Mirror into savedFoodsLibrary so it appears in Favorites / Library tabs too
+        let libItem = SavedFoodLibraryItem(
+            id: "recipe_\(recipe.id)",
+            kind: .recipe,
+            emoji: recipe.emoji.isEmpty ? "🍲" : recipe.emoji,
+            title: "\(recipe.title) (1/\(recipe.safeServings) ración)",
+            kcal: recipe.kcalPerServing,
+            proteinG: recipe.proteinPerServing,
+            carbsG: recipe.carbsPerServing,
+            fatG: recipe.fatPerServing,
+            qualityScore: 88
+        )
+        savedFoodsLibrary.removeAll { $0.id == libItem.id }
+        savedFoodsLibrary.insert(libItem, at: 0)
+        persistState()
+    }
+
+    func deleteNutritionRecipe(id: String) {
+        nutritionRecipes.removeAll { $0.id == id }
+        savedFoodsLibrary.removeAll { $0.id == "recipe_\(id)" }
+        persistState()
+    }
+
+    func logRecipeServing(_ recipe: NutritionRecipeTemplate, servingsCount: Double = 1.0, for dateIso: String? = nil) {
+        let mult = max(servingsCount, 0.25)
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        let meal = NutritionMealItem(
+            id: UUID().uuidString,
+            title: "\(recipe.title) (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), mult)) rac.)",
+            timeLabel: f.string(from: Date()),
+            kcal: Int((Double(recipe.kcalPerServing) * mult).rounded()),
+            proteinG: Int((Double(recipe.proteinPerServing) * mult).rounded()),
+            carbsG: Int((Double(recipe.carbsPerServing) * mult).rounded()),
+            fatG: Int((Double(recipe.fatPerServing) * mult).rounded()),
+            qualityScore: 88,
+            fiberG: AppleHealthExportImporter.round1(recipe.fiberPerServing * mult),
+            emoji: recipe.emoji
+        )
+        saveMeal(meal, for: dateIso)
+    }
+
+    var dailyMicronutrientsSnapshot: [MicronutrientDailySnapshot] {
+        let meals = mealsToday
+        let fiber = meals.reduce(0.0) { $0 + $1.effectiveFiberG }
+        let sugar = meals.reduce(0.0) { $0 + $1.effectiveSugarG }
+        let sodium = meals.reduce(0.0) { $0 + $1.effectiveSodiumMg }
+        let potassium = meals.reduce(0.0) { $0 + $1.effectivePotassiumMg }
+        let magnesium = meals.reduce(0.0) { $0 + $1.effectiveMagnesiumMg }
+        let iron = meals.reduce(0.0) { $0 + $1.effectiveIronMg }
+        let vitD = meals.reduce(0.0) { $0 + $1.effectiveVitaminDMcg }
+        let omega3 = meals.reduce(0.0) { $0 + $1.effectiveOmega3G }
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+
+        return [
+            MicronutrientDailySnapshot(id: "micro_fiber", name: "Fibra dietética", unit: "g", currentValue: AppleHealthExportImporter.round1(fiber), targetValue: Double(norms.fiberGoalG), isUpperLimit: false, icon: "leaf.fill", accentHex: 0x34D399),
+            MicronutrientDailySnapshot(id: "micro_sugar", name: "Azúcar", unit: "g", currentValue: AppleHealthExportImporter.round1(sugar), targetValue: 36.0, isUpperLimit: true, icon: "cube.fill", accentHex: 0xF97316),
+            MicronutrientDailySnapshot(id: "micro_sodium", name: "Sodio", unit: "mg", currentValue: sodium.rounded(), targetValue: 2300.0, isUpperLimit: true, icon: "drop.triangle.fill", accentHex: 0xF59E0B),
+            MicronutrientDailySnapshot(id: "micro_potassium", name: "Potasio", unit: "mg", currentValue: potassium.rounded(), targetValue: 3500.0, isUpperLimit: false, icon: "bolt.fill", accentHex: 0x38BDF8),
+            MicronutrientDailySnapshot(id: "micro_magnesium", name: "Magnesio", unit: "mg", currentValue: magnesium.rounded(), targetValue: userProfile.sex == .female ? 320.0 : 400.0, isUpperLimit: false, icon: "sparkles", accentHex: 0x818CF8),
+            MicronutrientDailySnapshot(id: "micro_iron", name: "Hierro", unit: "mg", currentValue: AppleHealthExportImporter.round1(iron), targetValue: userProfile.sex == .female ? 18.0 : 10.0, isUpperLimit: false, icon: "cross.vial.fill", accentHex: 0xFB7185),
+            MicronutrientDailySnapshot(id: "micro_vitd", name: "Vitamina D", unit: "mcg", currentValue: AppleHealthExportImporter.round1(vitD), targetValue: 15.0, isUpperLimit: false, icon: "sun.max.fill", accentHex: 0xFBBF24),
+            MicronutrientDailySnapshot(id: "micro_omega3", name: "Omega-3 (EPA/DHA)", unit: "g", currentValue: AppleHealthExportImporter.round1(omega3), targetValue: 1.6, isUpperLimit: false, icon: "fish.fill", accentHex: 0x2DD4BF)
+        ]
+    }
+
+    var unifiedCausalInsights: [UnifiedCausalInsight] {
+        WhoopPhysiologyEngine.computeUnifiedCausalInsights(
+            history: activeHistory,
+            mealsByDate: mealsByDate,
+            strengthLogs: strengthLogs,
+            labReports: labReports,
+            profile: userProfile
+        )
     }
 
 }

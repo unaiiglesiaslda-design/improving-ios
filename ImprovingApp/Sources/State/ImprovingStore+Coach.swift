@@ -116,10 +116,13 @@ extension ImprovingStore {
             "marcados_si": yesHabits,
             "marcados_no": noHabits,
             "horarios_habitos_hoy": dayHabitTimes,
+            "cantidades_habitos_hoy": journalQuantitiesByDate[selectedDateIso] ?? [:],
             "estado_animo_1_a_5": journalMoodByDate[selectedDateIso].map { $0 as Any } ?? "NO_REGISTRADO",
             "nota_del_dia": redactPIIFromAI ? "OMITIDA_POR_PRIVACIDAD" : (noteToday.isEmpty ? "SIN_NOTA" : noteToday),
             "notas_recientes_7d": redactPIIFromAI ? [:] : recentNotes,
-            "habitos_disponibles": habitCatalogForAi
+            "habitos_disponibles": habitCatalogForAi,
+            "memoria_largo_plazo_usuario": redactPIIFromAI ? [] : coachMemoryNotes,
+            "modo_objetivo_global": globalGoalMode.coachSystemDirective
         ]
 
         let cal = Calendar.current
@@ -1153,6 +1156,28 @@ extension ImprovingStore {
         activeCoachInteractionId = nil
         isCoachThinking = false
         lastCoachErrorMessage = nil
+        persistState()
+    }
+
+    // MARK: - Persistent Long-Term Coach Memory (Apartado 1.4)
+
+    func addCoachMemoryNote(_ note: String) {
+        let clean = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        if !coachMemoryNotes.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
+            coachMemoryNotes.append(clean)
+            persistState()
+        }
+    }
+
+    func removeCoachMemoryNote(at index: Int) {
+        guard coachMemoryNotes.indices.contains(index) else { return }
+        coachMemoryNotes.remove(at: index)
+        persistState()
+    }
+
+    func removeCoachMemoryNote(_ note: String) {
+        coachMemoryNotes.removeAll { $0 == note }
         persistState()
     }
 

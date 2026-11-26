@@ -90,5 +90,9 @@
 	<string>Improving guarda en tu carrete las tarjetas resumen que decidas exportar.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Improving usa la cámara para escanear códigos de barras, analizar platos con IA o fotografiar analíticas de sangre.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Improving utiliza el micrófono cuando decides dictar por voz tus comidas o hablar con el Coach IA.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Improving utiliza el reconocimiento de voz de iOS para transcribir tus mensajes al Coach IA y registrar comidas dictadas.</string>
 </dict>
 </plist>

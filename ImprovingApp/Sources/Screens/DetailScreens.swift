@@ -568,6 +568,9 @@ struct SuenoDetailScreen: View {
                         )
                     }
 
+                    // Latencia de Sueño y Alineación Circadiana (Apartado 1.7)
+                    CircadianAndSleepLatencyCard(store: store)
+
                     // 4-Hour Time-Aware Sleep-Focused AI Coaching Card
                     LiveAiCoachingCard(
                         section: .sueno,
@@ -1906,6 +1909,73 @@ struct EnergiaScreen: View {
         }
         .sheet(isPresented: $showInfoSheet) {
             MetricMethodologyInfoSheet(kind: .energy, onClose: { showInfoSheet = false })
+        }
+    }
+}
+
+// MARK: - Sleep Onset Latency & Circadian Midpoint Alignment Card (Apartado 1.7)
+
+struct CircadianAndSleepLatencyCard: View {
+    @ObservedObject var store: ImprovingStore
+
+    var body: some View {
+        let snap = store.circadianAndLatencySnapshot
+
+        BevelCard(cornerRadius: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: "compass.drawing")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(BevelColors.periwinkleStart)
+                    Text("LATENCIA Y ALINEACIÓN CIRCADIANA")
+                        .font(ImprovingFont.microLabel(10))
+                        .foregroundColor(BevelColors.textMuted)
+                    Spacer()
+                    if let align = snap.alignmentPct {
+                        Text("\(align)% alineado")
+                            .font(ImprovingFont.caption(11))
+                            .fontWeight(.bold)
+                            .monospacedDigit()
+                            .foregroundColor(align >= 78 ? BevelColors.greenPrimary : BevelColors.amberStart)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill((align >= 78 ? BevelColors.greenPrimary : BevelColors.amberStart).opacity(0.14)))
+                    }
+                }
+
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Latencia de sueño")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(snap.estimatedLatencyMinutes.map { "\($0) min" } ?? "--")
+                            .font(ImprovingFont.cardTitle(16))
+                            .monospacedDigit()
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(snap.latencyStatus)
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textSecondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Punto medio nocturno")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(snap.lastNightMidpointLabel ?? "--:--")
+                            .font(ImprovingFont.cardTitle(16))
+                            .monospacedDigit()
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(snap.typicalMidpointLabel.map { "Habitual: \($0)" } ?? "Calibrando base")
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textSecondary)
+                    }
+                }
+
+                Text(snap.summaryText)
+                    .font(ImprovingFont.caption(11.5))
+                    .foregroundColor(BevelColors.textMuted)
+            }
+            .padding(16)
         }
     }
 }

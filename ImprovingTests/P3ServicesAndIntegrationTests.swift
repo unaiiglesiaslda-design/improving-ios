@@ -518,4 +518,166 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         store.logCompletedStrengthSession(title: "Pierna Fuerza", durationMin: 50, kcal: 300, sets: sampleSets, rpe: 9)
         XCTAssertEqual(store.realHistory[todayIso]?.workouts.first?.rpe, 9)
     }
+
+    // MARK: - 7. Bevel & WHOOP Supremacy Suite (Apartado 1 [1,2,4,5,6,7,8] + Apartado 2 [1,2,3])
+
+    @MainActor
+    func testBevelAndWhoopSupremacySuiteEndToEnd() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("improving_supremacy_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let storeUrl = tmpDir.appendingPathComponent("store.json")
+        let store = ImprovingStore(persistenceURL: storeUrl)
+        store.hasImportedOrPairedRealData = true
+        let todayIso = store.isoFormatter.string(from: Date())
+        let cal = Calendar.current
+        let yesterdayIso = store.isoFormatter.string(from: cal.date(byAdding: .day, value: -1, to: Date())!)
+
+        // 1. Strength Builder Catalog, Epley 1RM, PRs & Progressive Overload + Auto-Deload scaling
+        XCTAssertGreaterThanOrEqual(StrengthCatalogExercise.all.count, 30)
+        let benchSet = StrengthLoggedSet(
+            id: "b1",
+            dateIso: yesterdayIso,
+            exercise: "Press banca con barra",
+            reps: 8,
+            weightKg: 80.0,
+            primaryMuscles: [.pectorales],
+            secondaryMuscles: [.triceps, .hombros],
+            completed: true,
+            setKind: .effective,
+            rpe: 8,
+            rir: 2
+        )
+        store.strengthLogs = [benchSet]
+        XCTAssertEqual(benchSet.estimatedOneRepMaxKg, 80.0 * (1.0 + 8.0 / 30.0), accuracy: 0.05)
+
+        let greenSnap = WhoopPhysiologyEngine.computeExercisePerformanceSnapshot(
+            exerciseName: "Press banca con barra",
+            logs: store.strengthLogs,
+            recoveryPct: 82,
+            deloadActive: false
+        )
+        XCTAssertEqual(greenSnap.suggestedWeightKg, 82.5, accuracy: 0.01)
+
+        let deloadSnap = WhoopPhysiologyEngine.computeExercisePerformanceSnapshot(
+            exerciseName: "Press banca con barra",
+            logs: store.strengthLogs,
+            recoveryPct: 82,
+            deloadActive: true
+        )
+        XCTAssertEqual(deloadSnap.suggestedWeightKg, 67.5, accuracy: 0.01) // 80 * 0.85 rounded to 2.5
+
+        // 2. Quantified Journal, Auto-Sync from Nutrition & 5h Caffeine Half-Life + Fasting Window
+        let morningMeal = NutritionMealItem(id: "m1", title: "Huevos y avena", timeLabel: "09:00", kcal: 520, proteinG: 36, carbsG: 50, fatG: 18, qualityScore: 90, fiberG: 8.5)
+        let lateCoffee = NutritionMealItem(id: "m2", title: "Doble espresso tarde", timeLabel: "18:00", kcal: 15, proteinG: 0, carbsG: 2, fatG: 0, qualityScore: 80, caffeineMg: 200)
+        let lateDinner = NutritionMealItem(id: "m3", title: "Salmón con arroz", timeLabel: "21:30", kcal: 680, proteinG: 48, carbsG: 65, fatG: 22, qualityScore: 88, fiberG: 6.0, omega3G: 2.1)
+        store.saveMeal(morningMeal, for: todayIso)
+        store.saveMeal(lateCoffee, for: todayIso)
+        store.saveMeal(lateDinner, for: todayIso)
+
+        // Auto-synced into Diario without double entry!
+        XCTAssertEqual(store.journalCheckinsByDate[todayIso]?["caffeine"], .yes)
+        XCTAssertEqual(store.journalQuantitiesByDate[todayIso]?["caffeine"] ?? 0, 200.0, accuracy: 0.1)
+        XCTAssertEqual(store.journalEventTime(habitId: "caffeine", for: todayIso), "18:00")
+        XCTAssertEqual(store.journalCheckinsByDate[todayIso]?["late_meal"], .yes)
+
+        let timing = WhoopPhysiologyEngine.computeCaffeineAndMealTiming(meals: store.mealsByDate[todayIso] ?? [], bedtimeMinutesOfDay: 23 * 60)
+        XCTAssertEqual(timing.estimatedCaffeineAtBedtimeMg, 100.0, accuracy: 0.5) // 5h elapsed (18:00 -> 23:00) = exactly 1 half-life (200 * 0.5 = 100 mg)
+        XCTAssertFalse(timing.caffeineClearForSleep)
+        XCTAssertEqual(timing.eatingWindowHours ?? 0, 12.5, accuracy: 0.15)
+        XCTAssertEqual(timing.fastingHours ?? 0, 11.5, accuracy: 0.15)
+        XCTAssertEqual(timing.hoursFromLastMealToBedtime ?? 0, 1.5, accuracy: 0.15)
+
+        // 3. Zero-Friction Nutrition: Repeat Yesterday, Multi-Ingredient Recipes & Quantified Micronutrients
+        store.mealsByDate[yesterdayIso] = [morningMeal]
+        store.mealsByDate[todayIso] = []
+        let copied = store.repeatYesterdayMeals(for: todayIso)
+        XCTAssertEqual(copied, 1)
+        XCTAssertEqual(store.mealsByDate[todayIso]?.count, 1)
+
+        let recipe = NutritionRecipeTemplate(
+            id: "rec_1",
+            title: "Bowl Longevidad",
+            emoji: "🥗",
+            servings: 2,
+            ingredients: [
+                NutritionRecipeIngredient(id: "ri1", name: "Pollo", grams: 300, kcal: 500, proteinG: 90, carbsG: 0, fatG: 12, fiberG: 0),
+                NutritionRecipeIngredient(id: "ri2", name: "Quinoa", grams: 200, kcal: 300, proteinG: 10, carbsG: 54, fatG: 4, fiberG: 7)
+            ]
+        )
+        store.saveNutritionRecipe(recipe)
+        store.logRecipeServing(recipe, servingsCount: 1.0, for: todayIso)
+        XCTAssertEqual(recipe.kcalPerServing, 400)
+        XCTAssertEqual(recipe.proteinPerServing, 50)
+        XCTAssertEqual(store.dailyMicronutrientsSnapshot.count, 8)
+
+        // 4. Coach Memory, Global Goal Modes & Morning Briefing
+        store.addCoachMemoryNote("Preparo media maratón en noviembre")
+        XCTAssertEqual(store.coachMemoryNotes.count, 1)
+        store.setGlobalGoalMode(.definicion)
+        let defKcal = store.effectiveNutritionGoals.kcal
+        store.setGlobalGoalMode(.volumen)
+        let volKcal = store.effectiveNutritionGoals.kcal
+        XCTAssertGreaterThan(volKcal, defKcal + 350)
+        XCTAssertEqual(store.morningBriefingSnapshot.goalMode, .volumen)
+
+        // 5. 9-Pillar Healthspan, Circadian Alignment, Menstrual Cycle Luteal Calibration & Overtraining Auto-Deload
+        let prof = UserPhysiologyProfile(ageYears: 32, sex: .female, weightKg: 62, heightCm: 168)
+        let bio9 = WhoopPhysiologyEngine.computeBiologicalAge(
+            profile: prof,
+            meanRhr: 50,
+            meanHrv: 82,
+            meanSleepHours: 7.9,
+            meanSteps: 10500,
+            vo2Max: 49,
+            sleepConsistencyPct: 90,
+            weeklyZone1To3Min: 180,
+            weeklyZone4To5Min: 35,
+            weeklyStrengthMin: 95
+        )
+        XCTAssertTrue(bio9.hasSleepConsistency && bio9.hasWeeklyZones && bio9.hasWeeklyStrength)
+        XCTAssertLessThan(bio9.sleepConsistencyDelta, 0)
+        XCTAssertLessThan(bio9.weeklyZonesDelta, 0)
+        XCTAssertLessThan(bio9.weeklyStrengthDelta, 0)
+
+        // Menstrual Cycle Luteal Phase (22 days after period start)
+        let lutealStart = cal.date(byAdding: .day, value: -21, to: Date())!
+        let cycleCfg = CycleTrackingSettings(
+            isEnabled: true,
+            lastPeriodStartIso: store.isoFormatter.string(from: lutealStart),
+            cycleLengthDays: 28,
+            periodDurationDays: 5
+        )
+        let cycleSnap = WhoopPhysiologyEngine.computeCyclePhase(settings: cycleCfg, referenceDate: Date())
+        XCTAssertEqual(cycleSnap?.phase, .luteal)
+        XCTAssertEqual(cycleSnap?.isLutealCalibrationActive, true)
+
+        // Overtraining detector & Clinical PDF/CSV Export
+        let overDays = [
+            RealBiometricDaySummary(dateIso: "2026-11-23", hrvMs: 74, sleepDebtMinutes: 85, workouts: [EffortEventItem(id: "w1", title: "HIIT", timeRange: "18:00", durationMin: 50, avgHrBpm: 165, strainScore: 16, strainPct: 80, categoryLabel: "Cardio", kcal: 550, rpe: 9)]),
+            RealBiometricDaySummary(dateIso: "2026-11-24", hrvMs: 65, sleepDebtMinutes: 90, workouts: [EffortEventItem(id: "w2", title: "Fuerza", timeRange: "18:00", durationMin: 60, avgHrBpm: 145, strainScore: 15, strainPct: 75, categoryLabel: "Fuerza", kcal: 420, rpe: 9)]),
+            RealBiometricDaySummary(dateIso: "2026-11-25", hrvMs: 56, sleepDebtMinutes: 95)
+        ]
+        let deloadAssess = WhoopPhysiologyEngine.computeOvertrainingDeloadAssessment(recentDays: overDays, acwr: 1.42, deloadModeActive: false)
+        XCTAssertEqual(deloadAssess.riskLevel, 2)
+        XCTAssertEqual(deloadAssess.deloadWeightFactor, 0.85, accuracy: 0.01)
+
+        let pdfUrl = try ClinicalReportExporter.generateClinicalPDF(store: store, periodDays: 30)
+        let pdfData = try Data(contentsOf: pdfUrl)
+        XCTAssertGreaterThan(pdfData.count, 1024)
+        let csvUrl = try ClinicalReportExporter.generateBiometricCSV(store: store, periodDays: 30)
+        let csvStr = try String(contentsOf: csvUrl, encoding: .utf8)
+        XCTAssertTrue(csvStr.contains("Fecha,Recuperacion_Pct"))
+
+        // Persistence round-trip for all new fields
+        store.updateCycleTrackingSettings(cycleCfg)
+        store.toggleAutoDeloadMode(true)
+        store.flushPersistenceNow()
+        let reloaded = ImprovingStore(persistenceURL: storeUrl)
+        XCTAssertEqual(reloaded.coachMemoryNotes, ["Preparo media maratón en noviembre"])
+        XCTAssertEqual(reloaded.globalGoalMode, .volumen)
+        XCTAssertEqual(reloaded.nutritionRecipes.count, 1)
+        XCTAssertTrue(reloaded.cycleTrackingSettings.isEnabled)
+        XCTAssertTrue(reloaded.autoDeloadModeActive)
+    }
 }

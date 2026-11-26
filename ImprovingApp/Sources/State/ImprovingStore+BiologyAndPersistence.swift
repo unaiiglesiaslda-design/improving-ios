@@ -160,6 +160,9 @@ extension ImprovingStore {
         let meanSteps = stepsVals.isEmpty ? nil : (stepsVals.reduce(0, +) / stepsVals.count)
 
         let hasData = meanRhr != nil || meanHrv != nil || meanSleep != nil || meanSteps != nil || vo2Val != nil || !biomarkers.isEmpty
+        let zoneProg = longevityZoneProgress
+        let hasZoneData = (zoneProg.weeklyZone1To3Minutes + zoneProg.weeklyZone4To5Minutes) > 0
+        let hasStrengthData = zoneProg.weeklyStrengthMinutes > 0
         let eval = WhoopPhysiologyEngine.computeBiologicalAge(
             profile: userProfile,
             meanRhr: meanRhr,
@@ -169,11 +172,53 @@ extension ImprovingStore {
             vo2Max: vo2Val,
             latestWeightKg: latestBodyWeightKg,
             latestBodyFatPct: latestBodyFatPct,
-            labBiomarkers: biomarkers
+            labBiomarkers: biomarkers,
+            sleepConsistencyPct: sleepConsistencyPct,
+            weeklyZone1To3Min: hasZoneData ? zoneProg.weeklyZone1To3Minutes : nil,
+            weeklyZone4To5Min: hasZoneData ? zoneProg.weeklyZone4To5Minutes : nil,
+            weeklyStrengthMin: hasStrengthData ? zoneProg.weeklyStrengthMinutes : nil
         )
         let res = (eval, hasData, meanRhr, meanHrv, meanSleep, meanSteps, vo2Val)
         cachedBioAge = res
         return res
+    }
+
+    var longevityZoneProgress: LongevityZoneProgressSnapshot {
+        let recent7 = trailingCalendarSummaries(days: 7)
+        var z13 = 0
+        var z45 = 0
+        var strengthSessions = 0
+        var strengthMin = 0
+        for item in recent7 {
+            guard let d = item.summary else { continue }
+            z13 += (d.hrZone1Minutes ?? 0) + (d.hrZone2Minutes ?? 0) + (d.hrZone3Minutes ?? 0)
+            z45 += (d.hrZone4Minutes ?? 0) + (d.hrZone5Minutes ?? 0)
+            let sWorkouts = d.workouts.filter { $0.categoryLabel == "Fuerza" || ($0.totalSets ?? 0) > 0 }
+            strengthSessions += sWorkouts.count
+            strengthMin += d.strengthMinutes ?? sWorkouts.reduce(0) { $0 + $1.durationMin }
+        }
+        let p1 = min(Double(z13) / 150.0, 1.0)
+        let p2 = min(Double(z45) / 25.0, 1.0)
+        let p3 = min(Double(strengthSessions) / 3.0, 1.0)
+        let overall = Int(((p1 * 0.45 + p2 * 0.25 + p3 * 0.30) * 100.0).rounded())
+        return LongevityZoneProgressSnapshot(
+            weeklyZone1To3Minutes: z13,
+            targetZone1To3Minutes: 150,
+            weeklyZone4To5Minutes: z45,
+            targetZone4To5Minutes: 25,
+            weeklyStrengthSessions: strengthSessions,
+            targetStrengthSessions: 3,
+            weeklyStrengthMinutes: strengthMin,
+            overallCompliancePct: overall
+        )
+    }
+
+    var circadianAndLatencySnapshot: CircadianAndLatencySnapshot {
+        let recent14 = trailingCalendarSummaries(days: 14).compactMap { $0.summary?.sleepSession }
+        return WhoopPhysiologyEngine.computeCircadianAndLatency(
+            currentDay: currentDaySummary,
+            recentSessions: recent14
+        )
     }
 
     /// WHOOP Healthspan-style Pace of Aging (0.3x ... 2.5x) comparing recent 30d vs prior 30d (days 31...60).
@@ -547,7 +592,13 @@ extension ImprovingStore {
             allowKeylessAIFallback: allowKeylessAIFallback,
             redactPIIFromAI: redactPIIFromAI,
             healthKitPreviouslyAuthorized: healthKitPreviouslyAuthorized,
-            napMinutesByDate: napMinutesByDate
+            napMinutesByDate: napMinutesByDate,
+            journalQuantitiesByDate: journalQuantitiesByDate,
+            coachMemoryNotes: coachMemoryNotes,
+            globalGoalMode: globalGoalMode,
+            nutritionRecipes: nutritionRecipes,
+            cycleTrackingSettings: cycleTrackingSettings,
+            autoDeloadModeActive: autoDeloadModeActive
         )
     }
 
@@ -701,6 +752,12 @@ extension ImprovingStore {
         if let redactOn = snap.redactPIIFromAI { redactPIIFromAI = redactOn }
         if let hkPrev = snap.healthKitPreviouslyAuthorized { healthKitPreviouslyAuthorized = hkPrev }
         if let naps = snap.napMinutesByDate { napMinutesByDate = naps }
+        if let jQuants = snap.journalQuantitiesByDate { journalQuantitiesByDate = jQuants }
+        if let cMem = snap.coachMemoryNotes { coachMemoryNotes = cMem }
+        if let gMode = snap.globalGoalMode { globalGoalMode = gMode }
+        if let nRecs = snap.nutritionRecipes { nutritionRecipes = nRecs }
+        if let cSet = snap.cycleTrackingSettings { cycleTrackingSettings = cSet }
+        if let dMode = snap.autoDeloadModeActive { autoDeloadModeActive = dMode }
 
         // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
         if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {

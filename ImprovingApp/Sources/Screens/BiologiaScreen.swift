@@ -211,6 +211,89 @@ struct BiologiaScreen: View {
                         }
                     }
 
+                    if let consPct = store.sleepConsistencyPct {
+                        bioCategoryCard(
+                            id: "sleep_consistency",
+                            icon: "calendar.badge.clock",
+                            ringPrimary: impactColor(bioEval.sleepConsistencyDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Consistencia circadiana del sueño",
+                            subtitle: "\(consPct)% regularidad horaria",
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.sleepConsistencyDelta
+                        ) {
+                            BioDotRangeSlider(
+                                title: "Consistencia de horario",
+                                valueLabel: "\(consPct)%",
+                                minLabel: "30%",
+                                maxLabel: "100%",
+                                deltaText: sliderDeltaNumber(bioEval.sleepConsistencyDelta),
+                                deltaUnit: "años",
+                                positionFrac: min(max(Double(consPct - 30) / 70.0, 0.05), 0.95),
+                                fillStartFrac: 0.64,
+                                fillEndFrac: 0.96,
+                                accentColor: BevelColors.periwinkleStart,
+                                deltaColor: impactColor(bioEval.sleepConsistencyDelta)
+                            )
+                        }
+                    }
+
+                    if bioEval.hasWeeklyZones {
+                        let zp = store.longevityZoneProgress
+                        bioCategoryCard(
+                            id: "weekly_zones",
+                            icon: "heart.text.square.fill",
+                            ringPrimary: impactColor(bioEval.weeklyZonesDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Zonas cardíacas semanales (Z1–3 y Z4–5)",
+                            subtitle: "Z1–3: \(zp.weeklyZone1To3Minutes)/150 min · Z4–5: \(zp.weeklyZone4To5Minutes)/25 min",
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.weeklyZonesDelta
+                        ) {
+                            BioDotRangeSlider(
+                                title: "Minutos aeróbicos (Z1–3) + pico VO₂ (Z4–5)",
+                                valueLabel: "\(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes) min/sem",
+                                minLabel: "0",
+                                maxLabel: "240m",
+                                deltaText: sliderDeltaNumber(bioEval.weeklyZonesDelta),
+                                deltaUnit: "años",
+                                positionFrac: min(max(Double(zp.weeklyZone1To3Minutes + zp.weeklyZone4To5Minutes) / 240.0, 0.05), 0.95),
+                                fillStartFrac: 0.60,
+                                fillEndFrac: 0.95,
+                                accentColor: BevelColors.greenPrimary,
+                                deltaColor: impactColor(bioEval.weeklyZonesDelta)
+                            )
+                        }
+                    }
+
+                    if bioEval.hasWeeklyStrength {
+                        let zp = store.longevityZoneProgress
+                        bioCategoryCard(
+                            id: "weekly_strength",
+                            icon: "figure.strengthtraining.traditional",
+                            ringPrimary: impactColor(bioEval.weeklyStrengthDelta),
+                            ringSecondary: BevelColors.trackGroove,
+                            title: "Fuerza muscular semanal",
+                            subtitle: "\(zp.weeklyStrengthMinutes) min (\(zp.weeklyStrengthSessions) sesiones / 7 d)",
+                            subtitleColor: BevelColors.textSecondary,
+                            deltaYears: bioEval.weeklyStrengthDelta
+                        ) {
+                            BioDotRangeSlider(
+                                title: "Tiempo semanal de fuerza",
+                                valueLabel: "\(zp.weeklyStrengthMinutes) min",
+                                minLabel: "0",
+                                maxLabel: "180m",
+                                deltaText: sliderDeltaNumber(bioEval.weeklyStrengthDelta),
+                                deltaUnit: "años",
+                                positionFrac: min(max(Double(zp.weeklyStrengthMinutes) / 180.0, 0.05), 0.95),
+                                fillStartFrac: 0.42,
+                                fillEndFrac: 0.92,
+                                accentColor: BevelColors.amberStart,
+                                deltaColor: impactColor(bioEval.weeklyStrengthDelta)
+                            )
+                        }
+                    }
+
                     if let avgSt = meanSteps {
                         bioCategoryCard(
                             id: "activity",
@@ -502,6 +585,9 @@ struct BiologiaScreen: View {
                                 .padding(16)
                         }
                     }
+
+                    // Seguimiento de Ciclo Menstrual y Calibración de Fase Lútea (Apartado 1.8)
+                    CycleTrackingBiologyCard(store: store)
                 }
                 .padding(.horizontal, 16)
             }
@@ -752,5 +838,166 @@ struct BiologiaScreen: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Menstrual Cycle Tracking & Luteal Phase Physiological Calibration Card (Apartado 1.8)
+
+struct CycleTrackingBiologyCard: View {
+    @ObservedObject var store: ImprovingStore
+    @State private var showCycleSheet: Bool = false
+
+    var body: some View {
+        let snap = store.currentCyclePhaseSnapshot
+        let isRelevant = store.userProfile.sex == .female || store.cycleTrackingSettings.isEnabled
+
+        VStack(alignment: .leading, spacing: 10) {
+            if let s = snap {
+                BevelCard(cornerRadius: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: s.phase.icon)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(BevelColors.coralHigh)
+                                .frame(width: 36, height: 36)
+                                .background(Circle().fill(BevelColors.coralSoftBg))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("CICLO FISIOLÓGICO · DÍA \(s.dayOfCycle)/\(s.cycleLengthDays)")
+                                    .font(ImprovingFont.microLabel(10))
+                                    .foregroundColor(BevelColors.textMuted)
+                                Text("Fase \(s.phase.rawValue)")
+                                    .font(ImprovingFont.cardTitle(15.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                            }
+                            Spacer()
+                            if s.isLutealCalibrationActive {
+                                Text("Calibración +\(String(format: "%.2f", locale: Locale(identifier: "es_ES"), s.expectedTempShiftC)) °C")
+                                    .font(ImprovingFont.microLabel(9.5))
+                                    .foregroundColor(BevelColors.greenPrimary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(BevelColors.greenSoftBg))
+                            }
+                            Button {
+                                showCycleSheet = true
+                            } label: {
+                                Image(systemName: "slider.horizontal.3")
+                                    .font(.system(size: 13.5, weight: .semibold))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                        }
+
+                        Text(s.trainingAdvice)
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(s.nutritionAdvice)
+                            .font(ImprovingFont.caption(11.5))
+                            .foregroundColor(BevelColors.textSecondary)
+                    }
+                    .padding(16)
+                }
+            } else if isRelevant {
+                Button { showCycleSheet = true } label: {
+                    BevelCard(cornerRadius: 20) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "drop.circle.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(BevelColors.coralHigh)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(BevelColors.coralSoftBg))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Activar seguimiento de ciclo menstrual")
+                                    .font(ImprovingFont.cardTitle(14.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Adapta entrenamiento y evita falsas alertas de temperatura en fase lútea")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.system(size: 12)).foregroundColor(BevelColors.textMuted)
+                        }
+                        .padding(14)
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button { showCycleSheet = true } label: {
+                    HStack {
+                        Image(systemName: "drop.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text("Configurar seguimiento de ciclo fisiológico (opcional)")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textMuted)
+                        Spacer()
+                    }
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $showCycleSheet) {
+            CycleTrackingSettingsSheet(store: store, onClose: { showCycleSheet = false })
+        }
+    }
+}
+
+private struct CycleTrackingSettingsSheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onClose: () -> Void
+
+    @State private var isEnabled: Bool = false
+    @State private var lastStartDate: Date = Date()
+    @State private var cycleLength: Int = 28
+    @State private var periodDuration: Int = 5
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Seguimiento de ciclo y calibración térmica") {
+                    Toggle("Activar seguimiento de ciclo", isOn: $isEnabled)
+                    DatePicker("Inicio del último periodo", selection: $lastStartDate, in: ...Date(), displayedComponents: .date)
+                    Stepper("Duración media del ciclo: \(cycleLength) días", value: $cycleLength, in: 21...38)
+                    Stepper("Duración de fase menstrual: \(periodDuration) días", value: $periodDuration, in: 3...8)
+                }
+                Section {
+                    Text("Durante la fase lútea la temperatura de muñeca sube de forma natural (~+0,3 °C). Cuando está activo, el Monitor de Salud calibra tu banda térmica para no confundir la fase lútea con fiebre o sobreentrenamiento.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Ciclo Fisiológico")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancelar", action: onClose)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Guardar") {
+                        let iso = store.isoFormatter.string(from: lastStartDate)
+                        store.updateCycleTrackingSettings(
+                            CycleTrackingSettings(
+                                isEnabled: isEnabled,
+                                lastPeriodStartIso: iso,
+                                cycleLengthDays: cycleLength,
+                                periodDurationDays: periodDuration
+                            )
+                        )
+                        onClose()
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+            .onAppear {
+                let cfg = store.cycleTrackingSettings
+                isEnabled = cfg.isEnabled || store.userProfile.sex == .female
+                cycleLength = cfg.cycleLengthDays
+                periodDuration = cfg.periodDurationDays
+                if let dt = store.isoFormatter.date(from: cfg.lastPeriodStartIso) {
+                    lastStartDate = dt
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

@@ -245,6 +245,9 @@ struct FitnessScreen: View {
                         onAskMore: { onNavigate(.askBevel) }
                     )
 
+                    // 2B. Predictive Overtraining & 1-Tap Auto-Deload Card (Apartado 2.2)
+                    OvertrainingAutoDeloadCard(store: store)
+
                     // 3. Actividad de hoy (Exact match to Screenshot 1!)
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 8) {
@@ -873,21 +876,44 @@ struct StrengthSessionLoggerSheet: View {
     @State private var durationMin: Int = 45
     @State private var kcalEstimate: Int = 260
     @State private var setsDraft: [StrengthLoggedSet] = []
-    @State private var newExerciseName: String = "Press banca"
-    @State private var newReps: Int = 10
+    @State private var newExerciseName: String = "Press banca con barra"
+    @State private var newReps: Int = 8
     @State private var newWeight: Double = 60
     @State private var newMuscle: MuscleGroupKind = .pectorales
+    @State private var newSecondaryMuscles: [MuscleGroupKind] = [.triceps, .hombros]
+    @State private var newSetKind: StrengthSetKind = .effective
+    @State private var newSetRir: Int = 2
     @State private var rpeDraft: Int = 7
+    @State private var showCatalogPicker: Bool = false
 
     var body: some View {
+        let perfSnap = store.exercisePerformanceSnapshot(for: newExerciseName)
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     BevelCard(cornerRadius: 16) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("SESIÓN ACTUAL")
-                                .font(ImprovingFont.microLabel(10.5))
-                                .foregroundColor(BevelColors.textMuted)
+                            HStack {
+                                Text("SESIÓN ACTUAL")
+                                    .font(ImprovingFont.microLabel(10.5))
+                                    .foregroundColor(BevelColors.textMuted)
+                                Spacer()
+                                if let liveHr = store.whoopLiveHrBpm, liveHr > 35 {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "heart.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(BevelColors.coralHigh)
+                                        Text("\(liveHr) ppm BLE en vivo")
+                                            .font(ImprovingFont.caption(11))
+                                            .fontWeight(.bold)
+                                            .monospacedDigit()
+                                            .foregroundColor(BevelColors.coralHigh)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(BevelColors.coralHigh.opacity(0.14)))
+                                }
+                            }
                             TextField("Nombre de la sesión", text: $sessionTitle)
                                 .font(ImprovingFont.cardTitle(15))
                                 .foregroundColor(BevelColors.textPrimary)
@@ -936,17 +962,38 @@ struct StrengthSessionLoggerSheet: View {
                         .padding(14)
                     }
 
-                    // Add exercise set builder
+                    // Add exercise set builder with Searchable Catalog, PR/1RM & Progressive Overload
                     BevelCard(cornerRadius: 16) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("AÑADIR SERIE")
-                                .font(ImprovingFont.microLabel(10.5))
-                                .foregroundColor(BevelColors.textMuted)
+                            HStack {
+                                Text("CONSTRUCTOR DE SERIES Y SOBRECARGA")
+                                    .font(ImprovingFont.microLabel(10.5))
+                                    .foregroundColor(BevelColors.textMuted)
+                                Spacer()
+                                Button {
+                                    showCatalogPicker = true
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 11, weight: .bold))
+                                        Text("Catálogo (\(StrengthCatalogExercise.all.count))")
+                                            .font(ImprovingFont.caption(11.5))
+                                            .fontWeight(.bold)
+                                    }
+                                    .foregroundColor(BevelColors.skyBlue)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Capsule().fill(BevelColors.skyBlue.opacity(0.14)))
+                                }
+                            }
+
                             TextField("Ejercicio (ej. Press inclinado, Dominadas…)", text: $newExerciseName)
                                 .font(ImprovingFont.body(14))
                                 .foregroundColor(BevelColors.textPrimary)
                                 .padding(10)
                                 .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+
+                            progressiveOverloadBanner(perfSnap)
 
                             HStack(spacing: 10) {
                                 Picker("Músculo", selection: $newMuscle) {
@@ -956,23 +1003,52 @@ struct StrengthSessionLoggerSheet: View {
                                 }
                                 .pickerStyle(.menu)
                                 .tint(BevelColors.skyBlue)
+
+                                Picker("Tipo", selection: $newSetKind) {
+                                    ForEach(StrengthSetKind.allCases) { k in
+                                        Text(k.rawValue).tag(k)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(BevelColors.amberStart)
+
                                 Spacer()
-                                Stepper("\(newReps) reps", value: $newReps, in: 1...50)
-                                    .labelsHidden()
-                                Text("\(newReps) reps · \(Int(newWeight)) kg")
-                                    .font(ImprovingFont.caption(12))
-                                    .monospacedDigit()
-                                    .foregroundColor(BevelColors.textPrimary)
+                                Picker("RIR", selection: $newSetRir) {
+                                    ForEach(0...4, id: \.self) { r in
+                                        Text("RIR \(r)").tag(r)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(BevelColors.periwinkleStart)
                             }
 
-                            HStack(spacing: 8) {
-                                Button("-5 kg") { newWeight = max(0, newWeight - 5) }
-                                    .font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textPrimary)
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                            HStack(spacing: 10) {
+                                Stepper("\(newReps) reps", value: $newReps, in: 1...50)
+                                    .labelsHidden()
+                                Text("\(newReps) reps · \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), newWeight)) kg")
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Spacer()
+                                let live1RM = newReps <= 1 ? newWeight : newWeight * (1.0 + Double(min(newReps, 20)) / 30.0)
+                                Text("1RM est. \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), live1RM)) kg")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .monospacedDigit()
+                                    .foregroundColor(live1RM > perfSnap.bestOneRepMaxKg && perfSnap.bestOneRepMaxKg > 0 ? BevelColors.greenPrimary : BevelColors.textMuted)
+                            }
+
+                            HStack(spacing: 6) {
+                                Button("-2,5 kg") { newWeight = max(0, newWeight - 2.5) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
                                     .background(Capsule().fill(BevelColors.cardSubtle))
-                                Button("+5 kg") { newWeight = min(400, newWeight + 5) }
-                                    .font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textPrimary)
-                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                Button("+2,5 kg") { newWeight = min(450, newWeight + 2.5) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
+                                    .background(Capsule().fill(BevelColors.cardSubtle))
+                                Button("+5 kg") { newWeight = min(450, newWeight + 5) }
+                                    .font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textPrimary)
+                                    .padding(.horizontal, 9).padding(.vertical, 6)
                                     .background(Capsule().fill(BevelColors.cardSubtle))
                                 Spacer()
                                 Button {
@@ -985,10 +1061,14 @@ struct StrengthSessionLoggerSheet: View {
                                             reps: newReps,
                                             weightKg: newWeight,
                                             primaryMuscles: [newMuscle],
-                                            secondaryMuscles: [],
-                                            completed: true
+                                            secondaryMuscles: newSecondaryMuscles,
+                                            completed: true,
+                                            setKind: newSetKind,
+                                            rpe: max(1, 10 - newSetRir),
+                                            rir: newSetRir
                                         )
                                     )
+                                    AppHaptics.selection()
                                 } label: {
                                     Text("+ Añadir serie")
                                         .font(ImprovingFont.caption(12.5))
@@ -1004,29 +1084,7 @@ struct StrengthSessionLoggerSheet: View {
                     }
 
                     ForEach($setsDraft) { $s in
-                        BevelCard(cornerRadius: 16) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(s.exercise)
-                                        .font(ImprovingFont.cardTitle(14.5))
-                                        .foregroundColor(BevelColors.textPrimary)
-                                    Text("\(s.reps) reps · \(Int(s.weightKg)) kg · \(s.primaryMuscles.map(\.rawValue).joined(separator: ", "))")
-                                        .font(ImprovingFont.caption(12))
-                                        .foregroundColor(BevelColors.textSecondary)
-                                }
-                                Spacer()
-                                Button(s.completed ? "✓ Hecho" : "Marcar") {
-                                    s.completed.toggle()
-                                }
-                                .font(ImprovingFont.caption(12))
-                                .fontWeight(.bold)
-                                .foregroundColor(s.completed ? BevelColors.greenPrimary : BevelColors.textSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(RoundedRectangle(cornerRadius: 10).fill(s.completed ? BevelColors.greenSoftBg : BevelColors.trackGroove))
-                            }
-                            .padding(14)
-                        }
+                        loggedSetCard(set: $s)
                     }
 
                     Button {
@@ -1053,32 +1111,153 @@ struct StrengthSessionLoggerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
-            .navigationTitle("Registrar entrenamiento")
+            .navigationTitle("Strength Builder")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cerrar", action: onClose)
                 }
             }
+            .sheet(isPresented: $showCatalogPicker) {
+                StrengthCatalogPickerSheet { chosen in
+                    newExerciseName = chosen.name
+                    if let firstM = chosen.primaryMuscles.first {
+                        newMuscle = firstM
+                    }
+                    newSecondaryMuscles = chosen.secondaryMuscles
+                    let snap = store.exercisePerformanceSnapshot(for: chosen.name)
+                    newWeight = snap.suggestedWeightKg
+                    newReps = snap.suggestedReps
+                    showCatalogPicker = false
+                }
+            }
             .onAppear {
                 if let r = routine {
                     sessionTitle = r.name
                     setsDraft = r.exercises.flatMap { ex in
-                        (0..<max(ex.targetSets, 1)).map { _ in
+                        let snap = store.exercisePerformanceSnapshot(for: ex.name)
+                        let wToUse = snap.totalHistoricalSets > 0 ? snap.suggestedWeightKg : ex.defaultWeightKg
+                        let rToUse = snap.totalHistoricalSets > 0 ? snap.suggestedReps : ex.targetReps
+                        return (0..<max(ex.targetSets, 1)).map { _ in
                             StrengthLoggedSet(
                                 id: UUID().uuidString,
                                 dateIso: store.selectedDateIso,
                                 exercise: ex.name,
-                                reps: ex.targetReps,
-                                weightKg: ex.defaultWeightKg,
+                                reps: rToUse,
+                                weightKg: wToUse,
                                 primaryMuscles: ex.primaryMuscles,
                                 secondaryMuscles: ex.secondaryMuscles,
                                 completed: true
                             )
                         }
                     }
+                } else {
+                    let initialSnap = store.exercisePerformanceSnapshot(for: newExerciseName)
+                    if initialSnap.totalHistoricalSets > 0 {
+                        newWeight = initialSnap.suggestedWeightKg
+                        newReps = initialSnap.suggestedReps
+                    }
                 }
             }
+        }
+    }
+
+    private func progressiveOverloadBanner(_ snap: ExercisePerformanceSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                HStack(spacing: 5) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(BevelColors.greenPrimary)
+                    Text(snap.progressionBadge.uppercased())
+                        .font(ImprovingFont.microLabel(10))
+                        .foregroundColor(BevelColors.greenPrimary)
+                }
+                Spacer()
+                if snap.bestOneRepMaxKg > 0 {
+                    Text("PR 1RM: \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), snap.bestOneRepMaxKg)) kg · Máx: \(Int(snap.bestWeightKg)) kg")
+                        .font(ImprovingFont.caption(11))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                        .foregroundColor(BevelColors.amberStart)
+                }
+            }
+
+            if let lw = snap.lastWeightKg, let lr = snap.lastReps, let lIso = snap.lastDateIso {
+                Text("Última sesión (\(lIso)): \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), lw)) kg × \(lr) reps (\(snap.totalHistoricalSets) series históricas)")
+                    .font(ImprovingFont.caption(11.5))
+                    .foregroundColor(BevelColors.textSecondary)
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                Text(snap.progressionAdvice)
+                    .font(ImprovingFont.caption(11.5))
+                    .foregroundColor(BevelColors.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Button {
+                    newWeight = snap.suggestedWeightKg
+                    newReps = snap.suggestedReps
+                    AppHaptics.selection()
+                } label: {
+                    Text("Aplicar \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), snap.suggestedWeightKg))kg × \(snap.suggestedReps)")
+                        .font(ImprovingFont.caption(11))
+                        .fontWeight(.bold)
+                        .monospacedDigit()
+                        .foregroundColor(BevelColors.greenPrimary)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(BevelColors.greenSoftBg))
+                }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(BevelColors.cardSubtle))
+    }
+
+    private func loggedSetCard(set: Binding<StrengthLoggedSet>) -> some View {
+        let s = set.wrappedValue
+        let histSnap = store.exercisePerformanceSnapshot(for: s.exercise)
+        let isNewPr = s.setKind != .warmup && histSnap.bestOneRepMaxKg > 0 && s.estimatedOneRepMaxKg > histSnap.bestOneRepMaxKg + 0.2
+        return BevelCard(cornerRadius: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(s.exercise)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text(s.setKind.shortBadge)
+                            .font(ImprovingFont.microLabel(9.5))
+                            .foregroundColor(s.setKind == .warmup ? BevelColors.textMuted : BevelColors.amberStart)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(BevelColors.cardSubtle))
+                        if isNewPr {
+                            Text("🏆 NUEVO PR")
+                                .font(ImprovingFont.microLabel(9.5))
+                                .foregroundColor(BevelColors.greenPrimary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(BevelColors.greenSoftBg))
+                        }
+                    }
+                    Text("\(s.reps) reps · \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), s.weightKg)) kg · 1RM \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), s.estimatedOneRepMaxKg)) kg\(s.rir.map { " · RIR \($0)" } ?? "")")
+                        .font(ImprovingFont.caption(12))
+                        .monospacedDigit()
+                        .foregroundColor(BevelColors.textSecondary)
+                }
+                Spacer()
+                Button(s.completed ? "✓ Hecho" : "Marcar") {
+                    set.wrappedValue.completed.toggle()
+                }
+                .font(ImprovingFont.caption(12))
+                .fontWeight(.bold)
+                .foregroundColor(s.completed ? BevelColors.greenPrimary : BevelColors.textSecondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 10).fill(s.completed ? BevelColors.greenSoftBg : BevelColors.trackGroove))
+            }
+            .padding(14)
         }
     }
 
@@ -1088,7 +1267,7 @@ struct StrengthSessionLoggerSheet: View {
         let liveEst = WhoopPhysiologyEngine.computeWorkoutStrain(
             durationMin: max(durationMin, 5),
             kcal: kcalEstimate,
-            avgHrBpm: 0,
+            avgHrBpm: store.whoopLiveHrBpm ?? 0,
             rhrBpm: store.restingHrBpm > 30 ? store.restingHrBpm : 55.0,
             maxHrBpm: Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: store.userProfile)),
             banisterB: store.userProfile.sex.banisterB,
@@ -1127,6 +1306,143 @@ struct StrengthSessionLoggerSheet: View {
             )
             .tint(rpeDraft >= 8 ? BevelColors.coralHigh : BevelColors.amberStart)
             .accessibilityLabel("Esfuerzo percibido RPE del 1 al 10")
+        }
+    }
+}
+
+// MARK: - Searchable Strength Catalog & Predictive Overtraining / Auto-Deload Views
+
+struct OvertrainingAutoDeloadCard: View {
+    @ObservedObject var store: ImprovingStore
+
+    var body: some View {
+        let assess = store.overtrainingAssessment
+        let accent: Color = assess.riskLevel == 2 ? BevelColors.coralHigh : (assess.riskLevel == 1 ? BevelColors.amberStart : BevelColors.greenPrimary)
+
+        BevelCard(cornerRadius: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: assess.riskLevel == 2 ? "bolt.shield.fill" : "waveform.path.ecg.rectangle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(accent)
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(accent.opacity(0.14)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("FATIGA NEUROMUSCULAR Y AUTO-DELOAD")
+                            .font(ImprovingFont.microLabel(10))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(assess.statusTitle)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                    }
+                    Spacer()
+                    Button {
+                        AppHaptics.selection()
+                        store.toggleAutoDeloadMode()
+                    } label: {
+                        Text(store.autoDeloadModeActive ? "Descarga: ON" : "Descarga −15%")
+                            .font(ImprovingFont.caption(11.5))
+                            .fontWeight(.bold)
+                            .foregroundColor(store.autoDeloadModeActive ? .white : accent)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(store.autoDeloadModeActive ? accent : accent.opacity(0.14)))
+                    }
+                }
+
+                HStack(spacing: 14) {
+                    Label(String(format: "ACWR %.2f", locale: Locale(identifier: "es_ES"), assess.acwr), systemImage: "gauge.with.dots.needle.67percent")
+                    Label(String(format: "VFC 3d %+.1f ms", locale: Locale(identifier: "es_ES"), assess.hrv3DaySlopeMs), systemImage: "waveform.path.ecg")
+                    Label(String(format: "RPE %.1f", locale: Locale(identifier: "es_ES"), assess.recentAvgRpe), systemImage: "flame.fill")
+                }
+                .font(ImprovingFont.caption(11.5))
+                .monospacedDigit()
+                .foregroundColor(BevelColors.textSecondary)
+
+                Text(assess.recommendation)
+                    .font(ImprovingFont.caption(12))
+                    .foregroundColor(BevelColors.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+        }
+    }
+}
+
+private struct StrengthCatalogPickerSheet: View {
+    let onSelect: (StrengthCatalogExercise) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText: String = ""
+    @State private var selectedCategory: String = "Todos"
+
+    private let categories = ["Todos", "Empuje", "Tirón", "Pierna", "Core y Accesorios"]
+
+    private var filteredExercises: [StrengthCatalogExercise] {
+        StrengthCatalogExercise.all.filter { ex in
+            let catOk = selectedCategory == "Todos" || ex.category == selectedCategory
+            let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if q.isEmpty { return catOk }
+            let hay = "\(ex.name) \(ex.equipment) \(ex.primaryMuscles.map(\.rawValue).joined(separator: " "))".folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+            let needle = q.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+            return catOk && hay.contains(needle)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 10) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(categories, id: \.self) { cat in
+                            let sel = selectedCategory == cat
+                            Button {
+                                selectedCategory = cat
+                            } label: {
+                                Text(cat)
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(sel ? .white : BevelColors.textSecondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Capsule().fill(sel ? BevelColors.indigoEnd : BevelColors.card))
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+
+                List(filteredExercises) { ex in
+                    Button {
+                        onSelect(ex)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(ex.name)
+                                    .font(ImprovingFont.cardTitle(14.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("\(ex.category) · \(ex.equipment) · \(ex.primaryMuscles.map(\.rawValue).joined(separator: ", "))")
+                                    .font(ImprovingFont.caption(12))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            Spacer()
+                            Text("\(Int(ex.defaultWeightKg)) kg × \(ex.defaultReps)")
+                                .font(ImprovingFont.caption(12))
+                                .monospacedDigit()
+                                .foregroundColor(BevelColors.skyBlue)
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
+            .background(BevelColors.canvas)
+            .searchable(text: $searchText, prompt: "Buscar ejercicio, músculo o material…")
+            .navigationTitle("Catálogo de Ejercicios")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cerrar") { dismiss() }
+                }
+            }
         }
     }
 }

@@ -1,8 +1,10 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import Speech
+import AVFoundation
 
-// MARK: - Ask Improving AI Screen (P6: Persisted Threads + Photo Attachments + Copy + Dynamic Suggestions!)
+// MARK: - Ask Improving AI Screen (P6 + Apartado 1.4: Long-Term Memory + Voice Dictation + Threads + Photo Attachments!)
 
 struct AskBevelScreen: View {
     @ObservedObject var store: ImprovingStore
@@ -14,7 +16,9 @@ struct AskBevelScreen: View {
     @State private var pendingImage: UIImage? = nil
     @State private var pendingJpegData: Data? = nil
     @State private var showHistorySheet: Bool = false
+    @State private var showMemorySheet: Bool = false
     @State private var copiedMessageId: String? = nil
+    @StateObject private var speechRecognizer = SpeechDictationController()
 
     private var hasUserConversation: Bool {
         !store.coachMessages.isEmpty
@@ -70,6 +74,29 @@ struct AskBevelScreen: View {
                             .background(Circle().fill(BevelColors.glassChromeFill))
                             .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                     }
+
+                    Button {
+                        showMemorySheet = true
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "brain.head.profile")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(BevelColors.skyBlue)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(BevelColors.glassChromeFill))
+                                .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                            if !store.coachMemoryNotes.isEmpty {
+                                Text("\(min(store.coachMemoryNotes.count, 99))")
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4.5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Capsule().fill(BevelColors.greenPrimary))
+                                    .offset(x: 3, y: -3)
+                            }
+                        }
+                    }
+                    .accessibilityLabel("Memoria a largo plazo del Coach")
 
                     Spacer()
 
@@ -296,6 +323,26 @@ struct AskBevelScreen: View {
                             .background(Capsule().fill(Color.white.opacity(0.08)))
                         }
 
+                        Button {
+                            AppHaptics.selection()
+                            speechRecognizer.toggleRecording { transcript in
+                                inputText = transcript
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: speechRecognizer.isRecording ? "waveform.circle.fill" : "mic.fill")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                Text(speechRecognizer.isRecording ? "Escuchando…" : "Voz")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.semibold)
+                            }
+                            .foregroundColor(speechRecognizer.isRecording ? .white : BevelColors.skyBlue)
+                            .padding(.horizontal, 11)
+                            .frame(height: 34)
+                            .background(Capsule().fill(speechRecognizer.isRecording ? BevelColors.coralHigh : Color.white.opacity(0.08)))
+                        }
+                        .accessibilityLabel("Dictar por voz")
+
                         Spacer()
 
                         if store.isCoachThinking {
@@ -364,6 +411,14 @@ struct AskBevelScreen: View {
                 },
                 onClose: { showHistorySheet = false }
             )
+        }
+        .sheet(isPresented: $showMemorySheet) {
+            CoachLongTermMemorySheet(store: store, onClose: { showMemorySheet = false })
+        }
+        .onDisappear {
+            if speechRecognizer.isRecording {
+                speechRecognizer.stopRecording()
+            }
         }
     }
 
@@ -704,5 +759,209 @@ private struct CoachChatHistorySheet: View {
         } message: {
             Text("Se eliminará permanentemente «\(pendingDeleteThread?.title ?? "")».")
         }
+    }
+}
+
+// MARK: - Long-Term Coach Memory Sheet & Native iOS Speech Dictation Controller (Apartado 1.4)
+
+struct CoachLongTermMemorySheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onClose: () -> Void
+    @State private var draftNote: String = ""
+
+    private let quickTemplates = [
+        "Entreno fuerza 4 días/semana por la mañana",
+        "Objetivo: bajar grasa manteniendo masa muscular",
+        "Molestia ocasional en hombro derecho al hacer press",
+        "Evito lactosa y cenas después de las 21:00",
+        "Priorizo ≥150 min/semana de Zona 2 y longevidad"
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "brain.head.profile")
+                                    .foregroundColor(BevelColors.skyBlue)
+                                Text("MEMORIA PERMANENTE DEL COACH IA")
+                                    .font(ImprovingFont.microLabel(10))
+                                    .foregroundColor(BevelColors.textMuted)
+                            }
+                            Text("Todo lo que guardes aquí (lesiones, objetivos deportivos, alergias, horarios) se recuerda en cada conversación y ajusta las recomendaciones diarias.")
+                                .font(ImprovingFont.caption(12.5))
+                                .foregroundColor(BevelColors.textSecondary)
+
+                            HStack(spacing: 8) {
+                                TextField("Ej. Prepara media maratón en noviembre…", text: $draftNote)
+                                    .font(ImprovingFont.body(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+                                Button {
+                                    store.addCoachMemoryNote(draftNote)
+                                    draftNote = ""
+                                    AppHaptics.selection()
+                                } label: {
+                                    Text("Añadir")
+                                        .font(ImprovingFont.caption(12.5))
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 13)
+                                        .padding(.vertical, 10)
+                                        .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.indigoEnd))
+                                }
+                                .disabled(draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                        }
+                        .padding(14)
+                    }
+
+                    Text("Sugerencias rápidas")
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textMuted)
+
+                    ForEach(quickTemplates, id: \.self) { tpl in
+                        if !store.coachMemoryNotes.contains(tpl) {
+                            Button {
+                                store.addCoachMemoryNote(tpl)
+                                AppHaptics.selection()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "plus.circle.fill")
+                                        .foregroundColor(BevelColors.skyBlue)
+                                    Text(tpl)
+                                        .font(ImprovingFont.caption(12.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Spacer()
+                                }
+                                .padding(11)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.card))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Text("Recuerdos activos (\(store.coachMemoryNotes.count))")
+                        .font(ImprovingFont.sectionTitle(16))
+                        .foregroundColor(BevelColors.textPrimary)
+                        .padding(.top, 6)
+
+                    if store.coachMemoryNotes.isEmpty {
+                        BevelCard(cornerRadius: 16) {
+                            Text("Todavía no has guardado notas permanentes en la memoria del Coach.")
+                                .font(ImprovingFont.caption(12.5))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .padding(14)
+                        }
+                    } else {
+                        ForEach(Array(store.coachMemoryNotes.enumerated()), id: \.offset) { idx, note in
+                            BevelCard(cornerRadius: 16) {
+                                HStack {
+                                    Image(systemName: "checkmark.seal.fill")
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                    Text(note)
+                                        .font(ImprovingFont.body(13.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Spacer()
+                                    Button {
+                                        store.removeCoachMemoryNote(at: idx)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(BevelColors.coralHigh)
+                                    }
+                                }
+                                .padding(13)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas)
+            .navigationTitle("Memoria del Coach")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cerrar", action: onClose)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+final class SpeechDictationController: ObservableObject {
+    @Published var isRecording: Bool = false
+    private let audioEngine = AVAudioEngine()
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "es-ES"))
+
+    func toggleRecording(onTranscript: @escaping (String) -> Void) {
+        if isRecording {
+            stopRecording()
+            return
+        }
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            guard status == .authorized else { return }
+            DispatchQueue.main.async {
+                self?.startSession(onTranscript: onTranscript)
+            }
+        }
+    }
+
+    private func startSession(onTranscript: @escaping (String) -> Void) {
+        stopRecording()
+        let session = AVAudioSession.sharedInstance()
+        guard (try? session.setCategory(.record, mode: .measurement, options: .duckOthers)) != nil,
+              (try? session.setActive(true, options: .notifyOthersOnDeactivation)) != nil else {
+            return
+        }
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        self.recognitionRequest = req
+
+        let inputNode = audioEngine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            req.append(buffer)
+        }
+        audioEngine.prepare()
+        guard (try? audioEngine.start()) != nil else {
+            inputNode.removeTap(onBus: 0)
+            return
+        }
+        isRecording = true
+        recognitionTask = speechRecognizer?.recognitionTask(with: req) { [weak self] result, error in
+            if let r = result {
+                let text = r.bestTranscription.formattedString
+                DispatchQueue.main.async {
+                    onTranscript(text)
+                }
+            }
+            if error != nil || (result?.isFinal == true) {
+                DispatchQueue.main.async {
+                    self?.stopRecording()
+                }
+            }
+        }
+    }
+
+    func stopRecording() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        isRecording = false
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
