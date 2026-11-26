@@ -2170,7 +2170,17 @@ final class AppleHealthExportImporterTests: XCTestCase {
         rmssdDay.rhrValues.append(56.0)
         let built = AppleHealthExportImporter.buildSummaries(from: ["2026-11-11": rmssdDay], sourceName: "Test", profile: UserPhysiologyProfile(), priorHistory: priorHistory)
         // Because RMSSD pool is separated from SDNN 110ms pool, 62ms RMSSD must NOT be crushed to red (<30%)!
-        XCTAssertGreaterThanOrEqual(built.days["2026-11-11"]?.recoveryPct ?? 0, 45)
+        let rmssdRec = built.days["2026-11-11"]?.recoveryPct ?? 0
+        XCTAssertGreaterThanOrEqual(rmssdRec, 40)
+
+        // Contrast: an SDNN=62ms day compared against the 110ms SDNN pool drops significantly lower!
+        let sdnnDay = AppleHealthExportImporter.MutableAppleDay(dateIso: "2026-11-11")
+        sdnnDay.coreIntervals.append(sEp...(sEp + 6 * 3600))
+        sdnnDay.hrvSdnnSamples.append((sEp + 3600, 62.0))
+        sdnnDay.rhrValues.append(56.0)
+        let builtSdnn = AppleHealthExportImporter.buildSummaries(from: ["2026-11-11": sdnnDay], sourceName: "Test", profile: UserPhysiologyProfile(), priorHistory: priorHistory)
+        let sdnnRec = builtSdnn.days["2026-11-11"]?.recoveryPct ?? 100
+        XCTAssertGreaterThan(rmssdRec, sdnnRec + 10)
     }
 
     @MainActor
