@@ -2176,7 +2176,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         // Contrast: an SDNN=62ms day compared against the 110ms SDNN pool drops significantly lower!
         let sdnnDay = AppleHealthExportImporter.MutableAppleDay(dateIso: "2026-11-11")
         sdnnDay.coreIntervals.append(sEp...(sEp + 6 * 3600))
-        sdnnDay.hrvSdnnSamples.append((sEp + 3600, 62.0))
+        sdnnDay.hrvSamples.append((sEp + 3600, 62.0))
         sdnnDay.rhrValues.append(56.0)
         let builtSdnn = AppleHealthExportImporter.buildSummaries(from: ["2026-11-11": sdnnDay], sourceName: "Test", profile: UserPhysiologyProfile(), priorHistory: priorHistory)
         let sdnnRec = builtSdnn.days["2026-11-11"]?.recoveryPct ?? 100
