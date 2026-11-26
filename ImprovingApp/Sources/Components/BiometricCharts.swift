@@ -73,7 +73,7 @@ struct HealthMetricBaselineChart: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 186)
-            .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 16).fill(BevelColors.chartTrackSubtle.opacity(0.45)))
         } else {
             let minVal = min(realVals.min() ?? bandLow, bandLow)
             let maxVal = max(realVals.max() ?? bandHigh, bandHigh)
@@ -105,7 +105,7 @@ struct HealthMetricBaselineChart: View {
                                     var gPath = Path()
                                     gPath.move(to: CGPoint(x: 0, y: y))
                                     gPath.addLine(to: CGPoint(x: size.width, y: y))
-                                    ctx.stroke(gPath, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
+                                    ctx.stroke(gPath, with: .color(BevelColors.chartGridLine), lineWidth: 1)
                                 }
 
                                 // Normal target range band
@@ -405,7 +405,7 @@ struct SteppedCumulativeComparisonChart: View {
                         var gp = Path()
                         gp.move(to: CGPoint(x: 0, y: sz.height * f))
                         gp.addLine(to: CGPoint(x: drawW, y: sz.height * f))
-                        ctx.stroke(gp, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
+                        ctx.stroke(gp, with: .color(BevelColors.chartGridLine), lineWidth: 1)
                     }
 
                     let prevStep = drawW / CGFloat(max(safePrev.count - 1, 1))
@@ -414,7 +414,7 @@ struct SteppedCumulativeComparisonChart: View {
                         let p = CGPoint(x: CGFloat(i) * prevStep, y: yFor(v))
                         if i == 0 { prevPath.move(to: p) } else { prevPath.addLine(to: p) }
                     }
-                    ctx.stroke(prevPath, with: .color(Color.white.opacity(0.22)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+                    ctx.stroke(prevPath, with: .color(BevelColors.chartGhostCurve), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
 
                     let curStep = drawW / CGFloat(max(safeCur.count - 1, 1))
                     var curLine = Path()
@@ -601,7 +601,7 @@ struct SleepSchedule24hDial: View {
                             var t = Path()
                             t.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
                             t.addLine(to: CGPoint(x: center.x + tickOuter * cos(rad), y: center.y + tickOuter * sin(rad)))
-                            ctx.stroke(t, with: .color(Color.white.opacity(isMajor ? 0.35 : 0.16)), lineWidth: 1.2)
+                            ctx.stroke(t, with: .color(isMajor ? BevelColors.chartAxisStroke : BevelColors.chartTickInactive), lineWidth: 1.2)
                         }
                     }
 
@@ -711,7 +711,7 @@ struct BioAgeCurvedDial: View {
                         var line = Path()
                         line.move(to: CGPoint(x: center.x + cos(rad) * rIn, y: center.y + sin(rad) * rIn))
                         line.addLine(to: CGPoint(x: center.x + cos(rad) * rOut, y: center.y + sin(rad) * rOut))
-                        ctx.stroke(line, with: .color(Color.white.opacity(0.14)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        ctx.stroke(line, with: .color(BevelColors.chartAxisStroke), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                     }
 
                     guard hasData else { return }
@@ -836,7 +836,7 @@ struct BioDotRangeSlider: View {
                                 let isCursor = i == cursorIdx
                                 let inBand = i >= startIdx && i <= endIdx
                                 Capsule()
-                                    .fill(isCursor ? accentColor : (inBand ? accentColor.opacity(0.62) : Color.white.opacity(0.08)))
+                                    .fill(isCursor ? accentColor : (inBand ? accentColor.opacity(0.62) : BevelColors.chartTrackSubtle))
                                     .frame(width: isCursor ? barW + 1.5 : barW, height: isCursor ? 18 : 9)
                                     .shadow(color: isCursor ? accentColor.opacity(0.75) : .clear, radius: 4)
                             }
@@ -888,7 +888,7 @@ struct Timeline24hChart: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 156)
-            .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 16).fill(BevelColors.chartTrackSubtle.opacity(0.45)))
         } else {
             let showSleepBar = sleepWindowMinutes != nil
             VStack(spacing: 4) {
@@ -910,7 +910,7 @@ struct Timeline24hChart: View {
                                     var gp = Path()
                                     gp.move(to: CGPoint(x: 0, y: y))
                                     gp.addLine(to: CGPoint(x: size.width, y: y))
-                                    ctx.stroke(gp, with: .color(Color.white.opacity(0.06)), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+                                    ctx.stroke(gp, with: .color(BevelColors.chartGridLine), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
                                 }
 
                                 if let sw = sleepWindowMinutes {
@@ -1091,23 +1091,25 @@ struct SleepHypnogramStepChart: View {
                 var line = Path()
                 line.move(to: CGPoint(x: 0, y: y))
                 line.addLine(to: CGPoint(x: size.width, y: y))
-                ctx.stroke(line, with: .color(Color.white.opacity(0.08)), lineWidth: 1)
+                ctx.stroke(line, with: .color(BevelColors.chartGridLine), lineWidth: 1)
             }
             // Subtle outer frame
-            ctx.stroke(Path(CGRect(origin: .zero, size: size)), with: .color(Color.white.opacity(0.06)), lineWidth: 1)
+            ctx.stroke(Path(CGRect(origin: .zero, size: size)), with: .color(BevelColors.chartGridLine), lineWidth: 1)
 
-            // Draw connecting vertical transitions first
-            for i in 0..<(stages.count - 1) {
-                let a = stages[i]
-                let b = stages[i + 1]
-                if b.startEpochSec - a.endEpochSec <= 180 {
-                    let x = CGFloat(Double(a.endEpochSec - startEpoch) / span) * size.width
-                    let yA = padTop + (CGFloat(rowIndex(a.stage)) + 0.5) * rowH
-                    let yB = padTop + (CGFloat(rowIndex(b.stage)) + 0.5) * rowH
-                    var v = Path()
-                    v.move(to: CGPoint(x: x, y: yA))
-                    v.addLine(to: CGPoint(x: x, y: yB))
-                    ctx.stroke(v, with: .color(stageColor(a.stage).opacity(0.55)), lineWidth: 1.6)
+            // Draw connecting vertical transitions first (guarded against empty/single-element stages!)
+            if stages.count >= 2 {
+                for i in 0..<(stages.count - 1) {
+                    let a = stages[i]
+                    let b = stages[i + 1]
+                    if b.startEpochSec - a.endEpochSec <= 180 {
+                        let x = CGFloat(Double(a.endEpochSec - startEpoch) / span) * size.width
+                        let yA = padTop + (CGFloat(rowIndex(a.stage)) + 0.5) * rowH
+                        let yB = padTop + (CGFloat(rowIndex(b.stage)) + 0.5) * rowH
+                        var v = Path()
+                        v.move(to: CGPoint(x: x, y: yA))
+                        v.addLine(to: CGPoint(x: x, y: yB))
+                        ctx.stroke(v, with: .color(stageColor(a.stage).opacity(0.55)), lineWidth: 1.6)
+                    }
                 }
             }
 
@@ -1176,7 +1178,7 @@ struct OvernightVitalChart: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 180)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.03)))
+            .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.chartTrackSubtle.opacity(0.45)))
         } else {
             let vals = samples.map(\.value)
             let rawMin = vals.min() ?? 0
@@ -1212,7 +1214,7 @@ struct OvernightVitalChart: View {
                                     var gp = Path()
                                     gp.move(to: CGPoint(x: 0, y: y))
                                     gp.addLine(to: CGPoint(x: size.width, y: y))
-                                    ctx.stroke(gp, with: .color(Color.white.opacity(0.07)), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+                                    ctx.stroke(gp, with: .color(BevelColors.chartGridLine), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
                                 }
 
                                 if tab == .fc {
@@ -1272,7 +1274,7 @@ struct OvernightVitalChart: View {
                                     var v = Path()
                                     v.move(to: CGPoint(x: sx, y: 0))
                                     v.addLine(to: CGPoint(x: sx, y: size.height))
-                                    ctx.stroke(v, with: .color(Color.white.opacity(0.35)), style: StrokeStyle(lineWidth: 1.3, dash: [4, 4]))
+                                    ctx.stroke(v, with: .color(BevelColors.chartAxisStroke), style: StrokeStyle(lineWidth: 1.3, dash: [4, 4]))
                                     ctx.fill(Path(ellipseIn: CGRect(x: sx - 5.5, y: sy - 5.5, width: 11, height: 11)), with: .color(.white))
                                 }
                             }
@@ -1334,7 +1336,7 @@ struct OvernightVitalChart: View {
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.white.opacity(0.08)))
+                        .background(Capsule().fill(BevelColors.cardSubtle))
                     }
                     Spacer()
                     if let last = samples.last {
@@ -1346,7 +1348,7 @@ struct OvernightVitalChart: View {
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.white.opacity(0.08)))
+                        .background(Capsule().fill(BevelColors.cardSubtle))
                     }
                 }
                 .padding(.trailing, 28)
@@ -1447,7 +1449,7 @@ struct FitnessRangeControlBar: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(canStepBackward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(Color.white.opacity(0.07)))
+                    .background(Circle().fill(BevelColors.cardSubtle))
             }
             .disabled(!canStepBackward)
 
@@ -1472,14 +1474,14 @@ struct FitnessRangeControlBar: View {
                 }
             }
             .padding(3)
-            .background(Capsule().fill(Color.white.opacity(0.06)))
+            .background(Capsule().fill(BevelColors.cardSubtle))
 
             Button(action: onStepForward) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(canStepForward ? BevelColors.textPrimary : BevelColors.textMuted.opacity(0.35))
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(Color.white.opacity(0.07)))
+                    .background(Circle().fill(BevelColors.cardSubtle))
             }
             .disabled(!canStepForward)
         }
@@ -1533,7 +1535,7 @@ struct TrainingLoadOptimalBandChart: View {
                                     var g = Path()
                                     g.move(to: CGPoint(x: 0, y: y))
                                     g.addLine(to: CGPoint(x: sz.width, y: y))
-                                    ctx.stroke(g, with: .color(Color.white.opacity(0.05)), lineWidth: 1)
+                                    ctx.stroke(g, with: .color(BevelColors.chartGridLine), lineWidth: 1)
                                 }
 
                                 // Dynamic green optimal zone ribbon polygon tracking daily (optLow, optHigh)
@@ -1577,7 +1579,7 @@ struct TrainingLoadOptimalBandChart: View {
                                     var v = Path()
                                     v.move(to: CGPoint(x: sx, y: 0))
                                     v.addLine(to: CGPoint(x: sx, y: sz.height))
-                                    ctx.stroke(v, with: .color(Color.white.opacity(0.28)), style: StrokeStyle(lineWidth: 1.2, dash: [4, 4]))
+                                    ctx.stroke(v, with: .color(BevelColors.chartAxisStroke), style: StrokeStyle(lineWidth: 1.2, dash: [4, 4]))
                                 }
 
                                 // Hollow circular nodes + glowing active/last circle
@@ -1585,9 +1587,9 @@ struct TrainingLoadOptimalBandChart: View {
                                 for (i, p) in points.enumerated() {
                                     let pt = CGPoint(x: xFor(i), y: yFor(p.load))
                                     if i == activeIdx {
-                                        ctx.fill(Path(ellipseIn: CGRect(x: pt.x - 11, y: pt.y - 11, width: 22, height: 22)), with: .color(Color.white.opacity(0.18)))
+                                        ctx.fill(Path(ellipseIn: CGRect(x: pt.x - 11, y: pt.y - 11, width: 22, height: 22)), with: .color(BevelColors.chartTrackSubtle))
                                         ctx.fill(Path(ellipseIn: CGRect(x: pt.x - 5.5, y: pt.y - 5.5, width: 11, height: 11)), with: .color(BevelColors.sheetHeaderBg))
-                                        ctx.stroke(Path(ellipseIn: CGRect(x: pt.x - 5.5, y: pt.y - 5.5, width: 11, height: 11)), with: .color(Color.white.opacity(0.75)), lineWidth: 2.4)
+                                        ctx.stroke(Path(ellipseIn: CGRect(x: pt.x - 5.5, y: pt.y - 5.5, width: 11, height: 11)), with: .color(BevelColors.chartPointerFill), lineWidth: 2.4)
                                     } else if showNodes {
                                         let r = CGRect(x: pt.x - 3.3, y: pt.y - 3.3, width: 6.6, height: 6.6)
                                         ctx.fill(Path(ellipseIn: r), with: .color(BevelColors.sheetHeaderBg))
@@ -1741,7 +1743,7 @@ struct ActivityComparisonBarOrLineChart: View {
                                 var g = Path()
                                 g.move(to: CGPoint(x: 0, y: y))
                                 g.addLine(to: CGPoint(x: sz.width, y: y))
-                                ctx.stroke(g, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
+                                ctx.stroke(g, with: .color(BevelColors.chartGridLine), lineWidth: 1)
                             }
 
                             if isBarMode {
@@ -1961,7 +1963,7 @@ struct Vo2AmberAreaChart: View {
                                     var g = Path()
                                     g.move(to: CGPoint(x: 0, y: y))
                                     g.addLine(to: CGPoint(x: sz.width, y: y))
-                                    ctx.stroke(g, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
+                                    ctx.stroke(g, with: .color(BevelColors.chartGridLine), lineWidth: 1)
                                 }
 
                                 if averageBadgeText != nil {
@@ -2125,7 +2127,7 @@ struct CardioFocusStackedBarChart: View {
                         var g = Path()
                         g.move(to: CGPoint(x: 0, y: y))
                         g.addLine(to: CGPoint(x: sz.width, y: y))
-                        ctx.stroke(g, with: .color(Color.white.opacity(0.06)), lineWidth: 1)
+                        ctx.stroke(g, with: .color(BevelColors.chartGridLine), lineWidth: 1)
                     }
 
                     let count = max(dailyTriples.count, 1)
@@ -2303,7 +2305,7 @@ struct MiniFitnessStepSparkline: View {
                 let pt = CGPoint(x: CGFloat(i) / CGFloat(max(prev.count - 1, 1)) * w, y: yFor(v))
                 if i == 0 { prevPath.move(to: pt) } else { prevPath.addLine(to: pt) }
             }
-            ctx.stroke(prevPath, with: .color(Color.white.opacity(0.18)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+            ctx.stroke(prevPath, with: .color(BevelColors.chartTrackSubtle), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
 
             var line = Path()
             var fill = Path()
@@ -2350,7 +2352,7 @@ struct MiniCardioFocusBars: View {
     private func barRow(pct: Int, color: Color) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.06))
+                Capsule().fill(BevelColors.cardSubtle)
                 if pct > 0 {
                     Capsule().fill(color).frame(width: max(6, geo.size.width * CGFloat(min(pct, 100)) / 100.0))
                 }

@@ -105,8 +105,8 @@ struct AskBevelScreen: View {
                 .padding(.top, 10)
 
                 if !hasUserConversation {
-                    Spacer()
                     VStack(spacing: 18) {
+                        Spacer()
                         BevelMascotOrb(size: 92)
                         VStack(spacing: 6) {
                             Text(store.dateLabel)
@@ -121,13 +121,18 @@ struct AskBevelScreen: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 34)
                         }
+                        Spacer()
+                        Spacer()
                     }
-                    Spacer()
-                    Spacer()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(spacing: 14) {
+                            LazyVStack(spacing: 14) {
                                 ForEach(store.coachMessages) { msg in
                                     coachMessageRow(msg)
                                         .id(msg.id)
@@ -186,6 +191,41 @@ struct AskBevelScreen: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 10)
                     }
+                }
+
+                if let errBanner = store.lastCoachErrorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13))
+                            .foregroundColor(BevelColors.amberStart)
+                        Text(errBanner)
+                            .font(ImprovingFont.caption(11.5))
+                            .foregroundColor(BevelColors.textSecondary)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        if let lastUser = store.coachMessages.last(where: { $0.isUser })?.text {
+                            Button("Reintentar") {
+                                store.lastCoachErrorMessage = nil
+                                store.sendCoachPrompt(lastUser)
+                            }
+                            .font(ImprovingFont.caption(11.5))
+                            .fontWeight(.bold)
+                            .foregroundColor(BevelColors.indigoEnd)
+                        }
+                        Button {
+                            store.lastCoachErrorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(BevelColors.textMuted)
+                                .frame(width: 28, height: 28)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(BevelColors.amberSoftBg))
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 6)
                 }
 
                 // Frosted Glass Open-Ended Multimodal Composer Box
@@ -258,16 +298,31 @@ struct AskBevelScreen: View {
 
                         Spacer()
 
-                        let canSend = (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingJpegData != nil) && !store.isCoachThinking
-                        Button(action: sendCurrentInput) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundColor(.black)
-                                .frame(width: 36, height: 36)
-                                .background(Circle().fill(.white))
+                        if store.isCoachThinking {
+                            Button {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                store.cancelCoachReply()
+                            } label: {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 40, height: 40)
+                                    .background(Circle().fill(BevelColors.coralHigh))
+                            }
+                            .accessibilityLabel("Detener respuesta")
+                        } else {
+                            let canSend = !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingJpegData != nil
+                            Button(action: sendCurrentInput) {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(BevelColors.isDarkMode ? .black : .white)
+                                    .frame(width: 40, height: 40)
+                                    .background(Circle().fill(BevelColors.isDarkMode ? Color.white : BevelColors.floatingDarkButton))
+                            }
+                            .accessibilityLabel("Enviar mensaje")
+                            .disabled(!canSend)
+                            .opacity(canSend ? 1.0 : 0.45)
                         }
-                        .disabled(!canSend)
-                        .opacity(canSend ? 1.0 : 0.45)
                     }
                 }
                 .padding(14)

@@ -67,7 +67,12 @@ final class ImprovingStore: ObservableObject {
         var cloudAIEnabled: Bool?
         var allowKeylessAIFallback: Bool?
         var redactPIIFromAI: Bool?
+        var healthKitPreviouslyAuthorized: Bool?
     }
+
+    static weak var activeSharedStore: ImprovingStore?
+    @Published var pendingDeepLinkRoute: DeepLinkRequest? = nil
+    @Published var whoopLiveHrBpm: Int? = nil
 
     @Published var userProfile: UserPhysiologyProfile = {
         var p = UserPhysiologyProfile()
@@ -121,6 +126,47 @@ final class ImprovingStore: ObservableObject {
     @Published var healthKitAuthorized: Bool = false
     @Published var healthKitSyncing: Bool = false
     @Published var healthKitLastSyncText: String = "Listo"
+    private var healthKitPreviouslyAuthorized: Bool = false
+    private var lastWhoopHistoryCommitAt: Date? = nil
+    private var whoopPendingRrBuffer: [Double] = []
+    private var inboxDebounceTask: Task<Void, Never>? = nil
+
+    // Revision-keyed derived metrics memoization cache (non-@Published: zero SwiftUI invalidation loops!)
+    private var derivedCacheFingerprint: String = ""
+    private var cachedTrainingLoad: [String: TrainingLoadAnalysis] = [:]
+    private var cachedEffortTargets: [String: (
+        range: ClosedRange<Double>,
+        baselineStrainPct: Double?,
+        sampleCount: Int,
+        cardioState: TrainingLoadState?,
+        sleepDebtMin: Int?,
+        recBasis: Int
+    )] = [:]
+    private var cachedBioAge: (
+        eval: BiologicalAgeEvaluation,
+        hasData: Bool,
+        meanRhr: Double?,
+        meanHrv: Double?,
+        meanSleep: Double?,
+        meanSteps: Int?,
+        vo2Val: Double?
+    )? = nil
+    private var cachedWeeklyReviews: [String: WeeklyReviewReport] = [:]
+    private var cachedJournalImpacts: [JournalImpactTarget: [JournalHabitImpactItem]] = [:]
+    private var cachedVitalBands: [HealthMetricKind: (low: Double, high: Double, isPersonal: Bool)] = [:]
+
+    private func ensureDerivedCacheFresh() {
+        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)"
+        if derivedCacheFingerprint != fp {
+            derivedCacheFingerprint = fp
+            cachedTrainingLoad.removeAll(keepingCapacity: true)
+            cachedEffortTargets.removeAll(keepingCapacity: true)
+            cachedBioAge = nil
+            cachedWeeklyReviews.removeAll(keepingCapacity: true)
+            cachedJournalImpacts.removeAll(keepingCapacity: true)
+            cachedVitalBands.removeAll(keepingCapacity: true)
+        }
+    }
 
     // Automatic Apple Shortcuts / Files Folder Bridge (Zero Paid Entitlements!)
     @Published var isAutoSyncing: Bool = false
@@ -182,12 +228,7 @@ final class ImprovingStore: ObservableObject {
     private var bleStreamTask: Task<Void, Never>?
     private var timerTask: Task<Void, Never>?
 
-    let isoFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
+    let isoFormatter: DateFormatter = AppFormatters.isoDay
 
     private let customPersistenceURL: URL?
 
@@ -202,20 +243,37 @@ final class ImprovingStore: ObservableObject {
         return dir.appendingPathComponent("improving_store_v3.json")
     }
 
-    init(persistenceURL: URL? = nil) {
+    init(persistenceURL: URL? = nil, headlessBackground: Bool = false) {
         self.customPersistenceURL = persistenceURL
         loadPersistedState()
+        if headlessBackground {
+            return
+        }
+        if persistenceURL == nil {
+            Self.activeSharedStore = self
+        }
         if !hasImportedOrPairedRealData && simulatedHistory.isEmpty {
             simulatedHistory = WhoopPhysiologyEngine.generateTwoYearSimulatedHistory(profile: userProfile)
         }
         seedPreviewOnlyItemsIfNeeded()
         bindWhoopBle()
         bindHealthKit()
-        // Ensure `En mi iPhone / Improving` folder is visible in Files app & run ONE silent sync on cold launch only!
+        // Ensure `En mi iPhone / Improving` folder is visible in Files app & watch live filesystem writes!
         _ = ShortcutsHealthSyncImporter.autoSyncInboxURL
+        if persistenceURL == nil {
+            startInboxDirectoryWatcher()
+        }
         scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
+        #if os(iOS)
+        if healthKitPreviouslyAuthorized {
+            healthKitAuthorized = true
+            Task {
+                await HealthKitReader.shared.restoreBackgroundObserversIfAuthorized()
+            }
+        }
+        #endif
         refreshSmartNotificationSchedules(promptPermission: false)
-        publishWidgetSnapshot(triggerReload: true, forceReload: true)
+        publishWidgetSnapshot(triggerReload: true, forceReload: false)
     }
 
     deinit {
@@ -225,6 +283,7 @@ final class ImprovingStore: ObservableObject {
         syncBannerDismissTask?.cancel()
         shortcutTimeoutTask?.cancel()
         backgroundRecheckTask?.cancel()
+        inboxDebounceTask?.cancel()
         inboxDirectorySource?.cancel()
         autoSyncSubdirSource?.cancel()
         healthSyncFileSource?.cancel()
@@ -303,32 +362,23 @@ final class ImprovingStore: ObservableObject {
     }
 
     var dateLabel: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_ES")
         if dayOffset == 0 {
-            f.dateFormat = "'Hoy,' d MMM"
-            return f.string(from: Date()).replacingOccurrences(of: ".", with: "")
+            return "Hoy, " + AppFormatters.dMMM.string(from: Date()).replacingOccurrences(of: ".", with: "")
         }
         if dayOffset == 1 {
-            f.dateFormat = "'Ayer,' d MMM"
-            return f.string(from: selectedDate).replacingOccurrences(of: ".", with: "")
+            return "Ayer, " + AppFormatters.dMMM.string(from: selectedDate).replacingOccurrences(of: ".", with: "")
         }
-        f.dateFormat = "EEE, d MMM"
-        return f.string(from: selectedDate).capitalized.replacingOccurrences(of: ".", with: "")
+        let wd = AppFormatters.weekdayShortEs.string(from: selectedDate).capitalized.replacingOccurrences(of: ".", with: "")
+        let dm = AppFormatters.dMMM.string(from: selectedDate).replacingOccurrences(of: ".", with: "")
+        return "\(wd), \(dm)"
     }
 
     var fullDateLabel: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_ES")
-        f.dateFormat = "d 'de' MMMM 'de' yyyy"
-        return f.string(from: selectedDate)
+        AppFormatters.dMMMMyyyy.string(from: selectedDate)
     }
 
     var monthYearLabel: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "es_ES")
-        f.dateFormat = "MMM yyyy"
-        return f.string(from: selectedDate).replacingOccurrences(of: ".", with: "")
+        AppFormatters.shortMonthYearEs.string(from: selectedDate).replacingOccurrences(of: ".", with: "")
     }
 
     var dataAvailability: DataAvailabilitySnapshot {
@@ -452,7 +502,12 @@ final class ImprovingStore: ObservableObject {
     }
 
     func trainingLoadAnalysis(tab: TrainingLoadTab, spanDays: Int = 30, windowPageOffset: Int = 0) -> TrainingLoadAnalysis {
-        WhoopPhysiologyEngine.computeTrainingLoadAnalysis(
+        ensureDerivedCacheFresh()
+        let key = "\(tab.rawValue)#\(spanDays)#\(windowPageOffset)"
+        if let hit = cachedTrainingLoad[key] {
+            return hit
+        }
+        let computed = WhoopPhysiologyEngine.computeTrainingLoadAnalysis(
             tab: tab,
             history: activeHistory,
             strengthLogs: strengthLogs,
@@ -460,6 +515,8 @@ final class ImprovingStore: ObservableObject {
             spanDays: spanDays,
             windowPageOffset: windowPageOffset
         )
+        cachedTrainingLoad[key] = computed
+        return computed
     }
 
     func muscleGroupSnapshots(for date: Date? = nil) -> [MuscleGroupSnapshot] {
@@ -885,7 +942,7 @@ final class ImprovingStore: ObservableObject {
     }
 
     var hasEverHadAnyRecordedData: Bool {
-        !activeHistory.isEmpty
+        !realHistory.isEmpty || hasImportedOrPairedRealData
     }
 
     /// Strictly causal personalized optimal Strain target for `dateIso` (combining exact continuous Recovery %,
@@ -898,7 +955,12 @@ final class ImprovingStore: ObservableObject {
         sleepDebtMin: Int?,
         recBasis: Int
     ) {
+        ensureDerivedCacheFresh()
         let targetIso = dateIso ?? selectedDateIso
+        let cacheKey = "\(targetIso)#\(includeCardioLoad ? 1 : 0)"
+        if let hit = cachedEffortTargets[cacheKey] {
+            return hit
+        }
         let anchorDate = isoFormatter.date(from: targetIso) ?? selectedDate
         let cal = Calendar.current
         let anchorStart = cal.startOfDay(for: anchorDate)
@@ -948,7 +1010,9 @@ final class ImprovingStore: ObservableObject {
             sleepDebtMinutes: debtMin,
             recent3DayAvgStrainPct: r3Mean
         )
-        return (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
+        let res = (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
+        cachedEffortTargets[cacheKey] = res
+        return res
     }
 
     var optimalEffortRange: ClosedRange<Double> {
@@ -1355,6 +1419,10 @@ final class ImprovingStore: ObservableObject {
     /// Returns Bevel-style 60-day personal normal range for a Health Monitor vital (falling back to clinical
     /// age/sex/height/weight norms when fewer than 5 real readings exist in the trailing 60-day window).
     func personalVitalNormalBand(for kind: HealthMetricKind) -> (low: Double, high: Double, isPersonal: Bool) {
+        ensureDerivedCacheFresh()
+        if let hit = cachedVitalBands[kind] {
+            return hit
+        }
         let window60 = trailingCalendarSummaries(days: 60)
         let extractor: (RealBiometricDaySummary) -> Double? = { d in
             switch kind {
@@ -1371,11 +1439,13 @@ final class ImprovingStore: ObservableObject {
         // Prefer strictly prior days when >= 7 prior days exist so today's anomaly doesn't mask itself
         let priorOnly = window60.dropLast().compactMap { $0.summary.flatMap(extractor) }
         let pool = priorOnly.count >= 7 ? priorOnly : window60.compactMap { $0.summary.flatMap(extractor) }
-        return WhoopPhysiologyEngine.computePersonalVitalNormalBand(
+        let band = WhoopPhysiologyEngine.computePersonalVitalNormalBand(
             kind: kind,
             trailingValues: pool,
             profile: userProfile
         )
+        cachedVitalBands[kind] = band
+        return band
     }
 
     var recoveryTrends: [EffortTrendItem] {
@@ -1858,6 +1928,10 @@ final class ImprovingStore: ObservableObject {
     /// - If the user has NOT filled out the Diario form (0 manual entries logged), ZERO metrics are computed or unlocked!
     /// - Each habit requires at least 30 days of elapsed tracking (daysSpanCount >= 30 || loggedDaysCount >= 30) AND both ✓ and ✕ occurrences before computing impact %.
     func computeJournalImpacts(for target: JournalImpactTarget) -> [JournalHabitImpactItem] {
+        ensureDerivedCacheFresh()
+        if let hit = cachedJournalImpacts[target] {
+            return hit
+        }
         let hasUserFilledForm = totalManualDiarioDaysLogged > 0
         let cal = Calendar.current
         let anchor = cal.startOfDay(for: selectedDate)
@@ -1938,7 +2012,7 @@ final class ImprovingStore: ObservableObject {
             ))
         }
 
-        return items.sorted { a, b in
+        let sortedItems = items.sorted { a, b in
             if a.reliability != b.reliability {
                 let rank: (JournalReliabilityTier) -> Int = { $0 == .high ? 0 : ($0 == .low ? 1 : 2) }
                 return rank(a.reliability) < rank(b.reliability)
@@ -1951,6 +2025,8 @@ final class ImprovingStore: ObservableObject {
             }
             return (a.yesCount + a.noCount) > (b.yesCount + b.noCount)
         }
+        cachedJournalImpacts[target] = sortedItems
+        return sortedItems
     }
 
     // MARK: - User Actions & Date Selection
@@ -1992,7 +2068,8 @@ final class ImprovingStore: ObservableObject {
 
         if !realHistory.isEmpty {
             let sortedIsos = realHistory.keys.sorted()
-            var priorLnHrv: [Double] = []
+            var priorLnHrvRmssd: [Double] = []
+            var priorLnHrvSdnn: [Double] = []
             var priorRhr: [Double] = []
             var priorResp: [Double] = []
             var updated: [String: RealBiometricDaySummary] = [:]
@@ -2019,10 +2096,12 @@ final class ImprovingStore: ObservableObject {
                     day.sleepDebtMinutes = max(Int(targetSleepMin.rounded()) - asleep, 0)
                 }
 
-                // 2. Causal 60-day Recovery % with user's age/sex/body cohort calibration
+                // 2. Causal 60-day Recovery % with separate RMSSD vs SDNN personal baselines
+                let dayIsSdnn = (day.hrvMethodLabel?.uppercased().contains("SDNN") == true)
+                let hrvExpected = dayIsSdnn ? (norms.hrvExpectedMs * 1.18) : norms.hrvExpectedMs
                 let lnHrvBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                    priorValues: priorLnHrv,
-                    populationMean: log(max(norms.hrvExpectedMs, 15.0)),
+                    priorValues: dayIsSdnn ? priorLnHrvSdnn : priorLnHrvRmssd,
+                    populationMean: log(max(hrvExpected, 15.0)),
                     populationSigma: 0.25,
                     floorSigma: 0.14
                 )
@@ -2054,7 +2133,9 @@ final class ImprovingStore: ObservableObject {
                     day.recoveryPct = newRec
                 }
 
-                if let h = day.hrvMs, h > 2.0 { priorLnHrv.append(log(h)) }
+                if let h = day.hrvMs, h > 2.0 {
+                    if dayIsSdnn { priorLnHrvSdnn.append(log(h)) } else { priorLnHrvRmssd.append(log(h)) }
+                }
                 if let r = day.restingHrBpm { priorRhr.append(r) }
                 if let rr = day.respRateRpm { priorResp.append(rr) }
 
@@ -2241,6 +2322,8 @@ final class ImprovingStore: ObservableObject {
                 journalEventTimesByDate[iso] = tMap
             }
         }
+        invalidateSectionCoachingCache(sections: [.hoy, .recuperacion, .sueno])
+        dataRevision += 1
         persistState()
         if iso == isoFormatter.string(from: Date()) {
             refreshSmartNotificationSchedules(promptPermission: false)
@@ -2273,6 +2356,8 @@ final class ImprovingStore: ObservableObject {
     func setJournalMood(_ mood: Int, for dateIso: String? = nil) {
         let iso = dateIso ?? selectedDateIso
         journalMoodByDate[iso] = min(max(mood, 1), 5)
+        invalidateSectionCoachingCache(sections: [.hoy, .recuperacion, .sueno])
+        dataRevision += 1
         persistState()
         if iso == isoFormatter.string(from: Date()) {
             refreshSmartNotificationSchedules(promptPermission: false)
@@ -2329,7 +2414,7 @@ final class ImprovingStore: ObservableObject {
         } else {
             journalNotesByDate[iso] = trimmed
         }
-        sectionCoachingCache.removeAll()
+        invalidateSectionCoachingCache(sections: [.hoy, .recuperacion, .sueno, .estres])
         dataRevision += 1
         persistState()
         if iso == isoFormatter.string(from: Date()) {
@@ -2397,6 +2482,8 @@ final class ImprovingStore: ObservableObject {
 
     func addHydrationGlass() {
         hydrationGlassesByDate[selectedDateIso] = (hydrationGlassesByDate[selectedDateIso] ?? 0) + 1
+        invalidateSectionCoachingCache(sections: [.hoy, .energia])
+        dataRevision += 1
         persistState()
     }
 
@@ -2850,20 +2937,22 @@ final class ImprovingStore: ObservableObject {
     /// Strict anti-reload & zero-vibration policy: ONLY handles midnight calendar rollover and explicit return
     /// from a user-triggered Shortcut. Never reloads, flashes banners, or vibrates on normal app switching!
     func handleAppBecameActive() {
-        // Refresh calendar day rollover so overnight suspended apps immediately show Today!
+        // Refresh calendar day rollover so overnight suspended apps immediately show Today + reschedule smart alerts!
         let todayIso = isoFormatter.string(from: Date())
-        if !lastActiveCalendarDayIso.isEmpty && lastActiveCalendarDayIso != todayIso {
+        let dayChanged = !lastActiveCalendarDayIso.isEmpty && lastActiveCalendarDayIso != todayIso
+        if dayChanged {
             dataRevision += 1
+            refreshSmartNotificationSchedules(promptPermission: false)
         }
         lastActiveCalendarDayIso = todayIso
 
-        // Only clear pending shortcut state when returning without x-callback; NEVER read UIPasteboard here
-        // (eliminates recurring iOS "Permitir pegar desde Atajos" popups and reopen loops).
+        // Clear any pending shortcut state when returning without x-callback; NEVER read UIPasteboard here.
         if awaitingShortcutCallback {
             awaitingShortcutCallback = false
             shortcutTimeoutTask?.cancel()
-            scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
         }
+        // Always perform a silent, zero-banner inbox check so background Shortcuts / Files drops load immediately!
+        scanAutoSyncInboxIfNeeded(force: false, showBanner: false)
     }
 
     private func scheduleSilentAutomationRechecks() {
@@ -2915,6 +3004,58 @@ final class ImprovingStore: ObservableObject {
         #endif
     }
 
+    private func scheduleDebouncedInboxScanFromWatcher() {
+        inboxDebounceTask?.cancel()
+        inboxDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 550_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.attachDirectSyncFileWatchers()
+            self.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+        }
+    }
+
+    private func recordProcessedAutoSyncSignatures(_ sigs: [String]) {
+        for s in sigs {
+            if processedAutoSyncSignatures.insert(s).inserted {
+                processedAutoSyncSignaturesOrder.append(s)
+            }
+        }
+        if processedAutoSyncSignaturesOrder.count > 80 {
+            let overflow = processedAutoSyncSignaturesOrder.count - 80
+            let evicted = processedAutoSyncSignaturesOrder.prefix(overflow)
+            processedAutoSyncSignaturesOrder.removeFirst(overflow)
+            for old in evicted {
+                processedAutoSyncSignatures.remove(old)
+            }
+        }
+    }
+
+    /// Synchronous background inbox processor used by `SyncAppleHealthShortcutIntent` & `BGAppRefreshTask`
+    /// so automations parse, save protected JSON, and update WidgetKit even when Improving is closed!
+    @discardableResult
+    func processPendingInboxSyncNow() -> Int {
+        let files = ShortcutsHealthSyncImporter.discoverInboxFiles()
+        let pending: [(URL, String)] = files.compactMap { url in
+            let sig = ShortcutsHealthSyncImporter.fileSignature(for: url)
+            return processedAutoSyncSignatures.contains(sig) ? nil : (url, sig)
+        }
+        guard !pending.isEmpty else { return 0 }
+        let result = WhoopExportImporter.importURLs(
+            pending.map(\.0),
+            profile: userProfile,
+            priorHistory: realHistory
+        )
+        guard !result.days.isEmpty else { return 0 }
+        recordProcessedAutoSyncSignatures(pending.map(\.1))
+        applyImportedResult(result, navigateToLatest: false)
+        let hhmm = Self.currentHHMM()
+        let newest = pending.last?.0.lastPathComponent ?? "Atajos"
+        autoSyncStatusText = "✓ Sync \(hhmm) (\(newest)) · \(result.days.count)d\(Self.formatLatestReadingTag(from: result.days))"
+        persistState(immediate: true)
+        publishWidgetSnapshot(triggerReload: true, forceReload: false)
+        return result.days.count
+    }
+
     /// Live filesystem watchers on BOTH `En mi iPhone / Improving` and `AutoSync` directories PLUS direct
     /// file-level vnode watchers on `health_sync.json` & `shortcuts_latest.json` so in-place APFS overwrites
     /// from Apple Shortcuts trigger an immediate reload!
@@ -2924,11 +3065,8 @@ final class ImprovingStore: ObservableObject {
             guard fd >= 0 else { return nil }
             let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .extend, .attrib], queue: .main)
             source.setEventHandler { [weak self] in
-                guard let self else { return }
                 Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    self?.attachDirectSyncFileWatchers()
-                    self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
+                    self?.scheduleDebouncedInboxScanFromWatcher()
                 }
             }
             source.setCancelHandler {
@@ -2953,11 +3091,8 @@ final class ImprovingStore: ObservableObject {
                 queue: .main
             )
             source.setEventHandler { [weak self] in
-                guard let self else { return }
                 Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    self?.scanAutoSyncInboxIfNeeded(force: false, showBanner: true)
-                    self?.attachDirectSyncFileWatchers()
+                    self?.scheduleDebouncedInboxScanFromWatcher()
                 }
             }
             source.setCancelHandler {
@@ -3022,7 +3157,7 @@ final class ImprovingStore: ObservableObject {
                 self.isAutoSyncing = false
                 if !result.days.isEmpty {
                     // Only mark signatures as processed AFTER a valid parse so partial mid-write reads are NEVER blacklisted!
-                    for s in pendingSigs { self.processedAutoSyncSignatures.insert(s) }
+                    self.recordProcessedAutoSyncSignatures(pendingSigs)
                     let shouldJump = !self.hasImportedOrPairedRealData
                     self.applyImportedResult(result, navigateToLatest: shouldJump)
                     let hhmm = Self.currentHHMM()
@@ -3058,20 +3193,38 @@ final class ImprovingStore: ObservableObject {
     static func formatLatestReadingTag(from days: [String: RealBiometricDaySummary]) -> String {
         guard let latestIso = days.keys.sorted().last, let d = days[latestIso] else { return "" }
         let shortDay: String = {
-            let inFmt = DateFormatter()
-            inFmt.locale = Locale(identifier: "en_US_POSIX")
-            inFmt.dateFormat = "yyyy-MM-dd"
-            guard let dt = inFmt.date(from: latestIso) else { return latestIso }
-            let outFmt = DateFormatter()
-            outFmt.locale = Locale(identifier: "es_ES")
-            outFmt.dateFormat = "d MMM"
-            return outFmt.string(from: dt).replacingOccurrences(of: ".", with: "")
+            guard let dt = AppFormatters.parseIsoDay(latestIso) else { return latestIso }
+            return AppFormatters.dMMM.string(from: dt).replacingOccurrences(of: ".", with: "")
         }()
         if let lastMin = d.stressSamples5m.last?.minuteOfDay {
             let timeStr = String(format: "%02d:%02d", (lastMin / 60) % 24, lastMin % 60)
             return " · Últ. FC \(shortDay) \(timeStr)"
         }
         return " · Hasta \(shortDay)"
+    }
+
+    func handleDeepLinkRoute(_ route: String) {
+        let key = route.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let dest: DeepLinkRequest.Destination
+        switch key {
+        case "diario", "journal":
+            dest = .diario
+        case "sleep", "sueno", "sueño":
+            dest = .sleep
+        case "nutrition", "nutricion", "nutrición", "food":
+            dest = .nutrition
+        case "esfuerzo", "strain":
+            dest = .esfuerzo
+        case "fitness", "workout", "entrenamiento":
+            dest = .fitness
+        case "biologia", "biología", "biology":
+            dest = .biologia
+        case "settings", "dispositivos", "ajustes":
+            dest = .settings
+        default:
+            dest = .hoy
+        }
+        pendingDeepLinkRoute = DeepLinkRequest(destination: dest)
     }
 
     func handleIncomingURL(_ url: URL) {
@@ -3081,10 +3234,15 @@ final class ImprovingStore: ObservableObject {
             return
         }
 
-        // 2. Custom URL Scheme: improving://open or improving://sync[?from=shortcut_ok | ?source=clipboard | ?data=... | ?payload=...]
+        // 2. Custom URL Scheme: improving://<route> or improving://sync[?from=shortcut_ok | ?source=clipboard | ?data=... | ?payload=...]
         guard url.scheme?.lowercased() == "improving" else { return }
-        if url.host?.lowercased() == "open" {
-            publishWidgetSnapshot(triggerReload: true, forceReload: true)
+        let host = (url.host ?? "").lowercased()
+        if host == "open" {
+            publishWidgetSnapshot(triggerReload: true, forceReload: false)
+            return
+        }
+        if ["hoy", "home", "diario", "journal", "sleep", "sueno", "nutrition", "nutricion", "esfuerzo", "strain", "fitness", "biologia", "biology", "settings", "dispositivos"].contains(host) {
+            handleDeepLinkRoute(host)
             return
         }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -3115,6 +3273,8 @@ final class ImprovingStore: ObservableObject {
         }
 
         if sourceParam == "clipboard" {
+            awaitingShortcutCallback = false
+            shortcutTimeoutTask?.cancel()
             presentSyncBanner(.syncing("Sincronizando…"))
             let paste = UIPasteboard.general.string ?? ""
             ingestRawShortcutsPayload(paste, sourceLabel: "Sync Improving")
@@ -3122,6 +3282,8 @@ final class ImprovingStore: ObservableObject {
         }
 
         if let raw = rawParam, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            awaitingShortcutCallback = false
+            shortcutTimeoutTask?.cancel()
             presentSyncBanner(.syncing("Sincronizando…"))
             let decoded: String = {
                 if raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
@@ -3192,9 +3354,7 @@ final class ImprovingStore: ObservableObject {
     }
 
     private static func currentHHMM() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f.string(from: Date())
+        AppFormatters.hhmmString(from: Date())
     }
 
     // MARK: - HealthKit & WHOOP Live Connectors (Full 60-Day Bevel Pipeline + Continuous Energy!)
@@ -3207,6 +3367,10 @@ final class ImprovingStore: ObservableObject {
             do {
                 try await HealthKitReader.shared.requestAuthorization()
                 self.healthKitAuthorized = HealthKitReader.shared.isAuthorized
+                if self.healthKitAuthorized {
+                    self.healthKitPreviouslyAuthorized = true
+                    self.persistState()
+                }
                 self.healthKitLastSyncText = "Sincronizando 60 días..."
                 let historySnaps = await HealthKitReader.shared.syncHistoryDays(days: 60)
                 self.ingestHealthKitSnapshots(historySnaps)
@@ -3252,8 +3416,10 @@ final class ImprovingStore: ObservableObject {
         fullFmt.dateFormat = "dd/MM/yy 'a las' H:mm"
 
         // Seed causal baselines from any existing realHistory strictly BEFORE the first synced snapshot
+        // Keep RMSSD and SDNN pools strictly separated so HRV method changes never distort the 60d baseline!
         let firstIso = isoFormatter.string(from: sorted[0].day)
-        var priorLnHrv: [Double] = []
+        var priorLnHrvRmssd: [Double] = []
+        var priorLnHrvSdnn: [Double] = []
         var priorRhr: [Double] = []
         var priorResp: [Double] = []
         var priorTemp: [Double] = []
@@ -3262,7 +3428,13 @@ final class ImprovingStore: ObservableObject {
 
         for iso in realHistory.keys.sorted() where iso < firstIso {
             if let old = realHistory[iso] {
-                if let h = old.hrvMs, h > 2 { priorLnHrv.append(log(h)) }
+                if let h = old.hrvMs, h > 2 {
+                    if old.hrvMethodLabel?.uppercased().contains("SDNN") == true {
+                        priorLnHrvSdnn.append(log(h))
+                    } else {
+                        priorLnHrvRmssd.append(log(h))
+                    }
+                }
                 if let r = old.restingHrBpm { priorRhr.append(r) }
                 if let rr = old.respRateRpm { priorResp.append(rr) }
                 if let t = old.wristTempAbsoluteC { priorTemp.append(t) }
@@ -3428,11 +3600,13 @@ final class ImprovingStore: ObservableObject {
             if let dl = snap.daylightMinutes { d.daylightMinutes = dl; hasReal = true }
             if let noise = snap.sleepNoiseOver50Db { d.sleepNoiseOver50Db = noise; hasReal = true }
 
+            let dayIsSdnn = (d.hrvMethodLabel?.uppercased().contains("SDNN") == true)
+            let hrvPopMean = dayIsSdnn ? log(max(norms.hrvExpectedMs * 1.18, 15.0)) : popLnHrv
             let rhrBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
                 priorValues: priorRhr, populationMean: popRhr, populationSigma: 3.5, floorSigma: 2.0
             )
             let lnHrvBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorLnHrv, populationMean: popLnHrv, populationSigma: 0.24, floorSigma: 0.14
+                priorValues: dayIsSdnn ? priorLnHrvSdnn : priorLnHrvRmssd, populationMean: hrvPopMean, populationSigma: 0.24, floorSigma: 0.14
             )
             let respBaseline = WhoopPhysiologyEngine.computeRollingBaseline(
                 priorValues: priorResp, populationMean: popResp, populationSigma: 0.9, floorSigma: 0.5
@@ -3595,7 +3769,9 @@ final class ImprovingStore: ObservableObject {
             }
 
             // Advance causal baselines AFTER computing today
-            if let h = d.hrvMs, h > 2 { priorLnHrv.append(log(h)) }
+            if let h = d.hrvMs, h > 2 {
+                if dayIsSdnn { priorLnHrvSdnn.append(log(h)) } else { priorLnHrvRmssd.append(log(h)) }
+            }
             if let r = d.restingHrBpm { priorRhr.append(r) }
             if let rr = d.respRateRpm { priorResp.append(rr) }
             if let t = d.wristTempAbsoluteC { priorTemp.append(t) }
@@ -3657,32 +3833,54 @@ final class ImprovingStore: ObservableObject {
             }
             .store(in: &cancellables)
 
+        let reader = whoopBleReader
         bleStreamTask = Task { [weak self] in
-            guard let self else { return }
-            for await reading in self.whoopBleReader.readings {
+            for await reading in reader.readings {
                 if Task.isCancelled { break }
+                guard let self else { break }
                 self.whoopPacketsReceived += 1
                 switch reading {
                 case .standardHeartRate(let bpm, let rrMs, _, let ts):
-                    let iso = self.isoFormatter.string(from: ts)
-                    var d = self.realHistory[iso] ?? RealBiometricDaySummary(dateIso: iso)
-                    d.liveHrBpm = bpm
-                    if !rrMs.isEmpty {
-                        var sqDiffs: [Double] = []
-                        for i in 1..<rrMs.count {
-                            let diff = Double(rrMs[i] - rrMs[i - 1])
-                            sqDiffs.append(diff * diff)
-                        }
-                        if !sqDiffs.isEmpty {
-                            let rmssd = sqrt(sqDiffs.reduce(0, +) / Double(sqDiffs.count))
-                            if (8.0...220.0).contains(rmssd) {
-                                d.hrvMs = AppleHealthExportImporter.round1(rmssd)
-                            }
+                    self.whoopLiveHrBpm = bpm
+                    // Buffer clean RR intervals (300..2000 ms) without clobbering overnight sleeping HRV!
+                    let validRr = rrMs.map(Double.init).filter { (300.0...2000.0).contains($0) }
+                    if !validRr.isEmpty {
+                        self.whoopPendingRrBuffer.append(contentsOf: validRr)
+                        if self.whoopPendingRrBuffer.count > 120 {
+                            self.whoopPendingRrBuffer.removeFirst(self.whoopPendingRrBuffer.count - 120)
                         }
                     }
-                    self.realHistory[iso] = d
-                    self.hasImportedOrPairedRealData = true
-                    self.clearPreviewSeededArtifactsOnRealData()
+                    // Throttle full `realHistory` dictionary mutations to once per 10 seconds to prevent 1 Hz UI redraw storms!
+                    let now = Date()
+                    let shouldCommit = self.lastWhoopHistoryCommitAt == nil || now.timeIntervalSince(self.lastWhoopHistoryCommitAt!) >= 10.0
+                    if shouldCommit {
+                        self.lastWhoopHistoryCommitAt = now
+                        let iso = self.isoFormatter.string(from: ts)
+                        var d = self.realHistory[iso] ?? RealBiometricDaySummary(dateIso: iso)
+                        d.liveHrBpm = bpm
+                        // Only seed HRV from live BLE RR if no overnight sleeping HRV exists yet AND >= 15 RR beats collected!
+                        if d.hrvMs == nil && self.whoopPendingRrBuffer.count >= 15 {
+                            var sqDiffs: [Double] = []
+                            for i in 1..<self.whoopPendingRrBuffer.count {
+                                let diff = self.whoopPendingRrBuffer[i] - self.whoopPendingRrBuffer[i - 1]
+                                if abs(diff) <= 300.0 {
+                                    sqDiffs.append(diff * diff)
+                                }
+                            }
+                            if sqDiffs.count >= 10 {
+                                let rmssd = sqrt(sqDiffs.reduce(0, +) / Double(sqDiffs.count))
+                                if (8.0...220.0).contains(rmssd) {
+                                    d.hrvMs = AppleHealthExportImporter.round1(rmssd)
+                                    d.hrvMethodLabel = "RMSSD · WHOOP en vivo"
+                                }
+                            }
+                        }
+                        self.realHistory[iso] = d
+                        if !self.hasImportedOrPairedRealData {
+                            self.hasImportedOrPairedRealData = true
+                            self.clearPreviewSeededArtifactsOnRealData()
+                        }
+                    }
                 case .battery(let pct, _, _, _):
                     self.whoopBatteryPct = pct
                 case .log(let msg):
@@ -4973,6 +5171,10 @@ final class ImprovingStore: ObservableObject {
         meanSteps: Int?,
         vo2Val: Double?
     ) {
+        ensureDerivedCacheFresh()
+        if let hit = cachedBioAge {
+            return hit
+        }
         let recent30 = trailingCalendarSummaries(days: 30)
         let rhrVals = recent30.compactMap { $0.summary?.restingHrBpm }
         let hrvVals = recent30.compactMap { $0.summary?.hrvMs }
@@ -4998,7 +5200,9 @@ final class ImprovingStore: ObservableObject {
             latestBodyFatPct: latestBodyFatPct,
             labBiomarkers: biomarkers
         )
-        return (eval, hasData, meanRhr, meanHrv, meanSleep, meanSteps, vo2Val)
+        let res = (eval, hasData, meanRhr, meanHrv, meanSleep, meanSteps, vo2Val)
+        cachedBioAge = res
+        return res
     }
 
     var latestBiomarkersByName: [LabBiomarkerItem] {
@@ -5056,8 +5260,13 @@ final class ImprovingStore: ObservableObject {
     // MARK: - Weekly Review Computation & AI Analysis (N5)
 
     func computeWeeklyReview(anchorDate: Date? = nil) -> WeeklyReviewReport {
+        ensureDerivedCacheFresh()
         let cal = Calendar.current
         let anchor = cal.startOfDay(for: anchorDate ?? selectedDate)
+        let anchorIso = isoFormatter.string(from: anchor)
+        if let hit = cachedWeeklyReviews[anchorIso] {
+            return hit
+        }
         let curDates: [Date] = (0..<7).reversed().compactMap { cal.date(byAdding: .day, value: -$0, to: anchor) }
         let prevDates: [Date] = (7..<14).reversed().compactMap { cal.date(byAdding: .day, value: -$0, to: anchor) }
 
@@ -5123,14 +5332,11 @@ final class ImprovingStore: ObservableObject {
                 return (meta.0, meta.1, v)
             }
 
-        let fmt = DateFormatter()
-        fmt.locale = Locale(identifier: "es_ES")
-        fmt.dateFormat = "d MMM"
-        let startLbl = curDates.first.map { fmt.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
-        let endLbl = curDates.last.map { fmt.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
+        let startLbl = curDates.first.map { AppFormatters.dMMM.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
+        let endLbl = curDates.last.map { AppFormatters.dMMM.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
         let weekKey = "\(curIsos.first ?? "")_\(curIsos.last ?? "")_r\(dataRevision)"
 
-        return WeeklyReviewReport(
+        let report = WeeklyReviewReport(
             weekKey: weekKey,
             dateRangeLabel: "\(startLbl) – \(endLbl)",
             daysWithData: curDays.count,
@@ -5157,6 +5363,8 @@ final class ImprovingStore: ObservableObject {
             avgSteps: avgSteps,
             topHabits: topHabits
         )
+        cachedWeeklyReviews[anchorIso] = report
+        return report
     }
 
     func generateWeeklyReviewAI(report: WeeklyReviewReport, force: Bool = false) {
@@ -5194,23 +5402,25 @@ final class ImprovingStore: ObservableObject {
         let todayStart = cal.startOfDay(for: Date())
         let todayIso = isoFormatter.string(from: todayStart)
         let yesterdayIso = cal.date(byAdding: .day, value: -1, to: todayStart).map { isoFormatter.string(from: $0) } ?? ""
+        let goals = effectiveNutritionGoals
 
-        let targetDay: RealBiometricDaySummary? = activeHistory[todayIso] ?? latestAvailableDay ?? currentDaySummary
+        // Strict preview-mode isolation: NEVER push fabricated `simulatedHistory` numbers onto the user's Home/Lock Screen widgets!
+        let hasReal = hasImportedOrPairedRealData || !realHistory.isEmpty
+        let targetDay: RealBiometricDaySummary? = hasReal
+            ? (realHistory[todayIso] ?? realHistory.keys.sorted().last.flatMap { realHistory[$0] })
+            : nil
         let targetIso = targetDay?.dateIso ?? todayIso
         let dateLbl: String = {
+            if !hasReal { return "Sin sincronizar" }
             if targetIso == todayIso { return "Hoy" }
             if targetIso == yesterdayIso { return "Ayer" }
-            if let dt = isoFormatter.date(from: targetIso) {
-                let fmt = DateFormatter()
-                fmt.locale = Locale(identifier: "es_ES")
-                fmt.dateFormat = "d MMM"
-                return fmt.string(from: dt).replacingOccurrences(of: ".", with: "")
+            if let dt = AppFormatters.parseIsoDay(targetIso) {
+                return AppFormatters.dMMM.string(from: dt).replacingOccurrences(of: ".", with: "")
             }
             return "Hoy"
         }()
 
-        let nutTotals = nutritionDayTotals(for: todayIso)
-        let goals = effectiveNutritionGoals
+        let nutTotals = hasReal ? nutritionDayTotals(for: todayIso) : (kcal: 0, proteinG: 0.0, carbsG: 0.0, fatG: 0.0, score: nil as Int?, factors: NutritionQualityFactors())
         let sleepDur: String = {
             if let m = targetDay?.asleepMinutes, m > 0 {
                 return "\(m / 60)h \(String(format: "%02d", m % 60))m"
@@ -5335,7 +5545,8 @@ final class ImprovingStore: ObservableObject {
             weeklyAiInsightsCache: weeklyAiInsightsCache,
             cloudAIEnabled: cloudAIEnabled,
             allowKeylessAIFallback: allowKeylessAIFallback,
-            redactPIIFromAI: redactPIIFromAI
+            redactPIIFromAI: redactPIIFromAI,
+            healthKitPreviouslyAuthorized: healthKitPreviouslyAuthorized
         )
     }
 
@@ -5438,6 +5649,7 @@ final class ImprovingStore: ObservableObject {
         if let cloudOn = snap.cloudAIEnabled { cloudAIEnabled = cloudOn }
         if let keylessOn = snap.allowKeylessAIFallback { allowKeylessAIFallback = keylessOn }
         if let redactOn = snap.redactPIIFromAI { redactPIIFromAI = redactOn }
+        if let hkPrev = snap.healthKitPreviouslyAuthorized { healthKitPreviouslyAuthorized = hkPrev }
 
         // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
         if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {

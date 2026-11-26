@@ -138,6 +138,7 @@ struct HomeLayoutEditorSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Editar Inicio")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

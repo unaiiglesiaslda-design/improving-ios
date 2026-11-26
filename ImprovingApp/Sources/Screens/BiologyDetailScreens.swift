@@ -324,6 +324,7 @@ struct ManualScaleLoggerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Registrar báscula")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -343,6 +344,7 @@ struct ManualScaleLoggerSheet: View {
             Text(label).font(ImprovingFont.caption(12)).foregroundColor(BevelColors.textSecondary)
             TextField(placeholder, text: text)
                 .keyboardType(decimal ? .decimalPad : .numberPad)
+                .keyboardDoneToolbar()
                 .font(ImprovingFont.cardTitle(15))
                 .monospacedDigit()
                 .foregroundColor(BevelColors.textPrimary)
@@ -524,6 +526,7 @@ struct LabReportScannerSheet: View {
                             HStack(spacing: 8) {
                                 TextField("Valor", text: $manualValue)
                                     .keyboardType(.decimalPad)
+                                    .keyboardDoneToolbar()
                                     .font(ImprovingFont.cardTitle(14.5))
                                     .foregroundColor(BevelColors.textPrimary)
                                     .padding(10)
@@ -581,6 +584,7 @@ struct LabReportScannerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Analítica de sangre IA")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

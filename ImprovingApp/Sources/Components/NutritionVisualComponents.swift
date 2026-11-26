@@ -360,7 +360,7 @@ struct NetEnergyBipolarBar: View {
                 ForEach(Array(labels.enumerated()), id: \.offset) { idx, val in
                     VStack(spacing: 4) {
                         Rectangle()
-                            .fill(Color.white.opacity(0.14))
+                            .fill(BevelColors.chartTrackSubtle)
                             .frame(width: 1, height: 5)
                         Text(formatAxisVal(val))
                             .font(ImprovingFont.caption(11))
@@ -401,7 +401,7 @@ struct FoodQualityFactorRow: View {
         let pastThreshold = !kind.isPositive && isActive && (frac > (thresholdFrac ?? 0.45))
 
         let accentColor: Color = {
-            if !isActive { return Color.white.opacity(0.35) }
+            if !isActive { return BevelColors.chartAxisStroke }
             if kind.isPositive { return NutritionPalette.positiveMint }
             return pastThreshold ? NutritionPalette.negativeOrange : Color(hex: 0x9BA1B2)
         }()
@@ -428,7 +428,7 @@ struct FoodQualityFactorRow: View {
 
                         ZStack(alignment: .leading) {
                             Capsule()
-                                .fill(Color.white.opacity(0.08))
+                                .fill(BevelColors.chartTrackSubtle)
                                 .frame(height: 6)
 
                             if isActive {
@@ -436,7 +436,7 @@ struct FoodQualityFactorRow: View {
                                     let threshX = w * CGFloat(tf)
                                     // Neutral gray up to safe threshold
                                     Capsule()
-                                        .fill(Color.white.opacity(0.28))
+                                        .fill(BevelColors.chartAxisStroke)
                                         .frame(width: min(thumbX, threshX), height: 6)
                                     // Glowing orange beyond safe threshold
                                     if thumbX > threshX {
@@ -457,14 +457,14 @@ struct FoodQualityFactorRow: View {
                             // Safe Threshold vertical hairline marker (Screenshot 4 & 5: Exceso de azúcar, Exceso de sodio)
                             if let tf = thresholdFrac {
                                 RoundedRectangle(cornerRadius: 1)
-                                    .fill(Color.white.opacity(0.28))
+                                    .fill(BevelColors.chartAxisStroke)
                                     .frame(width: 1.8, height: 14)
                                     .position(x: w * CGFloat(tf), y: cy)
                             }
 
                             // Glowing Thumb Dot
                             Circle()
-                                .fill(isActive ? accentColor.opacity(0.32) : Color.white.opacity(0.14))
+                                .fill(isActive ? accentColor.opacity(0.32) : BevelColors.chartTrackSubtle)
                                 .frame(width: 14, height: 14)
                                 .position(x: thumbX, y: cy)
                             Circle()

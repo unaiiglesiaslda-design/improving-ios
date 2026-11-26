@@ -651,6 +651,7 @@ struct NutricionScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showDatePicker) {
             DatePickerSheetView(
                 selectedDate: Binding(
@@ -1231,6 +1232,7 @@ private struct MisAlimentosSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Mis alimentos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1262,6 +1264,7 @@ private struct MisAlimentosSheet: View {
     private func miniField(_ placeholder: String, text: Binding<String>) -> some View {
         TextField(placeholder, text: text)
             .keyboardType(.numberPad)
+            .keyboardDoneToolbar()
             .font(ImprovingFont.caption(13))
             .monospacedDigit()
             .foregroundColor(BevelColors.textPrimary)
@@ -1336,6 +1339,7 @@ private struct NutritionGoalsSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Objetivos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1359,6 +1363,7 @@ private struct NutritionGoalsSheet: View {
             Spacer()
             TextField("0", text: text)
                 .keyboardType(.numberPad)
+                .keyboardDoneToolbar()
                 .multilineTextAlignment(.trailing)
                 .font(ImprovingFont.cardTitle(16))
                 .monospacedDigit()
@@ -1447,6 +1452,7 @@ private struct FactorBreakdownSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle(factor.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
@@ -1524,6 +1530,7 @@ private struct FullNutritionTimelineSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Cronología nutricional")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1565,6 +1572,7 @@ private struct NutritionInfoSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Guía de Nutrición")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
@@ -1831,6 +1839,7 @@ private struct MealComposerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle(existingMeal == nil ? "Registrar comida" : "Editar comida")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar", action: onClose) } }
@@ -1923,6 +1932,7 @@ private struct MealComposerSheet: View {
             Text(label).font(ImprovingFont.caption(11)).foregroundColor(accent)
             TextField("0", text: text)
                 .keyboardType(decimal ? .decimalPad : .numberPad)
+                .keyboardDoneToolbar()
                 .font(ImprovingFont.cardTitle(15))
                 .monospacedDigit()
                 .foregroundColor(BevelColors.textPrimary)
@@ -2095,6 +2105,7 @@ private struct BarcodeScannerSheet: View {
                     ZStack(alignment: .bottomTrailing) {
                         BarcodeScannerCameraView(
                             isTorchOn: isTorchOn,
+                            isPaused: foundProduct != nil || isLookingUp,
                             onCodeDetected: { code in
                                 manualCode = code
                                 lookupBarcode(code)
@@ -2157,8 +2168,9 @@ private struct BarcodeScannerSheet: View {
                                 .font(ImprovingFont.microLabel(10.5))
                                 .foregroundColor(BevelColors.textMuted)
                             HStack(spacing: 8) {
-                                TextField("Ej: 8410076472106", text: $manualCode)
-                                    .keyboardType(.numberPad)
+                TextField("Ej: 8410076472106", text: $manualCode)
+                    .keyboardType(.numberPad)
+                    .keyboardDoneToolbar()
                                     .font(ImprovingFont.cardTitle(15))
                                     .monospacedDigit()
                                     .foregroundColor(BevelColors.textPrimary)
@@ -2284,6 +2296,7 @@ private struct BarcodeScannerSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Escanear código de barras")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -2508,7 +2521,7 @@ struct NutrientDetailScreen: View {
                 } label: {
                     Text("+ Añadir cantidad")
                         .font(ImprovingFont.cardTitle(14.5))
-                        .foregroundColor(.white)
+                        .foregroundColor(BevelColors.textPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .background(Capsule().fill(BevelColors.cardHeaderStrip))
@@ -2519,6 +2532,7 @@ struct NutrientDetailScreen: View {
             .padding(.bottom, 98)
         }
         .background(BevelColors.sheetHeaderBg)
+        .scrollDismissesKeyboard(.interactively)
         .confirmationDialog("¿Restablecer el registro manual de \(spec.displayTitle.lowercased()) de este día?", isPresented: $showResetConfirmation, titleVisibility: .visible) {
             Button("Restablecer a 0", role: .destructive) { store.resetNutrientAmount(key: key) }
             Button("Cancelar", role: .cancel) {}
@@ -2532,6 +2546,7 @@ struct NutrientDetailScreen: View {
 
                     TextField("Ej: \(spec.formatValue(spec.quickIncrement * 1.5))", text: $customAmountText)
                         .keyboardType(.decimalPad)
+                        .keyboardDoneToolbar()
                         .font(ImprovingFont.displayLarge(28))
                         .monospacedDigit()
                         .foregroundColor(BevelColors.textPrimary)
@@ -2554,6 +2569,7 @@ struct NutrientDetailScreen: View {
                 }
                 .padding(20)
                 .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
                 .navigationTitle("Añadir \(spec.displayTitle)")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cerrar") { showCustomInputSheet = false } } }

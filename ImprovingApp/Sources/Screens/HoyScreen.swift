@@ -59,7 +59,11 @@ struct HoyScreen: View {
                     Color.clear
                         .onChange(of: minY) { _, newY in
                             let clamped = max(newY, 0)
-                            deepPullOffset = clamped
+                            // Quantize pull indicator & stay at 0 during normal scrolling so HoyScreen.body never re-evaluates at 120 FPS!
+                            let quantized: CGFloat = clamped > 40 ? (floor(clamped / 6.0) * 6.0) : 0
+                            if quantized != deepPullOffset {
+                                deepPullOffset = quantized
+                            }
                             if clamped >= deepPullThreshold && !deepPullTriggered && Date().timeIntervalSince(lastDeepPullAt) > 6.0 {
                                 deepPullTriggered = true
                                 lastDeepPullAt = Date()
@@ -169,21 +173,29 @@ struct HoyScreen: View {
                     .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                 }
 
-                // Setup Banner ONLY when zero recorded data exists anywhere
-                if !store.hasEverHadAnyRecordedData {
+                // Explicit Preview Mode Banner + Setup CTA whenever no real wearable/Health data has been synced yet
+                if !store.hasImportedOrPairedRealData {
                     Button { onNavigate(.dispositivos) } label: {
                         BevelCard {
                             HStack(spacing: 12) {
-                                Image(systemName: "person.fill")
+                                Image(systemName: "sparkles")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.white)
                                     .frame(width: 36, height: 36)
                                     .background(Circle().fill(BevelColors.indigoEnd))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Configura tu perfil y dispositivo")
-                                        .font(ImprovingFont.cardTitle(14))
-                                        .foregroundColor(BevelColors.textPrimary)
-                                    Text("Conecta Apple Health, importa exportar.zip o vincula WHOOP")
+                                    HStack(spacing: 6) {
+                                        Text("Modo vista previa")
+                                            .font(ImprovingFont.cardTitle(14))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("EJEMPLO")
+                                            .font(ImprovingFont.microLabel(9))
+                                            .foregroundColor(BevelColors.amberStart)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Capsule().fill(BevelColors.amberSoftBg))
+                                    }
+                                    Text("Conecta Apple Salud, ejecuta «Sync Improving» o importa exportar.zip para ver tus datos reales")
                                         .font(ImprovingFont.caption(11.5))
                                         .foregroundColor(BevelColors.textSecondary)
                                 }
@@ -196,6 +208,7 @@ struct HoyScreen: View {
                             .padding(.vertical, 14)
                         }
                     }
+                    .buttonStyle(.plain)
                 }
 
                 // Customizable Ordered Home Sections (N2!)
@@ -600,8 +613,8 @@ struct HoyScreen: View {
                                 weeklyMiniStat(
                                     label: "Nutrición",
                                     value: weeklySummary.avgNutritionScore.map { "\($0)" } ?? "--",
-                                    delta: weeklySummary.avgHrv.map { String(format: "%.0fms", $0) } ?? "--",
-                                    positive: true
+                                    delta: weeklySummary.nutritionScoreDelta.map { ($0 >= 0 ? "+\($0)" : "\($0)") } ?? "--",
+                                    positive: (weeklySummary.nutritionScoreDelta ?? 0) >= 0
                                 )
                             }
                         }

@@ -589,7 +589,7 @@ struct SuenoDetailScreen: View {
 
                                     Text("Abrir fases y constantes nocturnas")
                                         .font(ImprovingFont.cardTitle(13.5))
-                                        .foregroundColor(BevelColors.textPrimary)
+                                        .foregroundColor(.white)
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 10)
                                         .background(Capsule().fill(Color(hex: 0x2E375C)))
@@ -701,13 +701,13 @@ struct SleepSessionDetailScreen: View {
                 let r = ratingFor(score: dip, good: 12, ok: 6)
                 list.append(SubRatingItem(id: "dip", icon: "heart.circle.fill", ratingText: r.0, label: "Disminución de la FC", fillFrac: r.2, color: r.1))
             }
-            let remSec = sess?.remSeconds ?? ((d?.remMinutes ?? 0) > 0 ? (d!.remMinutes! * 60) : nil)
+            let remSec = sess?.remSeconds ?? (d?.remMinutes.flatMap { $0 > 0 ? $0 * 60 : nil })
             if let rs = remSec, rs > 0, asleepMin > 0 {
                 let pct = Double(rs) / Double(asleepMin * 60) * 100.0
                 let r = ratingFor(score: pct, good: 18, ok: 12)
-                list.append(SubRatingItem(id: "rem", icon: "sparkles", ratingText: r.0, label: "Sueño MOR", fillFrac: r.2, color: r.1))
+                list.append(SubRatingItem(id: "rem", icon: "sparkles", ratingText: r.0, label: "Sueño REM", fillFrac: r.2, color: r.1))
             }
-            let deepSec = sess?.deepSeconds ?? ((d?.deepMinutes ?? 0) > 0 ? (d!.deepMinutes! * 60) : nil)
+            let deepSec = sess?.deepSeconds ?? (d?.deepMinutes.flatMap { $0 > 0 ? $0 * 60 : nil })
             if let ds = deepSec, ds > 0, asleepMin > 0 {
                 let pct = Double(ds) / Double(asleepMin * 60) * 100.0
                 let r = ratingFor(score: pct, good: 14, ok: 8)
@@ -724,17 +724,17 @@ struct SleepSessionDetailScreen: View {
             return list
         }()
 
-        // Stage seconds (ONLY real measured stages)
-        let awakeSec = sess?.awakeSeconds ?? ((d?.awakeMinutes ?? 0) > 0 ? (d!.awakeMinutes! * 60) : nil)
-        let remSec = sess?.remSeconds ?? ((d?.remMinutes ?? 0) > 0 ? (d!.remMinutes! * 60) : nil)
-        let coreSec = sess?.coreSeconds ?? ((d?.coreMinutes ?? 0) > 0 ? (d!.coreMinutes! * 60) : nil)
-        let deepSec = sess?.deepSeconds ?? ((d?.deepMinutes ?? 0) > 0 ? (d!.deepMinutes! * 60) : nil)
+        // Stage seconds (ONLY real measured stages — zero force unwraps!)
+        let awakeSec = sess?.awakeSeconds ?? (d?.awakeMinutes.flatMap { $0 > 0 ? $0 * 60 : nil })
+        let remSec = sess?.remSeconds ?? (d?.remMinutes.flatMap { $0 > 0 ? $0 * 60 : nil })
+        let coreSec = sess?.coreSeconds ?? (d?.coreMinutes.flatMap { $0 > 0 ? $0 * 60 : nil })
+        let deepSec = sess?.deepSeconds ?? (d?.deepMinutes.flatMap { $0 > 0 ? $0 * 60 : nil })
         let totalStageSec = (awakeSec ?? 0) + (remSec ?? 0) + (coreSec ?? 0) + (deepSec ?? 0)
 
         let stageCards: [(String, Int, Color)] = [
             awakeSec.flatMap { $0 > 0 ? ("Vigilia", $0, Color(hex: 0xF2845C)) : nil },
-            remSec.flatMap { $0 > 0 ? ("MOR", $0, Color(hex: 0xA8BCFF)) : nil },
-            coreSec.flatMap { $0 > 0 ? ("Central", $0, Color(hex: 0x6285FA)) : nil },
+            remSec.flatMap { $0 > 0 ? ("REM", $0, Color(hex: 0xA8BCFF)) : nil },
+            coreSec.flatMap { $0 > 0 ? ("Esencial", $0, Color(hex: 0x6285FA)) : nil },
             deepSec.flatMap { $0 > 0 ? ("Profundo", $0, Color(hex: 0x4E5CC8)) : nil },
         ].compactMap { $0 }
 
@@ -753,8 +753,8 @@ struct SleepSessionDetailScreen: View {
         }
         let activeAvg: Double? = activeSamples.isEmpty ? nil : (activeSamples.map(\.value).reduce(0, +) / Double(activeSamples.count))
 
-        let bgNavy = Color(hex: 0x101426)
-        let cardNavy = Color(hex: 0x1D233D)
+        let bgNavy = BevelColors.isDarkMode ? Color(hex: 0x101426) : BevelColors.canvas
+        let cardNavy = BevelColors.isDarkMode ? Color(hex: 0x1D233D) : BevelColors.card
 
         ZStack(alignment: .bottom) {
             ScrollView {
@@ -764,15 +764,16 @@ struct SleepSessionDetailScreen: View {
                         Button(action: onBack) {
                             Image(systemName: "xmark")
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.white)
-                                .frame(width: 40, height: 40)
-                                .background(Circle().fill(Color.white.opacity(0.10)))
-                                .overlay(Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(width: 44, height: 44)
+                                .background(Circle().fill(BevelColors.glassChromeFill))
+                                .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                         }
+                        .accessibilityLabel("Cerrar")
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Sueño principal")
                                 .font(ImprovingFont.displayLarge(26))
-                                .foregroundColor(.white)
+                                .foregroundColor(BevelColors.textPrimary)
                             Text(sess?.startDateTimeLabel ?? store.fullDateLabel)
                                 .font(ImprovingFont.body(14))
                                 .foregroundColor(BevelColors.textSecondary)

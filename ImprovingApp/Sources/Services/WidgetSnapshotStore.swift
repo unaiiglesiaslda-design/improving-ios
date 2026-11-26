@@ -336,7 +336,6 @@ enum WidgetSnapshotStore {
         for suite in suitesToWrite {
             if let defaults = UserDefaults(suiteName: suite) {
                 defaults.set(data, forKey: storageKey)
-                defaults.synchronize()
             }
         }
         UserDefaults.standard.set(data, forKey: storageKey)

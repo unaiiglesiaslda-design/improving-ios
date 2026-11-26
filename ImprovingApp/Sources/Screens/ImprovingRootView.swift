@@ -27,6 +27,8 @@ struct ImprovingRootView: View {
             if !store.userProfile.onboardingCompleted {
                 OnboardingExperienceView(
                     initialProfile: store.userProfile,
+                    healthAuthorized: store.healthKitAuthorized,
+                    healthStatusText: store.healthKitLastSyncText,
                     onConnectAppleHealth: { store.connectAndSyncAppleHealth() },
                     onFinish: { completedProfile in
                         withAnimation(.easeInOut(duration: 0.35)) {
@@ -142,7 +144,7 @@ struct ImprovingRootView: View {
                         .zIndex(15)
                     }
 
-                    if currentOverlay != .askBevel {
+                    if currentOverlay == .none {
                         FloatingPillBottomBar(
                             selectedTab: selectedTab,
                             visibleTabs: store.visibleTabs,
@@ -185,6 +187,39 @@ struct ImprovingRootView: View {
         }
         .preferredColorScheme(themeSettings.isDarkMode ? .dark : .light)
         .animation(.easeInOut(duration: 0.25), value: currentOverlay)
+        .onChange(of: store.pendingDeepLinkRoute) { _, req in
+            guard let req else { return }
+            showLaunchSplash = false
+            quickMenuOpen = false
+            switch req.destination {
+            case .hoy:
+                selectedTab = .hoy
+                overlayStack = []
+            case .diario:
+                selectedTab = .diario
+                overlayStack = []
+            case .fitness:
+                selectedTab = .fitness
+                overlayStack = []
+            case .biologia:
+                selectedTab = .biologia
+                overlayStack = []
+            case .nutricion:
+                selectedTab = .hoy
+                overlayStack = [.nutricion]
+            case .sueno:
+                selectedTab = .hoy
+                overlayStack = [.sueno]
+            case .esfuerzo:
+                selectedTab = .hoy
+                overlayStack = [.esfuerzo]
+            case .dispositivos:
+                overlayStack = [.dispositivos]
+            case .askBevel:
+                overlayStack = [.askBevel]
+            }
+            store.pendingDeepLinkRoute = nil
+        }
         .sheet(isPresented: $showQuickNoteSheet) {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 14) {

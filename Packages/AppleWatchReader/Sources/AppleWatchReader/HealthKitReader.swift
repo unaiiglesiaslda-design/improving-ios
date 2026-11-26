@@ -273,6 +273,14 @@ public final class HealthKitReader: ObservableObject {
         await setupBackgroundDeliveryAndObservers()
     }
 
+    /// Re-registers HealthKit observer queries & background delivery on cold launch when the user
+    /// previously granted HealthKit access (never prompts a UI sheet).
+    public func restoreBackgroundObserversIfAuthorized() async {
+        guard HKHealthStore.isHealthDataAvailable() else { return }
+        self.isAuthorized = true
+        await setupBackgroundDeliveryAndObservers()
+    }
+
     // MARK: - 2. Background Delivery & Observers
 
     public func setupBackgroundDeliveryAndObservers() async {

@@ -1272,41 +1272,57 @@ struct CardioMetricDetailScreen: View {
         let cadVals = curWorkoutsDated.compactMap(\.workout.avgCadenceRpm) + win.isos.compactMap { store.activeHistory[$0]?.avgCadenceRpm }
         let avgCadence: Double? = cadVals.isEmpty ? nil : (cadVals.reduce(0, +) / Double(cadVals.count))
 
-        // Daily series for the selected KPI card
-        let dailyCur: [Double] = win.isos.map { iso in
+        // Daily series for ALL 9 KPI cards (0: Duración, 1: Distancia, 2: Elevación, 3: Calorías, 4: Ritmo, 5: Velocidad, 6: FC media, 7: Potencia, 8: Cadencia)
+        func kpiDayValue(iso: String) -> Double {
             let ws = filterWorkouts(store.activeHistory[iso]?.workouts ?? [])
             switch selectedActivityKpi {
-            case 0: return Double(ws.reduce(0) { $0 + $1.durationMin }) / 60.0 // hours
-            case 1: return ws.compactMap(\.distanceKm).reduce(0, +)
-            case 2: return (store.activeHistory[iso]?.elevationM ?? 0) + ws.compactMap(\.elevationM).reduce(0, +)
-            case 3: return Double(ws.reduce(0) { $0 + $1.kcal })
+            case 0:
+                return Double(ws.reduce(0) { $0 + $1.durationMin }) / 60.0
+            case 1:
+                return ws.compactMap(\.distanceKm).reduce(0, +)
+            case 2:
+                return (store.activeHistory[iso]?.elevationM ?? 0) + ws.compactMap(\.elevationM).reduce(0, +)
+            case 3:
+                return Double(ws.reduce(0) { $0 + $1.kcal })
+            case 4:
+                let dWs = ws.filter { ($0.distanceKm ?? 0) > 0.05 }
+                let km = dWs.compactMap(\.distanceKm).reduce(0, +)
+                let mins = Double(dWs.reduce(0) { $0 + $1.durationMin })
+                return km > 0.05 ? (mins / km) : 0
+            case 5:
+                let dWs = ws.filter { ($0.distanceKm ?? 0) > 0.05 }
+                let km = dWs.compactMap(\.distanceKm).reduce(0, +)
+                let hrs = Double(dWs.reduce(0) { $0 + $1.durationMin }) / 60.0
+                return hrs > 0.01 && km > 0.05 ? (km / hrs) : 0
             case 6:
                 let hs = ws.map(\.avgHrBpm).filter { $0 > 0 }
                 return hs.isEmpty ? 0 : Double(hs.reduce(0, +)) / Double(hs.count)
-            default: return Double(ws.reduce(0) { $0 + $1.durationMin }) / 60.0
+            case 7:
+                let ps = ws.compactMap(\.avgPowerW) + (store.activeHistory[iso]?.avgPowerW.map { [$0] } ?? [])
+                return ps.isEmpty ? 0 : (ps.reduce(0, +) / Double(ps.count))
+            case 8:
+                let cs = ws.compactMap(\.avgCadenceRpm) + (store.activeHistory[iso]?.avgCadenceRpm.map { [$0] } ?? [])
+                return cs.isEmpty ? 0 : (cs.reduce(0, +) / Double(cs.count))
+            default:
+                return Double(ws.reduce(0) { $0 + $1.durationMin }) / 60.0
             }
         }
-        let dailyPrev: [Double] = win.prevIsos.map { iso in
-            let ws = filterWorkouts(store.activeHistory[iso]?.workouts ?? [])
-            switch selectedActivityKpi {
-            case 0: return Double(ws.reduce(0) { $0 + $1.durationMin }) / 60.0
-            case 1: return ws.compactMap(\.distanceKm).reduce(0, +)
-            case 2: return (store.activeHistory[iso]?.elevationM ?? 0) + ws.compactMap(\.elevationM).reduce(0, +)
-            case 3: return Double(ws.reduce(0) { $0 + $1.kcal })
-            case 6:
-                let hs = ws.map(\.avgHrBpm).filter { $0 > 0 }
-                return hs.isEmpty ? 0 : Double(hs.reduce(0, +)) / Double(hs.count)
-            default: return Double(ws.reduce(0) { $0 + $1.durationMin }) / 60.0
-            }
-        }
+        let dailyCur: [Double] = win.isos.map { kpiDayValue(iso: $0) }
+        let dailyPrev: [Double] = win.prevIsos.map { kpiDayValue(iso: $0) }
 
         let chartFormatter: (Double) -> String = { v in
             switch selectedActivityKpi {
             case 0: return String(format: "%.1fh", locale: Locale(identifier: "es_ES"), v)
             case 1: return String(format: "%.1f km", locale: Locale(identifier: "es_ES"), v)
             case 2: return "\(Int(v.rounded())) m"
-            case 3: return "\(Int(v.rounded()))"
-            case 6: return "\(Int(v.rounded()))"
+            case 3: return "\(Int(v.rounded())) kcal"
+            case 4:
+                let totalSec = max(Int((v * 60.0).rounded()), 0)
+                return String(format: "%d:%02d/km", totalSec / 60, totalSec % 60)
+            case 5: return String(format: "%.1f km/h", locale: Locale(identifier: "es_ES"), v)
+            case 6: return "\(Int(v.rounded())) ppm"
+            case 7: return "\(Int(v.rounded())) W"
+            case 8: return "\(Int(v.rounded())) rpm"
             default: return String(format: "%.1fh", locale: Locale(identifier: "es_ES"), v)
             }
         }
@@ -1405,21 +1421,21 @@ struct CardioMetricDetailScreen: View {
                                 Button { isBarMode = true } label: {
                                     Image(systemName: "chart.bar.fill")
                                         .font(.system(size: 13))
-                                        .foregroundColor(isBarMode ? .white : BevelColors.textMuted)
+                                        .foregroundColor(isBarMode ? BevelColors.textPrimary : BevelColors.textMuted)
                                         .frame(width: 40, height: 32)
-                                        .background(Capsule().fill(isBarMode ? Color.white.opacity(0.14) : .clear))
+                                        .background(Capsule().fill(isBarMode ? BevelColors.cardSubtle : .clear))
                                 }
                                 Button { isBarMode = false } label: {
                                     Image(systemName: "chart.xyaxis.line")
                                         .font(.system(size: 13))
-                                        .foregroundColor(!isBarMode ? .white : BevelColors.textMuted)
+                                        .foregroundColor(!isBarMode ? BevelColors.textPrimary : BevelColors.textMuted)
                                         .frame(width: 40, height: 32)
-                                        .background(Capsule().fill(!isBarMode ? Color.white.opacity(0.14) : .clear))
+                                        .background(Capsule().fill(!isBarMode ? BevelColors.cardSubtle : .clear))
                                 }
                             }
                             .padding(3)
-                            .background(Capsule().fill(Color.white.opacity(0.06)))
-                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 0.7))
+                            .background(Capsule().fill(BevelColors.card))
+                            .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.7))
                         }
                         .padding(.horizontal, 16)
 
@@ -2415,20 +2431,21 @@ struct CardioMetricDetailScreen: View {
                                 Button { isBarMode = true } label: {
                                     Image(systemName: "chart.bar.fill")
                                         .font(.system(size: 13))
-                                        .foregroundColor(isBarMode ? .white : BevelColors.textMuted)
+                                        .foregroundColor(isBarMode ? BevelColors.textPrimary : BevelColors.textMuted)
                                         .frame(width: 40, height: 32)
-                                        .background(Capsule().fill(isBarMode ? Color.white.opacity(0.14) : .clear))
+                                        .background(Capsule().fill(isBarMode ? BevelColors.cardSubtle : .clear))
                                 }
                                 Button { isBarMode = false } label: {
                                     Image(systemName: "chart.xyaxis.line")
                                         .font(.system(size: 13))
-                                        .foregroundColor(!isBarMode ? .white : BevelColors.textMuted)
+                                        .foregroundColor(!isBarMode ? BevelColors.textPrimary : BevelColors.textMuted)
                                         .frame(width: 40, height: 32)
-                                        .background(Capsule().fill(!isBarMode ? Color.white.opacity(0.14) : .clear))
+                                        .background(Capsule().fill(!isBarMode ? BevelColors.cardSubtle : .clear))
                                 }
                             }
                             .padding(3)
-                            .background(Capsule().fill(Color.white.opacity(0.06)))
+                            .background(Capsule().fill(BevelColors.card))
+                            .overlay(Capsule().strokeBorder(BevelColors.cardBorder, lineWidth: 0.7))
                         }
                         .padding(.horizontal, 16)
 

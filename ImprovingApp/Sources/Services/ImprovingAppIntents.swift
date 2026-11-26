@@ -56,6 +56,9 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
     @Parameter(title: "Fechas de Temperatura")
     var tempDates: [String]?
 
+    @Parameter(title: "Fines de Temperatura", description: "Fecha de finalización de las muestras de temperatura al dormir")
+    var tempEnds: [String]?
+
     @Parameter(title: "Valores de Pasos")
     var stepsValues: [String]?
 
@@ -86,11 +89,41 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
     @Parameter(title: "Fechas de Distancia")
     var distanceDates: [String]?
 
+    @Parameter(title: "Distancia en bicicleta (km)")
+    var cyclingDistanceValues: [String]?
+
+    @Parameter(title: "Fechas de Distancia en bicicleta")
+    var cyclingDistanceDates: [String]?
+
     @Parameter(title: "Pisos subidos (desnivel)")
     var flightsValues: [String]?
 
     @Parameter(title: "Fechas de Pisos subidos")
     var flightsDates: [String]?
+
+    @Parameter(title: "Peso corporal (kg)")
+    var weightValues: [String]?
+
+    @Parameter(title: "Fechas de Peso")
+    var weightDates: [String]?
+
+    @Parameter(title: "Grasa corporal (%)")
+    var bodyFatValues: [String]?
+
+    @Parameter(title: "Fechas de Grasa corporal")
+    var bodyFatDates: [String]?
+
+    @Parameter(title: "Masa magra (kg)")
+    var leanMassValues: [String]?
+
+    @Parameter(title: "Fechas de Masa magra")
+    var leanMassDates: [String]?
+
+    @Parameter(title: "Glucosa en sangre")
+    var glucoseValues: [String]?
+
+    @Parameter(title: "Fechas de Glucosa")
+    var glucoseDates: [String]?
 
     @Parameter(title: "Nombres de Entrenamientos")
     var workoutNames: [String]?
@@ -126,6 +159,7 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
             spo2Dates: spo2Dates,
             tempValues: tempValues,
             tempDates: tempDates,
+            tempEnds: tempEnds,
             stepsValues: stepsValues,
             stepsDates: stepsDates,
             kcalValues: kcalValues,
@@ -136,8 +170,18 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
             hrrDates: hrrDates,
             distanceValues: distanceValues,
             distanceDates: distanceDates,
+            cyclingDistanceValues: cyclingDistanceValues,
+            cyclingDistanceDates: cyclingDistanceDates,
             flightsValues: flightsValues,
             flightsDates: flightsDates,
+            weightValues: weightValues,
+            weightDates: weightDates,
+            bodyFatValues: bodyFatValues,
+            bodyFatDates: bodyFatDates,
+            leanMassValues: leanMassValues,
+            leanMassDates: leanMassDates,
+            glucoseValues: glucoseValues,
+            glucoseDates: glucoseDates,
             sleepValues: sleepValues,
             sleepStarts: sleepStarts,
             sleepEnds: sleepEnds,
@@ -151,6 +195,11 @@ struct SyncAppleHealthShortcutIntent: AppIntent {
 
         guard ShortcutsHealthSyncImporter.saveEnvelopeToInbox(envelope) != nil else {
             return .result(value: "No se pudo guardar la sincronización en Improving.")
+        }
+        // Immediately parse, merge into persisted store & refresh WidgetKit even when app is closed!
+        let importedDays = await ShortcutsHealthSyncImporter.processPendingInboxInBackground()
+        if importedDays > 0 {
+            return .result(value: "✓ Datos de Apple Salud sincronizados en Improving (\(importedDays) días).")
         }
         return .result(value: "✓ Datos de Apple Salud enviados a Improving.")
     }

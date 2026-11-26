@@ -361,6 +361,23 @@ struct DispositivosScreen: View {
                             .font(ImprovingFont.caption(11.5))
                             .foregroundColor(BevelColors.textSecondary)
 
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: store.healthKitAuthorized ? "checkmark.circle.fill" : "info.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(store.healthKitAuthorized ? BevelColors.emeraldEnd : BevelColors.amberStart)
+                                .padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Estado HealthKit: \(store.healthKitLastSyncText)")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(store.healthKitAuthorized ? BevelColors.emeraldEnd : BevelColors.textPrimary)
+                                if !store.healthKitAuthorized {
+                                    Text("Si instalaste la app con AltStore o SideStore gratuito, Apple desactiva HealthKit directo; usa «Sincronización automática (Atajos)» justo arriba.")
+                                        .font(ImprovingFont.caption(10.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                }
+                            }
+                        }
+
                         if let okMsg = store.importStatus.summaryMessage, store.importStatus.errorMessage == nil {
                             HStack(spacing: 6) {
                                 Image(systemName: "checkmark.circle.fill").foregroundColor(BevelColors.emeraldEnd)
@@ -582,10 +599,36 @@ struct DispositivosScreen: View {
                         }
 
                         if store.whoopConnected {
-                            Button("Desconectar pulsera", role: .destructive) {
-                                store.disconnectWhoop()
+                            HStack(spacing: 12) {
+                                if let liveHr = store.whoopLiveHrBpm {
+                                    Text("FC en vivo: \(liveHr) ppm")
+                                        .font(ImprovingFont.caption(11.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(BevelColors.emeraldEnd)
+                                }
+                                Text("Paquetes BLE: \(store.whoopPacketsReceived)")
+                                    .font(ImprovingFont.caption(11))
+                                    .foregroundColor(BevelColors.textMuted)
+                                Spacer()
+                                Button("Desconectar", role: .destructive) {
+                                    store.disconnectWhoop()
+                                }
+                                .font(ImprovingFont.caption(12))
                             }
-                            .font(ImprovingFont.caption(12))
+                        }
+
+                        if !store.bleLogs.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(Array(store.bleLogs.prefix(3).enumerated()), id: \.offset) { _, line in
+                                    Text("• \(line)")
+                                        .font(ImprovingFont.caption(10.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
                         }
                     }
                     .padding(16)
@@ -948,6 +991,7 @@ struct DispositivosScreen: View {
             .padding(.bottom, 120)
         }
         .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
         .onAppear {
             profileDraft = store.userProfile
             birthDateDraft = store.userProfile.birthDate

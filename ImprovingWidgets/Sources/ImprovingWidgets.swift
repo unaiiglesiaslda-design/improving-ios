@@ -7,49 +7,101 @@ struct ImprovingWidgetEntry: TimelineEntry {
     let date: Date
     let snapshot: ImprovingWidgetSnapshot
     let hasLiveSnapshot: Bool
+    var isStaleDay: Bool = false
 }
 
 struct ImprovingWidgetProvider: TimelineProvider {
+    private static func isoDay(for date: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 2000, c.month ?? 1, c.day ?? 1)
+    }
+
+    private static func adjustedSnapshot(_ raw: ImprovingWidgetSnapshot, for entryDate: Date) -> (snap: ImprovingWidgetSnapshot, isStale: Bool) {
+        let todayIso = isoDay(for: entryDate)
+        guard !raw.dateIso.isEmpty && raw.dateIso != todayIso else {
+            return (raw, false)
+        }
+        // Midnight rollover: never display yesterday's calories/strain labeled as "Hoy"!
+        let rolled = ImprovingWidgetSnapshot(
+            dateIso: raw.dateIso,
+            dateLabel: "Ayer",
+            strainPct: 0,
+            recoveryPct: raw.recoveryPct,
+            sleepPct: raw.sleepPct,
+            energyPct: raw.energyPct,
+            stressScore: nil,
+            hrvMs: raw.hrvMs,
+            restingHrBpm: raw.restingHrBpm,
+            sleepDurationText: raw.sleepDurationText,
+            nutritionScore: nil,
+            caloriesToday: 0,
+            caloriesGoal: raw.caloriesGoal,
+            proteinG: 0,
+            carbsG: 0,
+            fatG: 0,
+            stepsCount: nil,
+            optimalStrainLowPct: raw.optimalStrainLowPct,
+            optimalStrainHighPct: raw.optimalStrainHighPct,
+            updatedAt: raw.updatedAt
+        )
+        return (rolled, true)
+    }
+
     func placeholder(in context: Context) -> ImprovingWidgetEntry {
-        ImprovingWidgetEntry(date: Date(), snapshot: .placeholder, hasLiveSnapshot: true)
+        ImprovingWidgetEntry(date: Date(), snapshot: .placeholder, hasLiveSnapshot: true, isStaleDay: false)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (ImprovingWidgetEntry) -> Void) {
+        let now = Date()
         if let loaded = WidgetSnapshotStore.load() {
-            completion(ImprovingWidgetEntry(date: Date(), snapshot: loaded, hasLiveSnapshot: true))
+            let adj = Self.adjustedSnapshot(loaded, for: now)
+            completion(ImprovingWidgetEntry(date: now, snapshot: adj.snap, hasLiveSnapshot: true, isStaleDay: adj.isStale))
         } else {
-            completion(ImprovingWidgetEntry(date: Date(), snapshot: .placeholder, hasLiveSnapshot: !context.isPreview))
+            // Fixed inverted preview flag: Widget Gallery previews show clean sample rings, real empty widgets prompt to open app!
+            completion(ImprovingWidgetEntry(date: now, snapshot: .placeholder, hasLiveSnapshot: context.isPreview, isStaleDay: false))
         }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ImprovingWidgetEntry>) -> Void) {
         let now = Date()
+        let cal = Calendar.current
+        let nextMidnight = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now)) ?? now.addingTimeInterval(3600 * 12)
         let loaded = WidgetSnapshotStore.load()
-        let snap = loaded ?? ImprovingWidgetSnapshot(
-            dateIso: "",
-            dateLabel: "Hoy",
-            strainPct: 0,
-            recoveryPct: nil,
-            sleepPct: nil,
-            energyPct: nil,
-            stressScore: nil,
-            hrvMs: nil,
-            restingHrBpm: nil,
-            sleepDurationText: "--",
-            nutritionScore: nil,
-            caloriesToday: 0,
-            caloriesGoal: 2200,
-            proteinG: 0,
-            carbsG: 0,
-            fatG: 0,
-            stepsCount: nil,
-            optimalStrainLowPct: 42,
-            optimalStrainHighPct: 64,
-            updatedAt: now
-        )
-        let entry = ImprovingWidgetEntry(date: now, snapshot: snap, hasLiveSnapshot: loaded != nil)
-        let nextRefresh = Calendar.current.date(byAdding: .minute, value: 15, to: now) ?? now.addingTimeInterval(900)
-        completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
+
+        guard let raw = loaded else {
+            let emptySnap = ImprovingWidgetSnapshot(
+                dateIso: "",
+                dateLabel: "Hoy",
+                strainPct: 0,
+                recoveryPct: nil,
+                sleepPct: nil,
+                energyPct: nil,
+                stressScore: nil,
+                hrvMs: nil,
+                restingHrBpm: nil,
+                sleepDurationText: "--",
+                nutritionScore: nil,
+                caloriesToday: 0,
+                caloriesGoal: 2200,
+                proteinG: 0,
+                carbsG: 0,
+                fatG: 0,
+                stepsCount: nil,
+                optimalStrainLowPct: 42,
+                optimalStrainHighPct: 64,
+                updatedAt: now
+            )
+            let entry = ImprovingWidgetEntry(date: now, snapshot: emptySnap, hasLiveSnapshot: false, isStaleDay: false)
+            // Respect WidgetKit daily budget: refresh at next midnight (main app pushes immediate reloads when data changes!)
+            completion(Timeline(entries: [entry], policy: .after(nextMidnight)))
+            return
+        }
+
+        let currentAdj = Self.adjustedSnapshot(raw, for: now)
+        let currentEntry = ImprovingWidgetEntry(date: now, snapshot: currentAdj.snap, hasLiveSnapshot: true, isStaleDay: currentAdj.isStale)
+        let midnightAdj = Self.adjustedSnapshot(raw, for: nextMidnight)
+        let midnightEntry = ImprovingWidgetEntry(date: nextMidnight, snapshot: midnightAdj.snap, hasLiveSnapshot: true, isStaleDay: midnightAdj.isStale)
+        completion(Timeline(entries: [currentEntry, midnightEntry], policy: .after(nextMidnight)))
     }
 }
 
@@ -136,10 +188,15 @@ struct ImprovingResumenWidgetView: View {
         return (Double(lo) / 100.0)...(Double(hi) / 100.0)
     }
 
-    private var syncTimeLabel: String {
+    private static let hhmmFmt: DateFormatter = {
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HH:mm"
-        return f.string(from: entry.snapshot.updatedAt)
+        return f
+    }()
+
+    private var syncTimeLabel: String {
+        Self.hhmmFmt.string(from: entry.snapshot.updatedAt)
     }
 
     var body: some View {
@@ -157,7 +214,7 @@ struct ImprovingResumenWidgetView: View {
                 smallHomeView
             }
         }
-        .widgetURL(URL(string: "improving://open"))
+        .widgetURL(URL(string: "improving://hoy"))
     }
 
     private var smallHomeView: some View {
@@ -332,7 +389,7 @@ struct ImprovingResumenWidgetView: View {
                 Text(val.map { "\($0)" } ?? "--")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .monospacedDigit()
-                Text(s.recoveryPct != nil ? "REC" : "BAT")
+                Text(s.recoveryPct != nil ? "REC" : (s.energyPct != nil ? "BAT" : "SUE"))
                     .font(.system(size: 7, weight: .bold, design: .rounded))
                     .opacity(0.75)
             }
@@ -425,13 +482,13 @@ struct ImprovingNutricionWidgetView: View {
             Spacer(minLength: 0)
 
             let rem = max(s.caloriesGoal - s.caloriesToday, 0)
-            Text(!entry.hasLiveSnapshot ? "Abre Improving" : (s.caloriesToday == 0 ? "Sin comidas hoy" : "Faltan \(rem) kcal"))
+            Text(!entry.hasLiveSnapshot ? "Abre Improving" : (entry.isStaleDay ? "Nuevo día · Sincroniza" : (s.caloriesToday == 0 ? "Sin comidas hoy" : "Faltan \(rem) kcal")))
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundColor(.white.opacity(0.68))
                 .lineLimit(1)
         }
         .padding(2)
-        .widgetURL(URL(string: "improving://open"))
+        .widgetURL(URL(string: "improving://nutrition"))
         .containerBackground(for: .widget) {
             LinearGradient(colors: [Color(red: 0.14, green: 0.14, blue: 0.21), WidgetPalette.bgBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
         }

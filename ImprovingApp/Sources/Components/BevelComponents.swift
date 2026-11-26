@@ -1,4 +1,21 @@
 import SwiftUI
+import UIKit
+
+extension View {
+    /// Adds a native Spanish `"Listo"` toolbar button above `.numberPad` / `.decimalPad` keyboards
+    /// so users can always dismiss numeric keypads with 1 tap without leaving the sheet.
+    func keyboardDoneToolbar() -> some View {
+        self.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Listo") {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+                .fontWeight(.semibold)
+            }
+        }
+    }
+}
 
 enum GaugeKind {
     case strain, recovery, sleep
@@ -378,7 +395,7 @@ struct TrainingLoadTickGauge: View {
                     // Subtle outer halo track
                     var trackArc = Path()
                     trackArc.addArc(center: center, radius: outerR + 6, startAngle: .degrees(startDeg), endAngle: .degrees(startDeg + sweepDeg), clockwise: false)
-                    ctx.stroke(trackArc, with: .color(Color.white.opacity(0.08)), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    ctx.stroke(trackArc, with: .color(BevelColors.chartTrackSubtle), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
 
                     if hasData {
                         let oStart = min(max(optimalStartFrac, 0.02), 0.94)
@@ -402,16 +419,16 @@ struct TrainingLoadTickGauge: View {
                         var tick = Path()
                         tick.move(to: CGPoint(x: center.x + innerR * cos(rad), y: center.y + innerR * sin(rad)))
                         tick.addLine(to: CGPoint(x: center.x + outerR * cos(rad), y: center.y + outerR * sin(rad)))
-                        ctx.stroke(tick, with: .color(i <= litCount ? Color.white.opacity(0.42) : Color.white.opacity(0.11)), style: StrokeStyle(lineWidth: 1.9, lineCap: .round))
+                        ctx.stroke(tick, with: .color(i <= litCount ? BevelColors.chartPointerFill.opacity(0.65) : BevelColors.chartTickInactive), style: StrokeStyle(lineWidth: 1.9, lineCap: .round))
                     }
 
                     if hasData {
                         let knobDeg = startDeg + clamped * sweepDeg
                         let kRad = knobDeg * .pi / 180.0
                         let kPt = CGPoint(x: center.x + (outerR - 4) * cos(kRad), y: center.y + (outerR - 4) * sin(kRad))
-                        ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 11, y: kPt.y - 11, width: 22, height: 22)), with: .color(Color.white.opacity(0.14)))
+                        ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 11, y: kPt.y - 11, width: 22, height: 22)), with: .color(BevelColors.chartTrackSubtle))
                         ctx.fill(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(BevelColors.card))
-                        ctx.stroke(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(Color.white.opacity(0.70)), lineWidth: 2.2)
+                        ctx.stroke(Path(ellipseIn: CGRect(x: kPt.x - 6, y: kPt.y - 6, width: 12, height: 12)), with: .color(BevelColors.chartPointerFill), lineWidth: 2.2)
                     }
                 }
 
@@ -1014,7 +1031,7 @@ struct FloatingPillBottomBar: View {
                     .font(ImprovingFont.caption(10))
                     .fontWeight(isSelected ? .bold : .medium)
             }
-            .foregroundColor(isSelected ? BevelColors.textPrimary : BevelColors.textSecondary)
+            .foregroundColor(isSelected ? .white : BevelColors.textSecondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
             .background(

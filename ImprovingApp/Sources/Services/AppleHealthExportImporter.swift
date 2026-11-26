@@ -257,7 +257,9 @@ enum AppleHealthExportImporter {
         var totalWorkouts = 0
 
         // Strictly causal rolling history arrays seeded from prior stored history before firstNewIso!
-        var priorLnHrv: [Double] = []
+        // Separate RMSSD and SDNN pools so switching between Watch RMSSD and Apple Health SDNN NEVER skews the 60d baseline.
+        var priorLnHrvRmssd: [Double] = []
+        var priorLnHrvSdnn: [Double] = []
         var priorRhr: [Double] = []
         var priorResp: [Double] = []
 
@@ -268,7 +270,14 @@ enum AppleHealthExportImporter {
 
         for iso in priorHistory.keys.sorted() where iso < firstNewIso {
             if let old = priorHistory[iso] {
-                if let h = old.hrvMs, h > 2.0 { priorLnHrv.append(log(h)) }
+                if let h = old.hrvMs, h > 2.0 {
+                    let isSdnn = (old.hrvMethodLabel?.uppercased().contains("SDNN") == true)
+                    if isSdnn {
+                        priorLnHrvSdnn.append(log(h))
+                    } else {
+                        priorLnHrvRmssd.append(log(h))
+                    }
+                }
                 if let r = old.restingHrBpm { priorRhr.append(r) }
                 if let rr = old.respRateRpm { priorResp.append(rr) }
                 if let lastE = old.energySamples5m.last?.value ?? old.energyBankPercent.map({ Double($0) }) {
@@ -632,8 +641,12 @@ enum AppleHealthExportImporter {
             let sleepDebt = asleepOrNil.map { max(Int(targetSleepMin.rounded()) - $0, 0) }
 
             // 5. Causal 60-Day Personal Baselines -> Bevel Recovery % (Seeded with user's age/sex/body clinical priors!)
+            // Match the day's HRV method (RMSSD vs SDNN) to its own dedicated baseline pool!
+            let dayIsSdnn = (hrvMethodLabel?.uppercased().contains("SDNN") == true)
+            let activePriorLnHrv = dayIsSdnn ? priorLnHrvSdnn : priorLnHrvRmssd
+            let hrvPopExpected = dayIsSdnn ? (norms.hrvExpectedMs * 1.18) : norms.hrvExpectedMs
             let lnHrvBase = WhoopPhysiologyEngine.computeRollingBaseline(
-                priorValues: priorLnHrv, populationMean: log(max(norms.hrvExpectedMs, 15.0)), populationSigma: 0.25, floorSigma: 0.14
+                priorValues: activePriorLnHrv, populationMean: log(max(hrvPopExpected, 15.0)), populationSigma: 0.25, floorSigma: 0.14
             )
             let rhrBase = WhoopPhysiologyEngine.computeRollingBaseline(
                 priorValues: priorRhr, populationMean: norms.restingHrExpected, populationSigma: 4.0, floorSigma: 1.8
@@ -656,7 +669,13 @@ enum AppleHealthExportImporter {
             )
 
             // Update causal history AFTER scoring day i
-            if let h = hrvMs, h > 2.0 { priorLnHrv.append(log(h)) }
+            if let h = hrvMs, h > 2.0 {
+                if dayIsSdnn {
+                    priorLnHrvSdnn.append(log(h))
+                } else {
+                    priorLnHrvRmssd.append(log(h))
+                }
+            }
             if let r = rhrBpm { priorRhr.append(r) }
             if let rr = respRate { priorResp.append(rr) }
 

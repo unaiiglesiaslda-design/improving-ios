@@ -65,6 +65,17 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>bluetooth-central</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.improving.health.ios.refresh</string>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Improving utiliza Bluetooth para conectar con tu pulsera WHOOP en tiempo real y descargar tu historial biométrico.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
@@ -72,7 +83,7 @@
 	<key>NSHealthShareUsageDescription</key>
 	<string>Improving lee tu sueño, variabilidad cardíaca (VFC), pulso en reposo, frecuencia respiratoria, SpO2 y entrenamientos de Apple Salud.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>Improving necesita permiso de lectura de Apple Salud para calcular tu recuperación, sueño y esfuerzo.</string>
+	<string>Improving solicita permiso opcional de escritura en Apple Salud únicamente si decides guardar sesiones registradas manualmente.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Improving usa la fototeca cuando eliges una foto para tu perfil o analizas una comida con IA.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

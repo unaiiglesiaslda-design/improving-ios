@@ -113,43 +113,90 @@ struct BarcodeProductResult: Equatable, Identifiable {
 }
 
 enum OpenFoodFactsService {
+    private static let cacheQueue = DispatchQueue(label: "com.improving.off.cache")
+    private static var memoryCache: [String: BarcodeProductResult] = [:]
+    private static let diskCacheKey = "com.improving.off.barcodeCache.v1"
+
     static func sanitizeBarcode(_ raw: String) -> String {
         raw.filter { $0.isNumber }
     }
 
-    static func lookupProduct(barcode rawBarcode: String) async -> (product: BarcodeProductResult?, errorMessage: String?) {
+    private static func cachedRawJson(for code: String) -> Data? {
+        guard let map = UserDefaults.standard.dictionary(forKey: diskCacheKey) as? [String: Data] else { return nil }
+        return map[code]
+    }
+
+    private static func storeRawJson(_ data: Data, for code: String) {
+        var map = (UserDefaults.standard.dictionary(forKey: diskCacheKey) as? [String: Data]) ?? [:]
+        map[code] = data
+        if map.count > 60 {
+            for k in Array(map.keys).prefix(map.count - 60) { map.removeValue(forKey: k) }
+        }
+        UserDefaults.standard.set(map, forKey: diskCacheKey)
+    }
+
+    static func lookupProduct(barcode rawBarcode: String, session: URLSession = .shared) async -> (product: BarcodeProductResult?, errorMessage: String?) {
         let code = sanitizeBarcode(rawBarcode)
-        guard code.count >= 8, code.count <= 14 else {
-            return (nil, "Código de barras no válido (introduce entre 8 y 14 dígitos).")
+        // Support 6-digit UPC-E through 14-digit GTIN-14
+        guard code.count >= 6, code.count <= 14 else {
+            return (nil, "Código de barras no válido (introduce entre 6 y 14 dígitos).")
+        }
+        if let hit = cacheQueue.sync(execute: { memoryCache[code] }) {
+            return (hit, nil)
         }
         guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(code).json?fields=code,product_name,product_name_es,brands,image_front_small_url,serving_size,serving_quantity,nutriments,nutriscore_grade,nova_group,ingredients_text_es,ingredients_text") else {
             return (nil, "URL de consulta inválida.")
         }
 
+        let appVer = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.timeoutInterval = 14
-        req.setValue("Improving-iOS/1.0 (health-app)", forHTTPHeaderField: "User-Agent")
+        req.setValue("Improving-iOS/\(appVer) (https://github.com/unaiiglesiaslda-design/improving-ios)", forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse else {
-                return (nil, "Sin respuesta del servidor.")
+        var lastErr: String = "Sin respuesta del servidor."
+        for attempt in 0..<2 {
+            do {
+                let (data, resp) = try await session.data(for: req)
+                guard let http = resp as? HTTPURLResponse else {
+                    lastErr = "Sin respuesta del servidor."
+                    continue
+                }
+                if http.statusCode == 404 {
+                    return (nil, "Producto \(code) no encontrado en OpenFoodFacts. Puedes fotografiarlo o describirlo con Gemini IA.")
+                }
+                if http.statusCode == 429 {
+                    return (nil, "OpenFoodFacts está limitando consultas temporalmente. Espera unos segundos o usa la foto con IA.")
+                }
+                if (500...599).contains(http.statusCode) && attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 650_000_000)
+                    lastErr = "OpenFoodFacts temporalmente ocupado (HTTP \(http.statusCode))."
+                    continue
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    return (nil, "Error de consulta (HTTP \(http.statusCode)).")
+                }
+                guard let parsed = parseOpenFoodFactsResponse(data, fallbackBarcode: code) else {
+                    return (nil, "No encontramos datos nutricionales para el código \(code). Usa la cámara IA para analizar la etiqueta.")
+                }
+                cacheQueue.sync { memoryCache[code] = parsed }
+                storeRawJson(data, for: code)
+                return (parsed, nil)
+            } catch {
+                lastErr = "Error de red al consultar OpenFoodFacts: \(error.localizedDescription)"
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
             }
-            if http.statusCode == 404 {
-                return (nil, "Producto \(code) no encontrado en OpenFoodFacts. Puedes fotografiarlo o describirlo con Gemini IA.")
-            }
-            guard (200...299).contains(http.statusCode) else {
-                return (nil, "Error de consulta (HTTP \(http.statusCode)).")
-            }
-            guard let parsed = parseOpenFoodFactsResponse(data, fallbackBarcode: code) else {
-                return (nil, "No encontramos datos nutricionales para el código \(code). Usa la cámara IA para analizar la etiqueta.")
-            }
-            return (parsed, nil)
-        } catch {
-            return (nil, "Error de red al consultar OpenFoodFacts: \(error.localizedDescription)")
         }
+        // Offline cache fallback if previously scanned!
+        if let cachedData = cachedRawJson(for: code),
+           let parsed = parseOpenFoodFactsResponse(cachedData, fallbackBarcode: code) {
+            cacheQueue.sync { memoryCache[code] = parsed }
+            return (parsed, nil)
+        }
+        return (nil, lastErr)
     }
 
     static func parseOpenFoodFactsResponse(_ data: Data, fallbackBarcode: String) -> BarcodeProductResult? {
@@ -252,6 +299,7 @@ enum OpenFoodFactsService {
 
 struct BarcodeScannerCameraView: UIViewControllerRepresentable {
     let isTorchOn: Bool
+    var isPaused: Bool = false
     let onCodeDetected: (String) -> Void
     let onCameraUnavailable: (String) -> Void
 
@@ -267,11 +315,13 @@ struct BarcodeScannerCameraView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: BarcodeScannerController, context: Context) {
+        context.coordinator.isPaused = isPaused
         uiViewController.setTorch(enabled: isTorchOn)
     }
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
         let onCodeDetected: (String) -> Void
+        var isPaused: Bool = false
         private var lastCode: String?
         private var lastDetectedAt: Date = .distantPast
 
@@ -280,6 +330,7 @@ struct BarcodeScannerCameraView: UIViewControllerRepresentable {
         }
 
         func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+            guard !isPaused else { return }
             guard let readable = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
                   let raw = readable.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !raw.isEmpty else { return }
@@ -301,8 +352,10 @@ final class BarcodeScannerController: UIViewController {
 
     private let session = AVCaptureSession()
     private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var metadataOutput: AVCaptureMetadataOutput?
     private let sessionQueue = DispatchQueue(label: "com.improving.barcode.camera")
     private var configured = false
+    private var lastTorchEnabled: Bool? = nil
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -313,6 +366,21 @@ final class BarcodeScannerController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
+        // Restrict scan region to the centered viewfinder box (faster & prevents accidental edge scans!)
+        if let layer = previewLayer, let output = metadataOutput, view.bounds.width > 0, view.bounds.height > 0 {
+            let boxW = min(view.bounds.width * 0.78, 280)
+            let boxH: CGFloat = 150
+            let boxRect = CGRect(
+                x: (view.bounds.width - boxW) / 2,
+                y: (view.bounds.height - boxH) / 2,
+                width: boxW,
+                height: boxH
+            )
+            let roi = layer.metadataOutputRectConverted(fromLayerRect: boxRect)
+            if roi.width > 0 && roi.height > 0 {
+                output.rectOfInterest = roi
+            }
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -333,6 +401,9 @@ final class BarcodeScannerController: UIViewController {
     }
 
     func setTorch(enabled: Bool) {
+        // Avoid repeated hardware lock storms when SwiftUI sliders / text fields re-evaluate!
+        if lastTorchEnabled == enabled { return }
+        lastTorchEnabled = enabled
         sessionQueue.async {
             guard let device = AVCaptureDevice.default(for: .video), device.hasTorch else { return }
             do {
@@ -376,6 +447,11 @@ final class BarcodeScannerController: UIViewController {
             }
 
             self.session.beginConfiguration()
+            if device.isAutoFocusRangeRestrictionSupported {
+                try? device.lockForConfiguration()
+                device.autoFocusRangeRestriction = .near
+                device.unlockForConfiguration()
+            }
             if self.session.canAddInput(input) {
                 self.session.addInput(input)
             }
@@ -383,8 +459,10 @@ final class BarcodeScannerController: UIViewController {
             if self.session.canAddOutput(output) {
                 self.session.addOutput(output)
                 output.setMetadataObjectsDelegate(self.delegate, queue: DispatchQueue.main)
-                let wanted: [AVMetadataObject.ObjectType] = [.ean13, .ean8, .upce, .code128, .code39, .qr]
+                // Strictly food barcode symbologies (excludes .qr to prevent scanning random URLs!)
+                let wanted: [AVMetadataObject.ObjectType] = [.ean13, .ean8, .upce, .code128, .code39]
                 output.metadataObjectTypes = wanted.filter { output.availableMetadataObjectTypes.contains($0) }
+                self.metadataOutput = output
             }
             self.session.commitConfiguration()
             self.configured = true

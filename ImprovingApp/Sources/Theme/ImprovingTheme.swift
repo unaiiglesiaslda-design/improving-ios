@@ -55,6 +55,15 @@ enum BevelColors {
     static var trackGroove: Color { isDarkMode ? Color(hex: 0x2E313A) : Color(hex: 0xE7EBF0) }
     static var trackInnerShadow: Color { isDarkMode ? Color(hex: 0x1A1C21) : Color(hex: 0xD9DFE7) }
 
+    // Adaptive Chart & Gauge Tokens (high contrast in BOTH Dark Mode & Light Mode!)
+    static var chartGridLine: Color { isDarkMode ? Color.white.opacity(0.08) : Color(hex: 0x0F172A, alpha: 0.09) }
+    static var chartAxisStroke: Color { isDarkMode ? Color.white.opacity(0.16) : Color(hex: 0x0F172A, alpha: 0.16) }
+    static var chartTickInactive: Color { isDarkMode ? Color.white.opacity(0.16) : Color(hex: 0x0F172A, alpha: 0.16) }
+    static var chartTrackSubtle: Color { isDarkMode ? Color.white.opacity(0.12) : Color(hex: 0x0F172A, alpha: 0.10) }
+    static var chartPointerFill: Color { isDarkMode ? Color.white : Color(hex: 0x111827) }
+    static var chartGhostCurve: Color { isDarkMode ? Color.white.opacity(0.28) : Color(hex: 0x0F172A, alpha: 0.28) }
+    static var chartTooltipBg: Color { isDarkMode ? Color(hex: 0x262932) : Color(hex: 0xFFFFFF) }
+
     // Typography
     static var textPrimary: Color { isDarkMode ? Color(hex: 0xF3F4F6) : Color(hex: 0x111827) }
     static var textSecondary: Color { isDarkMode ? Color(hex: 0x9094A0) : Color(hex: 0x6B7280) }

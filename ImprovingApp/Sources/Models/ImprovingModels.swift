@@ -1092,8 +1092,9 @@ struct UserPhysiologyProfile: Codable, Equatable {
     }
 
     /// Dynamically computed chronological age in fractional years from `birthDateIso` (or fallback `ageYears`).
+    /// Uses pure thread-safe calendar parsing (zero shared `DateFormatter` data races across `Task.detached`!).
     var effectiveAgeYears: Double {
-        guard let iso = birthDateIso, let dt = Self.isoBirthFormatter.date(from: iso) else {
+        guard let iso = birthDateIso, let dt = AppFormatters.parseIsoDay(iso) else {
             return min(max(ageYears, 13.0), 99.0)
         }
         let secs = Date().timeIntervalSince(dt)
@@ -1102,7 +1103,7 @@ struct UserPhysiologyProfile: Codable, Equatable {
     }
 
     var birthDate: Date {
-        if let iso = birthDateIso, let dt = Self.isoBirthFormatter.date(from: iso) {
+        if let iso = birthDateIso, let dt = AppFormatters.parseIsoDay(iso) {
             return dt
         }
         let wholeYears = Int(ageYears.rounded())
@@ -1112,7 +1113,7 @@ struct UserPhysiologyProfile: Codable, Equatable {
     mutating func setBirthDate(_ date: Date) {
         let cal = Calendar.current
         let clamped = min(date, cal.date(byAdding: .year, value: -13, to: Date()) ?? date)
-        birthDateIso = Self.isoBirthFormatter.string(from: clamped)
+        birthDateIso = AppFormatters.isoDayString(from: clamped)
         ageYears = effectiveAgeYears
     }
 
@@ -1599,6 +1600,22 @@ struct WorkoutRoutineTemplate: Identifiable, Codable, Equatable, Hashable {
     var iconName: String
     var isPinned: Bool
     var exercises: [WorkoutRoutineExercise]
+}
+
+struct DeepLinkRequest: Equatable {
+    enum Destination: String, Equatable {
+        case hoy
+        case diario
+        case fitness
+        case biologia
+        case nutricion
+        case sueno
+        case esfuerzo
+        case dispositivos
+        case askBevel
+    }
+    let id: UUID = UUID()
+    let destination: Destination
 }
 
 struct StrengthLoggedSet: Identifiable, Codable, Equatable, Hashable {

@@ -2075,4 +2075,88 @@ final class AppleHealthExportImporterTests: XCTestCase {
         XCTAssertNotNil(strengthStore.realHistory[strengthStore.selectedDateIso]?.strainPct)
         XCTAssertGreaterThan(strengthStore.realHistory[strengthStore.selectedDateIso]?.strainPct ?? 0, 0)
     }
+
+    @MainActor
+    func testP1CachingWidgetsDeepLinksScannerShortcutsAndRmssdSdnnSeparation() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("improving_p1_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        // 1. Thread-safe pure-calendar AppFormatters ISO parsing rejects invalid overflow dates
+        XCTAssertNotNil(AppFormatters.parseIsoDay("2026-11-26"))
+        XCTAssertNil(AppFormatters.parseIsoDay("2026-02-30"))
+        XCTAssertNil(AppFormatters.parseIsoDay("2026-13-01"))
+        if let d = AppFormatters.parseIsoDay("2026-11-26") {
+            XCTAssertEqual(AppFormatters.isoDayString(from: d), "2026-11-26")
+        }
+
+        // 2. Preview-mode isolation & deep-link routing & selective coaching invalidation
+        let store = ImprovingStore(persistenceURL: tmpDir.appendingPathComponent("p1_store.json"))
+        XCTAssertFalse(store.hasEverHadAnyRecordedData)
+        store.publishWidgetSnapshot(triggerReload: false, forceReload: false)
+        if let snap = WidgetSnapshotStore.load() {
+            XCTAssertNil(snap.recoveryPct)
+            XCTAssertNil(snap.hrvMs)
+            XCTAssertEqual(snap.dateLabel, "Sin sincronizar")
+        }
+
+        store.handleIncomingURL(URL(string: "improving://nutrition")!)
+        XCTAssertEqual(store.pendingDeepLinkRoute?.destination, .nutrition)
+        store.handleDeepLinkRoute("diario")
+        XCTAssertEqual(store.pendingDeepLinkRoute?.destination, .diario)
+
+        // Selective coaching cache invalidation: hydration clears .hoy/.energia, keeps .sueno!
+        let sleepKey = store.coachingSlotKey(for: .sueno)
+        let hoyKey = store.coachingSlotKey(for: .hoy)
+        let dummyCard = SectionCoachingCard(
+            section: .sueno, emoji: "🌙", headline: "Test", body: "Body text here long enough",
+            slotKey: sleepKey, generatedAtLabel: "10:00", nextUpdateLabel: "12:00", isLiveAI: false
+        )
+        store.sectionCoachingCache[sleepKey] = dummyCard
+        store.sectionCoachingCache[hoyKey] = dummyCard
+        store.addHydrationGlass()
+        XCTAssertNil(store.sectionCoachingCache[hoyKey])
+        XCTAssertNotNil(store.sectionCoachingCache[sleepKey])
+
+        // Derived metrics cache returns consistent results and invalidates cleanly on mutation
+        let tl1 = store.trainingLoadAnalysis(tab: .cardio, spanDays: 30, windowPageOffset: 0)
+        let tl2 = store.trainingLoadAnalysis(tab: .cardio, spanDays: 30, windowPageOffset: 0)
+        XCTAssertEqual(tl1.currentLoad, tl2.currentLoad)
+
+        // 3. Shortcuts parser: *_units (kJ -> kcal, mi -> km), US thousands steps ("8,420"), M/d/yy fallback, UTC Z conversion
+        let shortcutsJson = """
+        {
+          "steps_values": ["8,420"],
+          "steps_dates": ["11/23/26, 9:30 AM"],
+          "kcal_values": ["418.4"],
+          "kcal_dates": ["2026-11-23 10:00:00 +0100"],
+          "kcal_units": ["kJ"],
+          "distance_values": ["5.0"],
+          "distance_dates": ["2026-11-23 10:00:00 +0100"],
+          "distance_units": ["mi"]
+        }
+        """
+        let shRes = ShortcutsHealthSyncImporter.parseData(try XCTUnwrap(shortcutsJson.data(using: .utf8)))
+        let d23 = try XCTUnwrap(shRes.days["2026-11-23"])
+        XCTAssertEqual(d23.stepsCount, 8420)
+        XCTAssertEqual(d23.activeKcal, 100) // 418.4 kJ == 100 kcal
+        XCTAssertNotNil(d23.distanceKm)
+        XCTAssertEqual(d23.distanceKm ?? 0, 8.0, accuracy: 0.2) // 5 mi == 8.05 km
+
+        // 4. RMSSD vs SDNN baseline separation prevents SDNN days from distorting RMSSD recovery baselines
+        var priorHistory: [String: RealBiometricDaySummary] = [:]
+        for dayNum in 1...10 {
+            let iso = String(format: "2026-11-%02d", dayNum)
+            // 10 prior days of high SDNN (110 ms)
+            priorHistory[iso] = RealBiometricDaySummary(dateIso: iso, hrvMs: 110.0, hrvMethodLabel: "SDNN · Todo el sueño", restingHrBpm: 56.0)
+        }
+        let rmssdDay = AppleHealthExportImporter.MutableAppleDay(dateIso: "2026-11-11")
+        let sEp = Int64(AppFormatters.parseIsoDay("2026-11-11")!.timeIntervalSince1970) + 2 * 3600
+        rmssdDay.coreIntervals.append(sEp...(sEp + 6 * 3600))
+        rmssdDay.hrvRmssdSamples.append((sEp + 3600, 62.0))
+        rmssdDay.rhrValues.append(56.0)
+        let built = AppleHealthExportImporter.buildSummaries(from: ["2026-11-11": rmssdDay], sourceName: "Test", profile: UserPhysiologyProfile(), priorHistory: priorHistory)
+        // Because RMSSD pool is separated from SDNN 110ms pool, 62ms RMSSD must NOT be crushed to red (<30%)!
+        XCTAssertGreaterThanOrEqual(built.days["2026-11-11"]?.recoveryPct ?? 0, 45)
+    }
 }

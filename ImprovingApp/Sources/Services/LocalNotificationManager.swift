@@ -12,21 +12,53 @@ struct ComputedSleepNotificationPlan: Equatable {
     let sleepNeedLabel: String
 }
 
+extension Notification.Name {
+    static let improvingDeepLinkRequested = Notification.Name("com.improving.deepLinkRequested")
+}
+
 @MainActor
-final class LocalNotificationManager {
+final class LocalNotificationManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = LocalNotificationManager()
 
+    private let bedtimeTodayId = "com.improving.notif.sleep.bedtime.today"
     private let bedtimeId = "com.improving.notif.sleep.bedtime"
     private let smartAlarmId = "com.improving.notif.sleep.smartalarm"
     private let testId = "com.improving.notif.test"
     private let journalDayPrefix = "com.improving.notif.journal.d"
+    private var isSyncingSchedules = false
+    private var pendingScheduleArgs: (() async -> String)? = nil
 
     private var managedIdentifiers: [String] {
-        var ids = [bedtimeId, smartAlarmId, "com.improving.notif.journal.daily"]
+        var ids = [bedtimeTodayId, bedtimeId, smartAlarmId, "com.improving.notif.journal.daily"]
         for i in 0...7 {
             ids.append("\(journalDayPrefix)\(i)")
         }
         return ids
+    }
+
+    func registerDelegate() {
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound, .list]
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let route = (response.notification.request.content.userInfo["route"] as? String) ?? "hoy"
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .improvingDeepLinkRequested,
+                object: nil,
+                userInfo: ["route": route]
+            )
+        }
     }
 
     nonisolated static func computeSleepNotificationPlan(
@@ -94,6 +126,33 @@ final class LocalNotificationManager {
         userName: String,
         promptPermissionIfNeeded: Bool
     ) async -> String {
+        // Serialize overlapping schedule updates so rapid Diario habit taps never cancel each other!
+        if isSyncingSchedules {
+            pendingScheduleArgs = { [weak self] in
+                guard let self else { return "" }
+                return await self.syncAllSchedules(
+                    settings: settings,
+                    smartAlarmEnabled: smartAlarmEnabled,
+                    todayJournalAlreadyLogged: todayJournalAlreadyLogged,
+                    sleepNeedMinutes: sleepNeedMinutes,
+                    sleepDebtMinutes: sleepDebtMinutes,
+                    strainPercent: strainPercent,
+                    hasStrainData: hasStrainData,
+                    userName: userName,
+                    promptPermissionIfNeeded: false
+                )
+            }
+            return "Actualizando avisos…"
+        }
+        isSyncingSchedules = true
+        defer {
+            isSyncingSchedules = false
+            if let next = pendingScheduleArgs {
+                pendingScheduleArgs = nil
+                Task { @MainActor in _ = await next() }
+            }
+        }
+
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: managedIdentifiers)
 
@@ -121,6 +180,7 @@ final class LocalNotificationManager {
         let cleanName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         let leadName = cleanName.isEmpty ? "" : "\(cleanName), "
         var activeParts: [String] = []
+        var scheduleErrors = 0
         let cal = Calendar.current
         let now = Date()
 
@@ -142,6 +202,7 @@ final class LocalNotificationManager {
                 content.title = "📓 Completa tu Diario de hoy"
                 content.body = "\(leadName)marca tus hábitos y añade una nota rápida antes de dormir para que tu Coach IA analice tu VFC y descanso de mañana."
                 content.sound = .default
+                content.userInfo = ["route": "diario"]
 
                 let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
                 let req = UNNotificationRequest(
@@ -149,13 +210,15 @@ final class LocalNotificationManager {
                     content: content,
                     trigger: trigger
                 )
-                try? await center.add(req)
+                do { try await center.add(req) } catch { scheduleErrors += 1 }
             }
             let hhmm = String(format: "%02d:%02d", settings.journalReminderHour, settings.journalReminderMinute)
             activeParts.append(todayJournalAlreadyLogged ? "Diario \(hhmm) (hoy ✓)" : "Diario \(hhmm)")
         }
 
-        // 2. Smart Bedtime Notification based on real Sleep Debt + today's Strain
+        // 2. Smart Bedtime Notification:
+        //    - One-shot for TONIGHT with exact real Sleep Debt + today's Strain
+        //    - Clean generic repeating fallback for future nights so stale debt numbers NEVER repeat days later!
         let plan = Self.computeSleepNotificationPlan(
             wakeHour: settings.smartAlarmHour,
             wakeMinute: settings.smartAlarmMinute,
@@ -173,21 +236,43 @@ final class LocalNotificationManager {
             }
             let detailClause = detailPieces.isEmpty ? "" : " (\(detailPieces.joined(separator: ", ")))"
 
-            let content = UNMutableNotificationContent()
-            content.title = "🌙 Hora recomendada de dormir: \(plan.bedtimeLabel)"
-            content.body = "\(leadName)tu cuerpo necesita \(plan.sleepNeedLabel) esta noche\(detailClause) para despertar recuperado a las \(plan.wakeLabel). Empieza a bajar estímulos ahora."
-            content.sound = .default
-
-            var comps = DateComponents()
-            comps.hour = plan.notifyHour
-            comps.minute = plan.notifyMinute
-            let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: true)
-            let req = UNNotificationRequest(identifier: bedtimeId, content: content, trigger: trigger)
-            try? await center.add(req)
+            var tonightComps = cal.dateComponents([.year, .month, .day], from: now)
+            tonightComps.hour = plan.notifyHour
+            tonightComps.minute = plan.notifyMinute
+            tonightComps.second = 0
+            if let tonightDate = cal.date(from: tonightComps), tonightDate > now {
+                let tonightContent = UNMutableNotificationContent()
+                tonightContent.title = "🌙 Hora recomendada de dormir: \(plan.bedtimeLabel)"
+                tonightContent.body = "\(leadName)tu cuerpo necesita \(plan.sleepNeedLabel) esta noche\(detailClause) para despertar recuperado a las \(plan.wakeLabel)."
+                tonightContent.sound = .default
+                tonightContent.userInfo = ["route": "sleep"]
+                let reqTonight = UNNotificationRequest(
+                    identifier: bedtimeTodayId,
+                    content: tonightContent,
+                    trigger: UNCalendarNotificationTrigger(dateMatching: tonightComps, repeats: false)
+                )
+                do { try await center.add(reqTonight) } catch { scheduleErrors += 1 }
+            } else {
+                // Schedule clean generic repeating reminder for subsequent nights
+                let genericContent = UNMutableNotificationContent()
+                genericContent.title = "🌙 Hora recomendada de dormir: \(plan.bedtimeLabel)"
+                genericContent.body = "\(leadName)empieza a bajar estímulos para cumplir tu objetivo de sueño y despertar a las \(plan.wakeLabel)."
+                genericContent.sound = .default
+                genericContent.userInfo = ["route": "sleep"]
+                var repComps = DateComponents()
+                repComps.hour = plan.notifyHour
+                repComps.minute = plan.notifyMinute
+                let reqRep = UNNotificationRequest(
+                    identifier: bedtimeId,
+                    content: genericContent,
+                    trigger: UNCalendarNotificationTrigger(dateMatching: repComps, repeats: true)
+                )
+                do { try await center.add(reqRep) } catch { scheduleErrors += 1 }
+            }
             activeParts.append("Dormir \(plan.notifyLabel) → \(plan.bedtimeLabel)")
         }
 
-        // 3. Real Wake-Up Alarm tied to SleepNeedDetailScreen's `smartAlarmEnabled`
+        // 3. Time-Sensitive Wake-Up Reminder tied to SleepNeedDetailScreen's `smartAlarmEnabled`
         if smartAlarmEnabled {
             let winMin = min(max(settings.smartAlarmWindowMinutes, 0), 45)
             let winStartTotal = (((settings.smartAlarmHour * 60 + settings.smartAlarmMinute - winMin) % 1440) + 1440) % 1440
@@ -196,18 +281,23 @@ final class LocalNotificationManager {
             let content = UNMutableNotificationContent()
             content.title = "⏰ Buenos días · Despertar Improving (\(plan.wakeLabel))"
             content.subtitle = winMin > 0 ? "Ventana óptima \(winStartLabel)–\(plan.wakeLabel)" : "Objetivo de sueño \(plan.sleepNeedLabel)"
-            content.body = "\(leadName)es tu hora objetivo de despertar. Sincroniza tu noche con «Sync Improving» para ver tu Recuperación y Batería Corporal."
+            content.body = "\(leadName)es tu hora objetivo de despertar. Sincroniza tu noche con «Sync Improving» para ver tu Recuperación."
             content.sound = .default
+            content.interruptionLevel = .timeSensitive
+            content.userInfo = ["route": "sleep"]
 
             var comps = DateComponents()
             comps.hour = min(max(settings.smartAlarmHour, 0), 23)
             comps.minute = min(max(settings.smartAlarmMinute, 0), 59)
             let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: true)
             let req = UNNotificationRequest(identifier: smartAlarmId, content: content, trigger: trigger)
-            try? await center.add(req)
+            do { try await center.add(req) } catch { scheduleErrors += 1 }
             activeParts.append("Alarma \(plan.wakeLabel)")
         }
 
+        if scheduleErrors > 0 {
+            return "⚠ Activos con \(scheduleErrors) aviso(s) pendientes · " + activeParts.joined(separator: " · ")
+        }
         return "✓ Activos: " + activeParts.joined(separator: " · ")
     }
 
@@ -220,13 +310,18 @@ final class LocalNotificationManager {
         let content = UNMutableNotificationContent()
         content.title = "✓ Notificaciones de Improving activas"
         content.body = cleanName.isEmpty
-            ? "Tus recordatorios de Diario, hora óptima de dormir y alarma inteligente funcionan correctamente."
-            : "\(cleanName), tus avisos inteligentes de Diario, sueño y alarma están listos."
+            ? "Tus recordatorios de Diario, hora óptima de dormir y despertar funcionan correctamente."
+            : "\(cleanName), tus avisos inteligentes de Diario, sueño y despertar están listos."
         content.sound = .default
+        content.userInfo = ["route": "hoy"]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false)
         let req = UNNotificationRequest(identifier: testId, content: content, trigger: trigger)
-        try? await UNUserNotificationCenter.current().add(req)
-        return "✓ Enviada · Minimiza o bloquea el iPhone para verla en 3 s"
+        do {
+            try await UNUserNotificationCenter.current().add(req)
+            return "✓ Enviada · Llegará en 3 s (también con la app abierta)"
+        } catch {
+            return "Error al programar notificación: \(error.localizedDescription)"
+        }
     }
 }

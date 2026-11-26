@@ -100,6 +100,19 @@ enum ShortcutsHealthSyncImporter {
         }
     }
 
+    /// Processes any pending `AutoSync` / `En mi iPhone / Improving` files immediately even when invoked
+    /// from a background `AppIntent` or `BGAppRefreshTask` (updates persisted store + WidgetKit snapshot!).
+    @discardableResult
+    static func processPendingInboxInBackground() async -> Int {
+        await MainActor.run {
+            if let live = ImprovingStore.activeSharedStore {
+                return live.processPendingInboxSyncNow()
+            }
+            let headless = ImprovingStore(headlessBackground: true)
+            return headless.processPendingInboxSyncNow()
+        }
+    }
+
     /// Lists all supported sync files placed in `En mi iPhone/Improving/` (including 1-level subfolders like `AutoSync/`).
     static func discoverInboxFiles() -> [URL] {
         let fm = FileManager.default
@@ -393,7 +406,7 @@ enum ShortcutsHealthSyncImporter {
     }
 
     /// Splits a Shortcuts newline-joined parallel list while preserving internal empty lines so
-    /// parallel indices (`values[i]`, `starts[i]`, `ends[i]`) NEVER shift out of alignment!
+    /// parallel indices (`values[i]`, `starts[i]`, `ends[i]`, `units[i]`) NEVER shift out of alignment!
     private static func expandParallelLines(_ raw: [String]?) -> [String] {
         guard let raw, !raw.isEmpty else { return [] }
         if raw.count == 1 {
@@ -405,19 +418,29 @@ enum ShortcutsHealthSyncImporter {
             while lines.first?.isEmpty == true { lines.removeFirst() }
             return lines
         }
-        return expandLines(raw)
+        return raw.flatMap { item -> [String] in
+            let normalized = item.replacingOccurrences(of: "\r\n", with: "\n")
+            if normalized.contains("\n") {
+                return normalized
+                    .components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            }
+            return [normalized.trimmingCharacters(in: .whitespacesAndNewlines)]
+        }
     }
 
     private static func ingestParallelSeries(
         kind: SyncMetricKind,
         values rawVals: [String]?,
         dates rawDates: [String]?,
+        units rawUnits: [String]? = nil,
         usedEndDates: Bool = false,
         into days: inout [String: AppleHealthExportImporter.MutableAppleDay]
     ) {
         let vals = expandParallelLines(rawVals)
         guard !vals.isEmpty else { return }
         let dates = expandParallelLines(rawDates)
+        let units = expandParallelLines(rawUnits)
         let fallbackNow = Date()
         let allowDotThousands = (kind == .steps)
 
@@ -448,7 +471,9 @@ enum ShortcutsHealthSyncImporter {
                 continue
             }
 
-            recordSample(kind: kind, value: num, date: parsed.date, wall: parsed.wall, unitHint: vals[idx], into: &days)
+            let explicitUnit = idx < units.count ? units[idx] : ""
+            let combinedUnitHint = explicitUnit.isEmpty ? vals[idx] : "\(vals[idx]) \(explicitUnit)"
+            recordSample(kind: kind, value: num, date: parsed.date, wall: parsed.wall, unitHint: combinedUnitHint, into: &days)
         }
     }
 
@@ -543,10 +568,11 @@ enum ShortcutsHealthSyncImporter {
             let vList = extractStringList(dict["\(p)_values"] ?? dict["\(p)Values"])
             let endList = extractStringList(dict["\(p)_ends"] ?? dict["\(p)Ends"])
             let dateList = extractStringList(dict["\(p)_dates"] ?? dict["\(p)Dates"] ?? dict["\(p)_starts"] ?? dict["\(p)Starts"])
+            let unitList = extractStringList(dict["\(p)_units"] ?? dict["\(p)Units"] ?? dict["\(p)_unit"])
             let useEnds = (kind == .temp && !endList.isEmpty)
             let dList = useEnds ? endList : (dateList.isEmpty ? endList : dateList)
             if !vList.isEmpty {
-                ingestParallelSeries(kind: kind, values: vList, dates: dList, usedEndDates: useEnds, into: &days)
+                ingestParallelSeries(kind: kind, values: vList, dates: dList, units: unitList, usedEndDates: useEnds, into: &days)
             }
         }
         let slVals = extractStringList(dict["sleep_values"] ?? dict["sleepValues"])
@@ -593,7 +619,7 @@ enum ShortcutsHealthSyncImporter {
 
         for (rawKey, rawVal) in dict {
             let low = rawKey.lowercased()
-            if low.hasSuffix("_values") || low.hasSuffix("_dates") || low.hasSuffix("_starts") || low.hasSuffix("_ends")
+            if low.hasSuffix("_values") || low.hasSuffix("_dates") || low.hasSuffix("_starts") || low.hasSuffix("_ends") || low.hasSuffix("_units") || low.hasSuffix("_unit")
                 || low == "date" || low == "fecha" || low == "samples" || low == "workouts" || low == "data" || low == "source" {
                 continue
             }
@@ -1170,7 +1196,14 @@ enum ShortcutsHealthSyncImporter {
             ("MMM d, yyyy 'at' h:mm a", "en_US"),
             ("MMM d, yyyy, h:mm a", "en_US"),
             ("MMM d, yyyy 'at' H:mm", "en_US"),
-            ("d MMM yyyy 'at' HH:mm", "en_GB")
+            ("d MMM yyyy 'at' HH:mm", "en_GB"),
+            // US month-first fallbacks placed AFTER European d/M formats so Spanish/EU dates stay highest priority!
+            ("M/d/yy, h:mm a", "en_US"),
+            ("M/d/yy, H:mm", "en_US"),
+            ("M/d/yyyy, h:mm a", "en_US"),
+            ("M/d/yyyy, H:mm", "en_US"),
+            ("M/d/yy", "en_US"),
+            ("M/d/yyyy", "en_US")
         ]
         return specs.map { fmt, loc in
             let f = DateFormatter()
@@ -1203,8 +1236,11 @@ enum ShortcutsHealthSyncImporter {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
 
-        // Extract explicit wall-clock prefix if ISO/Apple format ("2026-11-23 08:15:00 +0100" or "2026-11-23T08:15:00+01:00")
+        // Extract explicit wall-clock prefix ONLY when timestamp is NOT UTC ('Z') — UTC timestamps must convert
+        // through local `wallClock(for: d)` so midnight-crossing sessions land on the user's real local day!
+        let isUtcZ = s.hasSuffix("Z") || s.hasSuffix("z")
         let explicitWall: (iso: String, minuteOfDay: Int)? = {
+            guard !isUtcZ else { return nil }
             let b = Array(s.utf8)
             guard b.count >= 16, b[4] == 0x2D, b[7] == 0x2D, (b[10] == 0x20 || b[10] == 0x54), b[13] == 0x3A else { return nil }
             guard let iso = String(bytes: b[0..<10], encoding: .utf8),
@@ -1315,8 +1351,17 @@ enum ShortcutsHealthSyncImporter {
             return Double(token)
         }
 
-        // Single comma: always decimal separator in Spanish/European locales (e.g. "68,4", "1,245")
+        // Single comma: US thousands separator for integer step counts (e.g. "8,420 steps"),
+        // otherwise decimal separator in Spanish/European locales (e.g. "68,4 ms", "1,245 kcal")
         if commaCount == 1 {
+            let isStepContext = allowDotThousands || low.contains("paso") || low.contains("step")
+            if isStepContext && !low.contains("%") {
+                let parts = token.split(separator: ",")
+                if parts.count == 2 && parts[1].count == 3 && parts[0].count <= 3,
+                   let asInt = Int(token.replacingOccurrences(of: ",", with: "")), asInt >= 1000 {
+                    return Double(asInt)
+                }
+            }
             return Double(token.replacingOccurrences(of: ",", with: "."))
         }
 

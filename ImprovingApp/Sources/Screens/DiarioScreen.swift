@@ -259,6 +259,7 @@ struct DiarioScreen: View {
             .padding(.top, 6)
             .padding(.bottom, 10)
             .background(BevelColors.sheetHeaderBg)
+        .scrollDismissesKeyboard(.interactively)
 
             Divider().background(BevelColors.divider)
 
@@ -492,8 +493,10 @@ struct DiarioScreen: View {
                 .padding(.bottom, 155)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
         }
         .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showCalendarSheet) {
             DatePickerSheetView(
                 selectedDate: Binding(
@@ -675,7 +678,9 @@ struct JournalInsightsScreen: View {
                 ZStack(alignment: .topLeading) {
                     if target == .sleep {
                         LinearGradient(
-                            colors: [Color(hex: 0x26386B), Color(hex: 0x1A2241), BevelColors.canvas],
+                            colors: BevelColors.isDarkMode
+                                ? [Color(hex: 0x26386B), Color(hex: 0x1A2241), BevelColors.canvas]
+                                : [Color(hex: 0x26386B), Color(hex: 0x2E437D), Color(hex: 0x3D528E)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -702,7 +707,9 @@ struct JournalInsightsScreen: View {
                     } else {
                         // Misty dusk hills atmosphere (Screenshot 2)
                         LinearGradient(
-                            colors: [Color(hex: 0x676B78), Color(hex: 0x3D4150), BevelColors.canvas],
+                            colors: BevelColors.isDarkMode
+                                ? [Color(hex: 0x676B78), Color(hex: 0x3D4150), BevelColors.canvas]
+                                : [Color(hex: 0x4A5368), Color(hex: 0x384154), Color(hex: 0x2D3546)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -753,10 +760,10 @@ struct JournalInsightsScreen: View {
                                 } label: {
                                     Text(tab.rawValue)
                                         .font(ImprovingFont.cardTitle(14.5))
-                                        .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                        .foregroundColor(active ? .white : Color.white.opacity(0.74))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 12)
-                                        .background(Capsule().fill(active ? Color(hex: 0x6A6E7A) : Color(hex: 0x2F323B).opacity(0.85)))
+                                        .background(Capsule().fill(active ? Color.white.opacity(0.24) : Color.black.opacity(0.24)))
                                 }
                             }
                         }
@@ -816,7 +823,7 @@ struct JournalInsightsScreen: View {
                                 }
                                 GeometryReader { geo in
                                     ZStack(alignment: .leading) {
-                                        Capsule().fill(Color.white.opacity(0.08)).frame(height: 8)
+                                        Capsule().fill(BevelColors.chartTrackSubtle).frame(height: 8)
                                         Capsule().fill(BevelColors.skyBlue).frame(width: max(8, geo.size.width * CGFloat(frac)), height: 8)
                                     }
                                 }
@@ -912,6 +919,7 @@ struct JournalInsightsScreen: View {
             }
         }
         .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
     }
 
     private var impactAxisHeader: some View {
@@ -1268,6 +1276,7 @@ private struct JournalCustomizeSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Personalizar Diario")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

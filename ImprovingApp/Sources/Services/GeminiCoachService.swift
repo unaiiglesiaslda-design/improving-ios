@@ -155,11 +155,9 @@ actor GeminiCoachService {
         let isAuto = trimmed.isEmpty || trimmed == "auto"
         let staticFallbacks = [
             "gemini-flash-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3-flash",
-            "gemini-3-flash-preview",
             "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3-flash-preview",
         ]
         var list: [String] = []
         if !isAuto {
@@ -167,7 +165,7 @@ actor GeminiCoachService {
         }
         if isAuto || forceDiscovery {
             let discovered = await discoverAvailableModels(apiKey: apiKey, forceRefresh: forceDiscovery)
-            list.append(contentsOf: discovered.prefix(5))
+            list.append(contentsOf: discovered.prefix(3))
         }
         list.append(contentsOf: staticFallbacks)
         var seen = Set<String>()
@@ -670,24 +668,12 @@ actor GeminiCoachService {
 
         // Tier 1: User's Gemini API Key (auto-discovers live active models via /v1beta/models + Native Function Calling!)
         if allowCloudAI && !cleanKey.isEmpty {
-            if jpegImageData == nil, actionExecutor == nil, model.hasPrefix("gemini-4"),
-               let res = await callGeminiInteractionsChat(
-                prompt: prompt,
-                sysPrompt: sysPrompt,
-                history: history,
-                apiKey: cleanKey,
-                model: model,
-                previousInteractionId: previousInteractionId
-               ) {
-                return res
-            }
-
             var candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: false)
             var tried = Set<String>()
             var didDynamicDiscovery = (model.isEmpty || model == "auto")
 
             var idx = 0
-            while idx < candidates.count {
+            while idx < candidates.count && tried.count < 3 {
                 let m = candidates[idx]
                 idx += 1
                 guard tried.insert(m).inserted else { continue }
@@ -705,7 +691,7 @@ actor GeminiCoachService {
                 }
                 if let err = attempt.errorDetail {
                     lastCloudError = err
-                    if err.contains("API_KEY_INVALID") || err.contains("API key not valid") {
+                    if err.contains("401") || err.contains("403") || err.contains("API_KEY_INVALID") || err.contains("API key not valid") {
                         break
                     }
                     // On HTTP 404 (model retired / unavailable to new users), immediately query Google's live /models endpoint!
@@ -713,7 +699,7 @@ actor GeminiCoachService {
                         didDynamicDiscovery = true
                         let fresh = await discoverAvailableModels(apiKey: cleanKey, forceRefresh: true)
                         if !fresh.isEmpty {
-                            candidates.insert(contentsOf: fresh.prefix(4), at: idx)
+                            candidates.insert(contentsOf: fresh.prefix(2), at: idx)
                         }
                     }
                 }
@@ -804,11 +790,12 @@ actor GeminiCoachService {
     private func sendSingleGeminiGenerateRequest(
         url: URL,
         apiKey: String,
-        body: [String: Any]
+        body: [String: Any],
+        timeout: TimeInterval = 30
     ) async -> (parts: [[String: Any]]?, statusCode: Int, errorDetail: String?) {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 30
+        req.timeoutInterval = timeout
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else {
@@ -816,7 +803,10 @@ actor GeminiCoachService {
         }
         req.httpBody = httpBody
 
-        for attemptIdx in 0..<2 {
+        for attemptIdx in 0..<3 {
+            if Task.isCancelled {
+                return (nil, 0, "Cancelado")
+            }
             do {
                 let (respData, resp) = try await URLSession.shared.data(for: req)
                 guard let http = resp as? HTTPURLResponse else {
@@ -832,11 +822,24 @@ actor GeminiCoachService {
                     return (nil, http.statusCode, "Respuesta vacía del modelo")
                 }
                 let errTxt = Self.extractGeminiErrorMessage(from: respData, statusCode: http.statusCode)
+                // Abort immediately on invalid auth/permissions (never retry 401/403)
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    return (nil, http.statusCode, errTxt)
+                }
+                // Respect HTTP 429 rate-limit with Retry-After or bounded exponential backoff (max 3s)
+                if http.statusCode == 429 && attemptIdx < 2 {
+                    let retryAfterSec = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
+                    let delaySec = min(max(retryAfterSec ?? (0.7 * pow(2.0, Double(attemptIdx))), 0.4), 3.0)
+                    try? await Task.sleep(nanoseconds: UInt64(delaySec * 1_000_000_000))
+                    continue
+                }
                 if (http.statusCode == 500 || http.statusCode == 503) && attemptIdx == 0 {
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     continue
                 }
                 return (nil, http.statusCode, errTxt)
+            } catch is CancellationError {
+                return (nil, 0, "Cancelado")
             } catch {
                 if attemptIdx == 0 {
                     try? await Task.sleep(nanoseconds: 350_000_000)
@@ -1265,8 +1268,9 @@ actor GeminiCoachService {
         // Tier 1: User's Gemini API Key (auto-discovers live active models on 404/auto!)
         if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: model == "auto")
-            for m in candidates.prefix(4) {
-                if let raw = await callGeminiJsonOneShot(prompt: userPrompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: m),
+            for m in candidates.prefix(3) {
+                let res = await callGeminiJsonOneShot(prompt: userPrompt, sysPrompt: sysPrompt, apiKey: cleanKey, model: m)
+                if let raw = res.text,
                    let card = parseSectionCoachingJson(
                     raw: raw,
                     section: section,
@@ -1277,6 +1281,7 @@ actor GeminiCoachService {
                    ) {
                     return card
                 }
+                if res.statusCode == 401 || res.statusCode == 403 { break }
             }
         }
 
@@ -1309,14 +1314,8 @@ actor GeminiCoachService {
         )
     }
 
-    private func callGeminiJsonOneShot(prompt: String, sysPrompt: String, apiKey: String, model: String) async -> String? {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 20
-        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-
+    private func callGeminiJsonOneShot(prompt: String, sysPrompt: String, apiKey: String, model: String) async -> (text: String?, statusCode: Int) {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return (nil, 0) }
         var genConfig: [String: Any] = [
             "temperature": 0.9,
             "maxOutputTokens": 600,
@@ -1330,24 +1329,13 @@ actor GeminiCoachService {
             "contents": [["role": "user", "parts": [["text": prompt]]]],
             "generationConfig": genConfig
         ]
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = httpBody
-
-        do {
-            let (respData, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                  let candidates = json["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { return nil }
-            let joined = parts.compactMap { part -> String? in
-                if (part["thought"] as? Bool) == true { return nil }
-                return part["text"] as? String
-            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-            return joined.isEmpty ? nil : joined
-        } catch {
-            return nil
-        }
+        let resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: body, timeout: 20)
+        guard let parts = resp.parts else { return (nil, resp.statusCode) }
+        let joined = parts.compactMap { part -> String? in
+            if (part["thought"] as? Bool) == true { return nil }
+            return part["text"] as? String
+        }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        return (joined.isEmpty ? nil : joined, resp.statusCode)
     }
 
     private func callKeylessCloudOneShot(prompt: String, sysPrompt: String, seed: Int) async -> String? {
@@ -1710,16 +1698,18 @@ actor GeminiCoachService {
         // Tier 1: Live Multimodal Gemini API (supports both JPEG inline_data + text!)
         if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: model == "auto")
-            for m in candidates.prefix(5) {
-                if let raw = await callGeminiMultimodalJson(
+            for m in candidates.prefix(3) {
+                let res = await callGeminiMultimodalJson(
                     prompt: userPrompt,
                     sysPrompt: sysPrompt,
                     jpegImageData: jpegImageData,
                     apiKey: cleanKey,
                     model: m
-                ), let parsed = Self.parseMealEstimateJson(raw, usedLiveAI: true, modelUsed: m) {
+                )
+                if let raw = res.text, let parsed = Self.parseMealEstimateJson(raw, usedLiveAI: true, modelUsed: m) {
                     return parsed
                 }
+                if res.statusCode == 401 || res.statusCode == 403 { break }
             }
         }
 
@@ -1741,14 +1731,8 @@ actor GeminiCoachService {
         jpegImageData: Data?,
         apiKey: String,
         model: String
-    ) async -> String? {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 28
-        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-
+    ) async -> (text: String?, statusCode: Int) {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return (nil, 0) }
         var userParts: [[String: Any]] = []
         if let img = jpegImageData, !img.isEmpty {
             userParts.append([
@@ -1774,24 +1758,13 @@ actor GeminiCoachService {
             "contents": [["role": "user", "parts": userParts]],
             "generationConfig": genConfig
         ]
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = httpBody
-
-        do {
-            let (respData, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                  let candidates = json["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { return nil }
-            let joined = parts.compactMap { part -> String? in
-                if (part["thought"] as? Bool) == true { return nil }
-                return part["text"] as? String
-            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-            return joined.isEmpty ? nil : joined
-        } catch {
-            return nil
-        }
+        let resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: body, timeout: 28)
+        guard let parts = resp.parts else { return (nil, resp.statusCode) }
+        let joined = parts.compactMap { part -> String? in
+            if (part["thought"] as? Bool) == true { return nil }
+            return part["text"] as? String
+        }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        return (joined.isEmpty ? nil : joined, resp.statusCode)
     }
 
     nonisolated static func parseMealEstimateJson(_ raw: String, usedLiveAI: Bool = true, modelUsed: String = "gemini") -> AnalyzedMealEstimate? {
@@ -2156,16 +2129,19 @@ actor GeminiCoachService {
 
         if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
-            for m in candidates.prefix(4) {
-                if let raw = await callGeminiMultimodalJson(
+            for m in candidates.prefix(3) {
+                let res = await callGeminiMultimodalJson(
                     prompt: userPrompt,
                     sysPrompt: sysPrompt,
                     jpegImageData: nil,
                     apiKey: cleanKey,
                     model: m
-                ), let parsed = Self.parseWeeklyReviewJson(raw, weekKey: report.weekKey, generatedAt: generatedLabel, modelUsed: m, isLiveAI: true) {
+                )
+                if let raw = res.text,
+                   let parsed = Self.parseWeeklyReviewJson(raw, weekKey: report.weekKey, generatedAt: generatedLabel, modelUsed: m, isLiveAI: true) {
                     return parsed
                 }
+                if res.statusCode == 401 || res.statusCode == 403 { break }
             }
         }
 
@@ -2296,17 +2272,19 @@ actor GeminiCoachService {
 
         if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
-            for m in candidates.prefix(4) {
-                if let raw = await callGeminiMultiImageJson(
+            for m in candidates.prefix(3) {
+                let res = await callGeminiMultiImageJson(
                     prompt: userPrompt,
                     sysPrompt: sysPrompt,
                     jpegImagesData: Array(pageImagesData.prefix(4)),
                     apiKey: cleanKey,
                     model: m,
                     maxOutputTokens: 2200
-                ), let parsed = Self.parseLabReportJson(raw, sourceLabel: "Gemini \(m)") {
+                )
+                if let raw = res.text, let parsed = Self.parseLabReportJson(raw, sourceLabel: "Gemini \(m)") {
                     return (parsed, nil)
                 }
+                if res.statusCode == 401 || res.statusCode == 403 { break }
             }
         }
 
@@ -2335,14 +2313,8 @@ actor GeminiCoachService {
         apiKey: String,
         model: String,
         maxOutputTokens: Int = 2000
-    ) async -> String? {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 36
-        req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-
+    ) async -> (text: String?, statusCode: Int) {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return (nil, 0) }
         var userParts: [[String: Any]] = []
         for img in jpegImagesData where !img.isEmpty {
             userParts.append([
@@ -2368,24 +2340,13 @@ actor GeminiCoachService {
             "contents": [["role": "user", "parts": userParts]],
             "generationConfig": genConfig
         ]
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = httpBody
-
-        do {
-            let (respData, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let json = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
-                  let candidates = json["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else { return nil }
-            let joined = parts.compactMap { part -> String? in
-                if (part["thought"] as? Bool) == true { return nil }
-                return part["text"] as? String
-            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-            return joined.isEmpty ? nil : joined
-        } catch {
-            return nil
-        }
+        let resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: body, timeout: 36)
+        guard let parts = resp.parts else { return (nil, resp.statusCode) }
+        let joined = parts.compactMap { part -> String? in
+            if (part["thought"] as? Bool) == true { return nil }
+            return part["text"] as? String
+        }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        return (joined.isEmpty ? nil : joined, resp.statusCode)
     }
 
     nonisolated static func parseLabReportJson(_ raw: String, sourceLabel: String) -> LabReportRecord? {

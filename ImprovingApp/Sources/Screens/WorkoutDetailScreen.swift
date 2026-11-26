@@ -325,6 +325,7 @@ struct WorkoutDetailScreen: View {
             .padding(.bottom, 150)
         }
         .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
         .confirmationDialog("¿Eliminar «\(w.title)» de tu historial?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Eliminar entrenamiento", role: .destructive) {
                 store.deleteWorkout(id: w.id, dateIso: w.dateIso)
@@ -422,6 +423,7 @@ private struct WorkoutEditSheet: View {
                 .padding(16)
             }
             .background(BevelColors.canvas)
+        .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Editar entrenamiento")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -446,6 +448,7 @@ private struct WorkoutEditSheet: View {
             Text(title).font(ImprovingFont.caption(11.5)).foregroundColor(BevelColors.textSecondary)
             TextField("0", text: text)
                 .keyboardType(decimal ? .decimalPad : .numberPad)
+                .keyboardDoneToolbar()
                 .font(ImprovingFont.cardTitle(15))
                 .monospacedDigit()
                 .foregroundColor(BevelColors.textPrimary)

@@ -18,6 +18,8 @@ private struct OnboardingStorySlide: Identifiable {
 
 struct OnboardingExperienceView: View {
     let initialProfile: UserPhysiologyProfile
+    var healthAuthorized: Bool = false
+    var healthStatusText: String = "Listo"
     var onConnectAppleHealth: (() -> Void)? = nil
     let onFinish: (UserPhysiologyProfile) -> Void
 
@@ -33,10 +35,14 @@ struct OnboardingExperienceView: View {
 
     init(
         initialProfile: UserPhysiologyProfile = UserPhysiologyProfile(),
+        healthAuthorized: Bool = false,
+        healthStatusText: String = "Listo",
         onConnectAppleHealth: (() -> Void)? = nil,
         onFinish: @escaping (UserPhysiologyProfile) -> Void
     ) {
         self.initialProfile = initialProfile
+        self.healthAuthorized = healthAuthorized
+        self.healthStatusText = healthStatusText
         self.onConnectAppleHealth = onConnectAppleHealth
         self.onFinish = onFinish
         _draftProfile = State(initialValue: initialProfile)
@@ -124,6 +130,8 @@ struct OnboardingExperienceView: View {
                     case 3:
                         SensorsAndPrivacyStepView(
                             healthTapped: healthConnectTapped,
+                            healthAuthorized: healthAuthorized,
+                            healthStatusText: healthStatusText,
                             onConnectHealth: {
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 healthConnectTapped = true
@@ -517,6 +525,8 @@ private struct OnboardingSlideMotionGraphicHUD: View {
 
 private struct SensorsAndPrivacyStepView: View {
     let healthTapped: Bool
+    let healthAuthorized: Bool
+    let healthStatusText: String
     let onConnectHealth: () -> Void
     let onContinue: () -> Void
 
@@ -527,11 +537,11 @@ private struct SensorsAndPrivacyStepView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 15) {
                     HStack(spacing: 14) {
-                        Image(systemName: healthTapped ? "checkmark.shield.fill" : "shield.lefthalf.filled")
+                        Image(systemName: healthAuthorized ? "checkmark.shield.fill" : "shield.lefthalf.filled")
                             .font(.system(size: 26, weight: .semibold))
-                            .foregroundColor(healthTapped ? BevelColors.emeraldEnd : BevelColors.indigoEnd)
+                            .foregroundColor(healthAuthorized ? BevelColors.emeraldEnd : BevelColors.indigoEnd)
                             .frame(width: 56, height: 56)
-                            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(healthTapped ? BevelColors.greenSoftBg : BevelColors.indigoSoftBg))
+                            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(healthAuthorized ? BevelColors.greenSoftBg : BevelColors.indigoSoftBg))
                             .scaleEffect(pulseShield ? 1.06 : 1.0)
                             .animation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true), value: pulseShield)
 
@@ -539,7 +549,7 @@ private struct SensorsAndPrivacyStepView: View {
                             Text("SENSORES Y PRIVACIDAD")
                                 .font(ImprovingFont.microLabel(10.5))
                                 .fontWeight(.bold)
-                                .foregroundColor(healthTapped ? BevelColors.emeraldEnd : BevelColors.indigoEnd)
+                                .foregroundColor(healthAuthorized ? BevelColors.emeraldEnd : BevelColors.indigoEnd)
                             Text("Conecta tus datos reales")
                                 .font(.system(size: 23, weight: .heavy, design: .rounded))
                                 .foregroundColor(BevelColors.textPrimary)
@@ -556,9 +566,11 @@ private struct SensorsAndPrivacyStepView: View {
                         tint: BevelColors.redAlert,
                         softBg: BevelColors.redAlert.opacity(0.14),
                         title: "Apple Salud y exportar.zip",
-                        subtitle: "Lee sueño real, VFC latido a latido (RMSSD), FC nocturna y entrenamientos.",
-                        badge: healthTapped ? "Solicitado" : "Conectar",
-                        active: healthTapped,
+                        subtitle: healthTapped && !healthAuthorized && healthStatusText != "Listo"
+                            ? healthStatusText
+                            : "Lee sueño real, VFC latido a latido (RMSSD), FC nocturna y entrenamientos.",
+                        badge: healthAuthorized ? "Conectado" : (healthTapped ? "Pendiente" : "Conectar"),
+                        active: healthAuthorized,
                         action: onConnectHealth
                     )
 
@@ -708,7 +720,7 @@ private struct ProfileCalibrationStepView: View {
                                     .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(.white)
                                     .frame(width: 32, height: 32)
-                                    .background(Circle().fill(BevelColors.textPrimary))
+                                    .background(Circle().fill(BevelColors.indigoEnd))
                                     .overlay(Circle().strokeBorder(BevelColors.canvas, lineWidth: 2.2))
                                     .offset(x: 2, y: 2)
                             }
@@ -867,6 +879,7 @@ private struct ProfileCalibrationStepView: View {
                 }
                 .padding(.horizontal, 18)
             }
+            .scrollDismissesKeyboard(.interactively)
 
             OnboardingPrimaryCTA(title: "Empezar con Improving", systemImage: "checkmark", isEmerald: true, action: onComplete)
                 .padding(.horizontal, 18)
