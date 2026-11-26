@@ -2148,7 +2148,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         for dayNum in 1...10 {
             let iso = String(format: "2026-11-%02d", dayNum)
             // 10 prior days of high SDNN (110 ms)
-            priorHistory[iso] = RealBiometricDaySummary(dateIso: iso, hrvMs: 110.0, hrvMethodLabel: "SDNN · Todo el sueño", restingHrBpm: 56.0)
+            priorHistory[iso] = RealBiometricDaySummary(dateIso: iso, restingHrBpm: 56.0, hrvMs: 110.0, hrvMethodLabel: "SDNN · Todo el sueño")
         }
         let rmssdDay = AppleHealthExportImporter.MutableAppleDay(dateIso: "2026-11-11")
         let sEp = Int64(AppFormatters.parseIsoDay("2026-11-11")!.timeIntervalSince1970) + 2 * 3600
