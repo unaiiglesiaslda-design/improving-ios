@@ -209,7 +209,7 @@ struct ImprovingRootView: View {
                 overlayStack = [.nutricion]
             case .sueno:
                 selectedTab = .hoy
-                overlayStack = [.sueno]
+                overlayStack = [.suenoDetail]
             case .esfuerzo:
                 selectedTab = .hoy
                 overlayStack = [.esfuerzo]

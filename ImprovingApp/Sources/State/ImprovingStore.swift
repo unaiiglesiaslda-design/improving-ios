@@ -3210,9 +3210,9 @@ final class ImprovingStore: ObservableObject {
         case "diario", "journal":
             dest = .diario
         case "sleep", "sueno", "sueño":
-            dest = .sleep
+            dest = .sueno
         case "nutrition", "nutricion", "nutrición", "food":
-            dest = .nutrition
+            dest = .nutricion
         case "esfuerzo", "strain":
             dest = .esfuerzo
         case "fitness", "workout", "entrenamiento":
@@ -3220,7 +3220,9 @@ final class ImprovingStore: ObservableObject {
         case "biologia", "biología", "biology":
             dest = .biologia
         case "settings", "dispositivos", "ajustes":
-            dest = .settings
+            dest = .dispositivos
+        case "ask", "coach", "askbevel":
+            dest = .askBevel
         default:
             dest = .hoy
         }

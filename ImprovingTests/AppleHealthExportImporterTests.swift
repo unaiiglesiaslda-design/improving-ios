@@ -2101,7 +2101,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         }
 
         store.handleIncomingURL(URL(string: "improving://nutrition")!)
-        XCTAssertEqual(store.pendingDeepLinkRoute?.destination, .nutrition)
+        XCTAssertEqual(store.pendingDeepLinkRoute?.destination, .nutricion)
         store.handleDeepLinkRoute("diario")
         XCTAssertEqual(store.pendingDeepLinkRoute?.destination, .diario)
 
