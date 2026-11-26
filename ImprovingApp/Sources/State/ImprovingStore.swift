@@ -5422,7 +5422,7 @@ final class ImprovingStore: ObservableObject {
             return "Hoy"
         }()
 
-        let nutTotals = hasReal ? nutritionDayTotals(for: todayIso) : (kcal: 0, proteinG: 0.0, carbsG: 0.0, fatG: 0.0, score: nil as Int?, factors: NutritionQualityFactors())
+        let nutTotals = hasReal ? nutritionDayTotals(for: todayIso) : (kcal: 0, fatG: 0.0, carbsG: 0.0, proteinG: 0.0, score: nil as Int?, mealCount: 0)
         let sleepDur: String = {
             if let m = targetDay?.asleepMinutes, m > 0 {
                 return "\(m / 60)h \(String(format: "%02d", m % 60))m"
