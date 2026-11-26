@@ -166,104 +166,17 @@ struct BevelRecessedRingGauge: View {
     var body: some View {
         let pad = strokeWidth / 2 + 4
         let ringDiameter = max(size - pad * 2, 16)
+        let accessibilityTitle = label.isEmpty ? (centerSubtitle ?? "Indicador") : label
+        let accessibilityVal = effectiveHasVisualValue ? centerText : "Sin datos"
 
         VStack(spacing: 6) {
             ZStack {
-                // Static recessed bevel + groove + center dish + optimal effort hatch band
-                Canvas { context, canvasSize in
-                    let arcRect = CGRect(x: pad, y: pad, width: canvasSize.width - pad * 2, height: canvasSize.height - pad * 2)
-                    let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-                    let radius = arcRect.width / 2
-
-                    let bezelOuter = Path(ellipseIn: arcRect.insetBy(dx: -strokeWidth * 0.65, dy: -strokeWidth * 0.65))
-                    context.fill(bezelOuter, with: .color(BevelColors.isDarkMode ? Color(hex: 0x333640, alpha: 0.7) : Color(hex: 0xE5E9F0)))
-                    context.stroke(bezelOuter, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.14 : 0.7)), lineWidth: 1)
-
-                    let groovePath = Path(ellipseIn: arcRect)
-                    context.stroke(groovePath, with: .color(BevelColors.isDarkMode ? Color(hex: 0x1D1F25) : BevelColors.trackGroove), lineWidth: strokeWidth)
-
-                    let innerDish = Path(ellipseIn: arcRect.insetBy(dx: strokeWidth * 0.56, dy: strokeWidth * 0.56))
-                    context.fill(innerDish, with: .color(BevelColors.isDarkMode ? Color(hex: 0x2C2F38, alpha: 0.85) : Color.white))
-                    context.stroke(innerDish, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.08 : 0.4)), lineWidth: 0.9)
-
-                    if effectiveHasVisualValue, let tr = targetRange {
-                        let startDeg = -90.0 + tr.lowerBound * 360.0
-                        let endDeg = -90.0 + tr.upperBound * 360.0
-                        var bandPath = Path()
-                        bandPath.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
-                        context.stroke(bandPath, with: .color(BevelColors.strainHatchBg), style: StrokeStyle(lineWidth: strokeWidth, lineCap: .butt))
-
-                        let steps = max(Int((endDeg - startDeg) / 4.5), 5)
-                        for i in 0...steps {
-                            let deg = startDeg + (endDeg - startDeg) * Double(i) / Double(steps)
-                            let rad = deg * .pi / 180.0
-                            let rIn = radius - strokeWidth * 0.36
-                            let rOut = radius + strokeWidth * 0.36
-                            var tick = Path()
-                            tick.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
-                            tick.addLine(to: CGPoint(x: center.x + rOut * cos(rad + 0.05), y: center.y + rOut * sin(rad + 0.05)))
-                            context.stroke(tick, with: .color(BevelColors.strainHatchLine.opacity(0.75)), style: StrokeStyle(lineWidth: 1.25, lineCap: .round))
-                        }
-                    }
-                }
-                .frame(width: size, height: size)
-
-                // Native GPU-animated SwiftUI trim ring — directly bound to targetProgress, NEVER gets stuck at 0%
-                if targetProgress > 0 {
-                    Circle()
-                        .trim(from: 0, to: CGFloat(targetProgress))
-                        .stroke(
-                            AngularGradient(
-                                gradient: Gradient(colors: gradientColors),
-                                center: .center,
-                                startAngle: .degrees(0),
-                                endAngle: .degrees(360)
-                            ),
-                            style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: ringDiameter, height: ringDiameter)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.45), value: targetProgress)
-                }
-
-                // Always-visible white boundary ticks for optimal effort range
+                recessedTrackCanvas(pad: pad)
+                progressRingArc(ringDiameter: ringDiameter)
                 if effectiveHasVisualValue, let tr = targetRange {
-                    Canvas { context, canvasSize in
-                        let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-                        let radius = ringDiameter / 2
-                        let startDeg = -90.0 + tr.lowerBound * 360.0
-                        let endDeg = -90.0 + tr.upperBound * 360.0
-                        let covered = min(max((targetProgress - tr.lowerBound) / max(tr.upperBound - tr.lowerBound, 0.01), 0), 1)
-                        if covered > 0.05 {
-                            var outerGuide = Path()
-                            outerGuide.addArc(center: center, radius: radius + strokeWidth * 0.62, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
-                            context.stroke(outerGuide, with: .color(Color.white.opacity(0.45)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                        }
-                        for boundDeg in [startDeg, endDeg] {
-                            let rad = boundDeg * .pi / 180.0
-                            let rIn = radius - strokeWidth * 0.48
-                            let rOut = radius + strokeWidth * 0.48
-                            var bTick = Path()
-                            bTick.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
-                            bTick.addLine(to: CGPoint(x: center.x + rOut * cos(rad), y: center.y + rOut * sin(rad)))
-                            context.stroke(bTick, with: .color(Color.white.opacity(0.88)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                        }
-                    }
-                    .frame(width: size, height: size)
-                    .allowsHitTesting(false)
+                    boundaryTicksCanvas(ringDiameter: ringDiameter, tr: tr)
                 }
-
-                VStack(spacing: 1) {
-                    Text(effectiveHasVisualValue ? centerText : "--%")
-                        .font(ImprovingFont.metricHero(size >= 140 ? 38 : (size >= 100 ? 26 : 19)))
-                        .foregroundColor(effectiveHasVisualValue ? BevelColors.textPrimary : BevelColors.textMuted)
-                        .monospacedDigit()
-                    if let cSub = centerSubtitle {
-                        Text(effectiveHasVisualValue ? cSub : "Sin datos")
-                            .font(ImprovingFont.caption(size >= 140 ? 13.5 : 10.5))
-                            .foregroundColor(BevelColors.textSecondary)
-                    }
-                }
+                centerReadoutView
             }
 
             if !label.isEmpty {
@@ -280,8 +193,108 @@ struct BevelRecessedRingGauge: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(label.isEmpty ? (centerSubtitle ?? "Indicador") : label)
-        .accessibilityValue(effectiveHasVisualValue ? centerText : "Sin datos")
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityValue(accessibilityVal)
+    }
+
+    private func recessedTrackCanvas(pad: CGFloat) -> some View {
+        Canvas { context, canvasSize in
+            let arcRect = CGRect(x: pad, y: pad, width: canvasSize.width - pad * 2, height: canvasSize.height - pad * 2)
+            let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+            let radius = arcRect.width / 2
+
+            let bezelOuter = Path(ellipseIn: arcRect.insetBy(dx: -strokeWidth * 0.65, dy: -strokeWidth * 0.65))
+            context.fill(bezelOuter, with: .color(BevelColors.isDarkMode ? Color(hex: 0x333640, alpha: 0.7) : Color(hex: 0xE5E9F0)))
+            context.stroke(bezelOuter, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.14 : 0.7)), lineWidth: 1)
+
+            let groovePath = Path(ellipseIn: arcRect)
+            context.stroke(groovePath, with: .color(BevelColors.isDarkMode ? Color(hex: 0x1D1F25) : BevelColors.trackGroove), lineWidth: strokeWidth)
+
+            let innerDish = Path(ellipseIn: arcRect.insetBy(dx: strokeWidth * 0.56, dy: strokeWidth * 0.56))
+            context.fill(innerDish, with: .color(BevelColors.isDarkMode ? Color(hex: 0x2C2F38, alpha: 0.85) : Color.white))
+            context.stroke(innerDish, with: .color(Color.white.opacity(BevelColors.isDarkMode ? 0.08 : 0.4)), lineWidth: 0.9)
+
+            if effectiveHasVisualValue, let tr = targetRange {
+                let startDeg = -90.0 + tr.lowerBound * 360.0
+                let endDeg = -90.0 + tr.upperBound * 360.0
+                var bandPath = Path()
+                bandPath.addArc(center: center, radius: radius, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
+                context.stroke(bandPath, with: .color(BevelColors.strainHatchBg), style: StrokeStyle(lineWidth: strokeWidth, lineCap: .butt))
+
+                let steps = max(Int((endDeg - startDeg) / 4.5), 5)
+                for i in 0...steps {
+                    let deg = startDeg + (endDeg - startDeg) * Double(i) / Double(steps)
+                    let rad = deg * .pi / 180.0
+                    let rIn = radius - strokeWidth * 0.36
+                    let rOut = radius + strokeWidth * 0.36
+                    var tick = Path()
+                    tick.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
+                    tick.addLine(to: CGPoint(x: center.x + rOut * cos(rad + 0.05), y: center.y + rOut * sin(rad + 0.05)))
+                    context.stroke(tick, with: .color(BevelColors.strainHatchLine.opacity(0.75)), style: StrokeStyle(lineWidth: 1.25, lineCap: .round))
+                }
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private func progressRingArc(ringDiameter: CGFloat) -> some View {
+        if targetProgress > 0 {
+            Circle()
+                .trim(from: 0, to: CGFloat(targetProgress))
+                .stroke(
+                    AngularGradient(
+                        gradient: Gradient(colors: gradientColors),
+                        center: .center,
+                        startAngle: .degrees(0),
+                        endAngle: .degrees(360)
+                    ),
+                    style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .frame(width: ringDiameter, height: ringDiameter)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.45), value: targetProgress)
+        }
+    }
+
+    private func boundaryTicksCanvas(ringDiameter: CGFloat, tr: ClosedRange<Double>) -> some View {
+        Canvas { context, canvasSize in
+            let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+            let radius = ringDiameter / 2
+            let startDeg = -90.0 + tr.lowerBound * 360.0
+            let endDeg = -90.0 + tr.upperBound * 360.0
+            let covered = min(max((targetProgress - tr.lowerBound) / max(tr.upperBound - tr.lowerBound, 0.01), 0), 1)
+            if covered > 0.05 {
+                var outerGuide = Path()
+                outerGuide.addArc(center: center, radius: radius + strokeWidth * 0.62, startAngle: .degrees(startDeg), endAngle: .degrees(endDeg), clockwise: false)
+                context.stroke(outerGuide, with: .color(Color.white.opacity(0.45)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+            }
+            for boundDeg in [startDeg, endDeg] {
+                let rad = boundDeg * .pi / 180.0
+                let rIn = radius - strokeWidth * 0.48
+                let rOut = radius + strokeWidth * 0.48
+                var bTick = Path()
+                bTick.move(to: CGPoint(x: center.x + rIn * cos(rad), y: center.y + rIn * sin(rad)))
+                bTick.addLine(to: CGPoint(x: center.x + rOut * cos(rad), y: center.y + rOut * sin(rad)))
+                context.stroke(bTick, with: .color(Color.white.opacity(0.88)), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            }
+        }
+        .frame(width: size, height: size)
+        .allowsHitTesting(false)
+    }
+
+    private var centerReadoutView: some View {
+        VStack(spacing: 1) {
+            Text(effectiveHasVisualValue ? centerText : "--%")
+                .font(ImprovingFont.metricHero(size >= 140 ? 38 : (size >= 100 ? 26 : 19)))
+                .foregroundColor(effectiveHasVisualValue ? BevelColors.textPrimary : BevelColors.textMuted)
+                .monospacedDigit()
+            if let cSub = centerSubtitle {
+                Text(effectiveHasVisualValue ? cSub : "Sin datos")
+                    .font(ImprovingFont.caption(size >= 140 ? 13.5 : 10.5))
+                    .foregroundColor(BevelColors.textSecondary)
+            }
+        }
     }
 }
 
