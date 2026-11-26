@@ -24,6 +24,35 @@ struct HomeLayoutEditorSheet: View {
                             .font(ImprovingFont.body(13))
                             .foregroundColor(BevelColors.textSecondary)
 
+                        BevelCard(cornerRadius: 18) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "rectangle.compress.vertical")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(BevelColors.skyBlue)
+                                    .frame(width: 34, height: 34)
+                                    .background(Circle().fill(BevelColors.skySoftBg))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Modo compacto")
+                                        .font(ImprovingFont.cardTitle(14.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Reduce espacios y hace visible más información sin desplazarte.")
+                                        .font(ImprovingFont.caption(11.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { store.homeLayout.isCompactMode },
+                                    set: { _ in
+                                        AppHaptics.selection()
+                                        store.toggleHomeCompactMode()
+                                    }
+                                ))
+                                .labelsHidden()
+                                .tint(BevelColors.emeraldEnd)
+                            }
+                            .padding(13)
+                        }
+
                         let ordered = store.homeLayout.normalizedOrder
                         ForEach(Array(ordered.enumerated()), id: \.element.id) { idx, kind in
                             let visible = store.homeLayout.isSectionVisible(kind)
@@ -234,7 +263,7 @@ struct AllCategoriesDirectoryScreen: View {
             ]),
             DirectorySection(id: "journal", title: "Diario, IA y Ajustes", rows: [
                 DirectoryRow(id: "j_habits", title: "Diario y Hábitos", subtitle: "Registro diario y notas", valueText: "Diario", icon: "book.fill", accent: BevelColors.amberStart) { onSelectMainTab(.diario) },
-                DirectoryRow(id: "j_impact", title: "Correlaciones del Diario (30 d)", subtitle: "Qué mejora tu recuperación", valueText: "Insights", icon: "chart.xyaxis.line", accent: BevelColors.greenPrimary) { onNavigate(.journalInsights) },
+                DirectoryRow(id: "j_impact", title: "Correlaciones del Diario (30 d)", subtitle: "Qué mejora tu recuperación", valueText: "Análisis", icon: "chart.xyaxis.line", accent: BevelColors.greenPrimary) { onNavigate(.journalInsights) },
                 DirectoryRow(id: "j_coach", title: "Coach Improving IA", subtitle: "Chat multimodal con tus datos", valueText: "IA", icon: "sparkles", accent: BevelColors.indigoEnd) { onNavigate(.askBevel) },
                 DirectoryRow(id: "j_dev", title: "Dispositivos, Atajos y Avisos", subtitle: "Salud, WHOOP, Gemini y notificaciones", valueText: "Ajustes", icon: "gearshape.fill", accent: BevelColors.textSecondary) { onNavigate(.dispositivos) }
             ])

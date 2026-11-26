@@ -33,9 +33,9 @@ struct NutritionTrendsDetailScreen: View {
         NutritionResourceGuide(
             id: "nut_basics",
             icon: "fork.knife",
-            heroTitle: "Nutrition Score",
-            heroSubtitle: "The Basics",
-            cardTitle: "The Basics: Nutrition Score",
+            heroTitle: "Puntuación\nnutricional",
+            heroSubtitle: "Fundamentos",
+            cardTitle: "Fundamentos: Puntuación nutricional",
             cardDescription: "Una forma sencilla y científica de entender cómo impactan tus comidas diarias.",
             gradientA: Color(hex: 0x2A3D3F),
             gradientB: Color(hex: 0x574834),
@@ -44,9 +44,9 @@ struct NutritionTrendsDetailScreen: View {
         NutritionResourceGuide(
             id: "nut_factors",
             icon: "leaf.fill",
-            heroTitle: "Food Quality\nContributors",
+            heroTitle: "Factores de\ncalidad",
             heroSubtitle: "11 Factores",
-            cardTitle: "Food Quality Contributors",
+            cardTitle: "Factores de calidad alimentaria",
             cardDescription: "Entiende los pilares que suben o bajan tu puntuación diaria de nutrición.",
             gradientA: Color(hex: 0x2A472F),
             gradientB: Color(hex: 0x4E2B2A),
@@ -56,15 +56,15 @@ struct NutritionTrendsDetailScreen: View {
 
     private var rangeOptions: [String] {
         switch activeTab {
-        case .score: return ["7 D", "30 d", "3 M", "6 M", "1 A"]
+        case .score: return ["7 d", "30 d", "3 M", "6 M", "1 A"]
         case .macroBalance: return ["30 d", "3 M", "6 M", "1 A"]
-        case .netEnergy: return ["7 D", "30 d", "3 M", "6 M"]
+        case .netEnergy: return ["7 d", "30 d", "3 M", "6 M"]
         }
     }
 
     private var spanDays: Int {
         switch selectedRange {
-        case "7 D": return 7
+        case "7 d", "7 D": return 7
         case "30 d": return 30
         case "3 M": return 90
         case "6 M": return 180
@@ -159,7 +159,7 @@ struct NutritionTrendsDetailScreen: View {
                                         withAnimation(.easeInOut(duration: 0.2)) {
                                             activeTab = tab
                                             if !rangeOptions.contains(selectedRange) {
-                                                selectedRange = tab == .netEnergy ? "7 D" : "30 d"
+                                                selectedRange = tab == .netEnergy ? "7 d" : "30 d"
                                             }
                                             windowPageOffset = 0
                                         }
@@ -239,7 +239,7 @@ struct NutritionTrendsDetailScreen: View {
         .background(BevelColors.canvas)
         .onAppear {
             activeTab = initialTab
-            selectedRange = initialTab == .netEnergy ? "7 D" : "30 d"
+            selectedRange = initialTab == .netEnergy ? "7 d" : "30 d"
         }
         .sheet(isPresented: $showCalendarSheet) {
             DatePickerSheetView(
@@ -717,7 +717,10 @@ struct NutritionTrendsDetailScreen: View {
                     ForEach(Array(periods.enumerated()), id: \.offset) { idx, pDays in
                         let series = trailingScores(days: pDays)
                         let valid = series.compactMap { $0 }
-                        let delta: Int? = valid.count >= 2 ? Int((valid.last! - valid.first!).rounded()) : nil
+                        let delta: Int? = {
+            guard valid.count >= 2, let first = valid.first, let last = valid.last else { return nil }
+            return Int((last - first).rounded())
+        }()
 
                         HStack {
                             Text("\(pDays) día(s)")

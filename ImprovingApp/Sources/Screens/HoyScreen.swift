@@ -51,8 +51,10 @@ struct HoyScreen: View {
         let weeklySummary = store.computeWeeklyReview()
         let initials = store.userProfile.initials
 
+        let compact = store.homeLayout.isCompactMode
+
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: compact ? 12 : 18) {
                 // Deep deliberate pull-down overscroll sensor (>= 135 pt required — zero accidental reloads or vibration!)
                 GeometryReader { geo in
                     let minY = geo.frame(in: .named("hoyScrollSpace")).minY
@@ -319,6 +321,8 @@ struct HoyScreen: View {
     ) -> some View {
         switch section {
         case .heroRings:
+            let compact = store.homeLayout.isCompactMode
+            let ringSz: CGFloat = compact ? 82 : 92
             BevelCard(cornerRadius: 24) {
                 VStack(spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
@@ -328,18 +332,20 @@ struct HoyScreen: View {
                                 centerText: "\(avail.hasStrainData ? store.strainPercent : 0)%",
                                 label: "Esfuerzo",
                                 kind: .strain,
-                                size: 92,
-                                strokeWidth: 9.5,
+                                size: ringSz,
+                                strokeWidth: compact ? 8.5 : 9.5,
                                 targetRange: store.optimalEffortRange,
                                 hasData: avail.hasStrainData,
                                 showZeroBaselineArc: true
                             )
                         }
                         .frame(maxWidth: .infinity)
+                        .accessibilityLabel("Esfuerzo")
+                        .accessibilityValue(avail.hasStrainData ? "\(store.strainPercent) por ciento" : "Sin esfuerzo")
 
                         Rectangle()
                             .fill(BevelColors.divider)
-                            .frame(width: 1, height: 92)
+                            .frame(width: 1, height: ringSz)
                             .padding(.top, 8)
 
                         Button { onNavigate(.recuperacion) } label: {
@@ -348,16 +354,18 @@ struct HoyScreen: View {
                                 centerText: "\(store.recoveryPercent)%",
                                 label: "Recuperación",
                                 kind: .recovery,
-                                size: 92,
-                                strokeWidth: 9.5,
+                                size: ringSz,
+                                strokeWidth: compact ? 8.5 : 9.5,
                                 hasData: avail.hasRecoveryData
                             )
                         }
                         .frame(maxWidth: .infinity)
+                        .accessibilityLabel("Recuperación")
+                        .accessibilityValue(avail.hasRecoveryData ? "\(store.recoveryPercent) por ciento" : "Sin datos")
 
                         Rectangle()
                             .fill(BevelColors.divider)
-                            .frame(width: 1, height: 92)
+                            .frame(width: 1, height: ringSz)
                             .padding(.top, 8)
 
                         Button { onNavigate(.suenoDetail) } label: {
@@ -366,15 +374,17 @@ struct HoyScreen: View {
                                 centerText: "\(store.sleepPercent)%",
                                 label: "Sueño",
                                 kind: .sleep,
-                                size: 92,
-                                strokeWidth: 9.5,
+                                size: ringSz,
+                                strokeWidth: compact ? 8.5 : 9.5,
                                 hasData: avail.hasSleepData
                             )
                         }
                         .frame(maxWidth: .infinity)
+                        .accessibilityLabel("Sueño")
+                        .accessibilityValue(avail.hasSleepData ? "\(store.sleepPercent) por ciento" : "Sin datos")
                     }
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 18)
+                    .padding(.vertical, compact ? 12 : 18)
 
                     Divider().background(BevelColors.divider)
 

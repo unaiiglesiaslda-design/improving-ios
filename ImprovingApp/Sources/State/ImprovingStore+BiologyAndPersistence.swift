@@ -49,6 +49,11 @@ extension ImprovingStore {
         persistState()
     }
 
+    func toggleHomeCompactMode() {
+        homeLayout.isCompactMode.toggle()
+        persistState()
+    }
+
     // MARK: - Manual Scale & Blood Pressure Logging + Lab Reports / Biomarkers (P2 & N6)
 
     func logManualScaleReading(
@@ -373,7 +378,7 @@ extension ImprovingStore {
         // Strict preview-mode isolation: NEVER push fabricated `simulatedHistory` numbers onto the user's Home/Lock Screen widgets!
         let hasReal = hasImportedOrPairedRealData || !realHistory.isEmpty
         let targetDay: RealBiometricDaySummary? = hasReal
-            ? (realHistory[todayIso] ?? realHistory.keys.sorted().last.flatMap { realHistory[$0] })
+            ? (realHistory[todayIso] ?? realHistory.keys.max().flatMap { realHistory[$0] })
             : nil
         let targetIso = targetDay?.dateIso ?? todayIso
         let dateLbl: String = {

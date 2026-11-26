@@ -65,7 +65,7 @@ struct OnboardingExperienceView: View {
                     ("Sensores", "En vivo")
                 ],
                 highlights: [
-                    "Cálculo RMSSD durante todo el sueño (estilo Bevel / WHOOP)",
+                    "Cálculo RMSSD durante todo el sueño (estándar clínico / WHOOP)",
                     "Histórico navegable de 7 días hasta 1 año completo",
                     "Sincronización automática en segundo plano sin datos falsos"
                 ]
@@ -849,18 +849,28 @@ private struct ProfileCalibrationStepView: View {
 
                             Divider().background(BevelColors.divider)
 
-                            profileStepperRow(
-                                label: "Altura",
-                                value: "\(Int(profile.heightCm.rounded())) cm",
-                                onMinus: { profile.heightCm = max(135, profile.heightCm - 1) },
-                                onPlus: { profile.heightCm = min(220, profile.heightCm + 1) }
-                            )
-                            profileStepperRow(
-                                label: "Peso",
-                                value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), profile.weightKg),
-                                onMinus: { profile.weightKg = max(35, ((profile.weightKg - 0.5) * 10).rounded() / 10) },
-                                onPlus: { profile.weightKg = min(180, ((profile.weightKg + 0.5) * 10).rounded() / 10) }
-                            )
+                            VStack(spacing: 6) {
+                                profileStepperRow(
+                                    label: "Altura",
+                                    value: "\(Int(profile.heightCm.rounded())) cm",
+                                    onMinus: { profile.heightCm = max(135, profile.heightCm - 1) },
+                                    onPlus: { profile.heightCm = min(220, profile.heightCm + 1) }
+                                )
+                                Slider(value: $profile.heightCm, in: 135...220, step: 1)
+                                    .tint(BevelColors.emeraldEnd)
+                                    .accessibilityLabel("Altura en centímetros")
+                            }
+                            VStack(spacing: 6) {
+                                profileStepperRow(
+                                    label: "Peso",
+                                    value: String(format: "%.1f kg", locale: Locale(identifier: "es_ES"), profile.weightKg),
+                                    onMinus: { profile.weightKg = max(35, ((profile.weightKg - 0.5) * 10).rounded() / 10) },
+                                    onPlus: { profile.weightKg = min(180, ((profile.weightKg + 0.5) * 10).rounded() / 10) }
+                                )
+                                Slider(value: $profile.weightKg, in: 35...180, step: 0.5)
+                                    .tint(BevelColors.emeraldEnd)
+                                    .accessibilityLabel("Peso en kilogramos")
+                            }
                         }
                         .padding(16)
                     }

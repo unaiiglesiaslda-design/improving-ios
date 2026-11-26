@@ -352,11 +352,11 @@ final class ImprovingStore: ObservableObject {
     }
 
     var latestAvailableDay: RealBiometricDaySummary? {
-        activeHistory.keys.sorted().last.flatMap { activeHistory[$0] }
+        activeHistory.keys.max().flatMap { activeHistory[$0] }
     }
 
     var earliestAvailableDate: Date {
-        if let firstIso = activeHistory.keys.sorted().first, let d = isoFormatter.date(from: firstIso) {
+        if let firstIso = activeHistory.keys.min(), let d = isoFormatter.date(from: firstIso) {
             return min(d, Calendar.current.date(byAdding: .year, value: -3, to: Date()) ?? d)
         }
         return Calendar.current.date(byAdding: .year, value: -3, to: Date()) ?? Date()

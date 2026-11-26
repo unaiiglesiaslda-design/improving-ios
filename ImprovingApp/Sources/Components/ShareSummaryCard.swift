@@ -262,7 +262,7 @@ struct ShareCardPayload {
                 subtitle: dateLine,
                 progress: avail.hasEnergyData ? Double(store.energyPercent) / 100.0 : 0.0,
                 centerValue: avail.hasEnergyData ? "\(store.energyPercent)%" : "--",
-                centerCaption: " Pico hoy \(peakVal)",
+                centerCaption: "Pico hoy \(peakVal)",
                 ringColors: [Color(hex: 0x4ADE80), Color(hex: 0xFACC15)],
                 backgroundColors: [Color(hex: 0x362B19), Color(hex: 0x1E1B16), Color(hex: 0x101318)],
                 metrics: [

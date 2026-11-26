@@ -7,3 +7,8 @@ build/
 Improving.xcodeproj/
 *.ipa
 *.dSYM.zip
+*.xcresult
+*.log
+*.improvingbak
+Shortcuts/*.tmp
+Shortcuts/*.unsigned.shortcut

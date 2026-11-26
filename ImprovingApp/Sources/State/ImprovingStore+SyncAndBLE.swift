@@ -397,7 +397,7 @@ extension ImprovingStore {
     }
 
     static func formatLatestReadingTag(from days: [String: RealBiometricDaySummary]) -> String {
-        guard let latestIso = days.keys.sorted().last, let d = days[latestIso] else { return "" }
+        guard let latestIso = days.keys.max(), let d = days[latestIso] else { return "" }
         let shortDay: String = {
             guard let dt = AppFormatters.parseIsoDay(latestIso) else { return latestIso }
             return AppFormatters.dMMM.string(from: dt).replacingOccurrences(of: ".", with: "")

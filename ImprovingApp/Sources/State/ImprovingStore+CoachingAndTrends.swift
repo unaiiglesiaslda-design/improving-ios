@@ -114,7 +114,7 @@ extension ImprovingStore {
             if let s = sess?.startTimeLabel, let e = sess?.endTimeLabel { facts.append("Horario real: acostado \(s) hasta despertar \(e)") }
             if let eff = sess?.efficiencyPct { facts.append("Eficiencia del sueño \(eff)%") }
             if let deep = d?.deepMinutes, deep > 0 { facts.append("Sueño profundo \(deep) min") }
-            if let rem = d?.remMinutes, rem > 0 { facts.append("Sueño MOR \(rem) min") }
+            if let rem = d?.remMinutes, rem > 0 { facts.append("Sueño REM \(rem) min") }
             if let lat = sess?.latencyMinutes { facts.append("Latencia para dormirse \(lat) min") }
             if let dip = sess?.hrDipPct { facts.append(String(format: "Disminución nocturna de FC %.1f%%", locale: Locale(identifier: "es_ES"), dip)) }
             if let debt = d?.sleepDebtMinutes, debt > 0 { facts.append("Deuda de sueño acumulada \(debt) min") }
@@ -501,7 +501,7 @@ extension ImprovingStore {
                 detailNote: "Horas netas de sueño excluyendo despertares nocturnos."
             ),
             buildTrendItem(
-                id: "s_rem", title: "Sueño MOR",
+                id: "s_rem", title: "Sueño REM",
                 currentValue: currentDaySummary?.remMinutes.flatMap { $0 > 0 ? Double($0) : nil },
                 valueFormatter: hmFmt, unitText: "",
                 series: window.map { $0.summary?.remMinutes.flatMap { $0 > 0 ? Double($0) : nil } },

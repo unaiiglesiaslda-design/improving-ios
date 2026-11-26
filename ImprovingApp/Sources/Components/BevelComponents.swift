@@ -126,6 +126,8 @@ struct BevelRecessedRingGauge: View {
     /// a tiny starting progress nub at 12 o'clock, and the hatched optimal target zone.
     var showZeroBaselineArc: Bool = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var effectiveHasVisualValue: Bool {
         hasData || showZeroBaselineArc
     }
@@ -221,7 +223,7 @@ struct BevelRecessedRingGauge: View {
                         )
                         .rotationEffect(.degrees(-90))
                         .frame(width: ringDiameter, height: ringDiameter)
-                        .animation(.easeOut(duration: 0.45), value: targetProgress)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.45), value: targetProgress)
                 }
 
                 // Always-visible white boundary ticks for optimal effort range
@@ -277,6 +279,9 @@ struct BevelRecessedRingGauge: View {
                     .lineLimit(1)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label.isEmpty ? (centerSubtitle ?? "Indicador") : label)
+        .accessibilityValue(effectiveHasVisualValue ? centerText : "Sin datos")
     }
 }
 
@@ -1338,7 +1343,7 @@ struct QuickActionsOverlaySheet: View {
                         Button(action: onOpenAskBevel) {
                             VStack(spacing: 8) {
                                 BevelMascotOrb(size: 58)
-                                Text("Ask Improving")
+                                Text("Coach IA")
                                     .font(ImprovingFont.caption(12))
                                     .fontWeight(.bold)
                                     .foregroundColor(BevelColors.textPrimary)

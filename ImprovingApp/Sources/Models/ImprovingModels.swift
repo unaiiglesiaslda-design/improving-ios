@@ -95,6 +95,31 @@ struct HomeLayoutPreferences: Codable, Equatable {
     var sectionOrder: [HomeSectionKind] = HomeSectionKind.allCases
     var hiddenSections: [HomeSectionKind] = []
     var hiddenHealthMetrics: [HealthMetricKind] = []
+    var isCompactMode: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case sectionOrder, hiddenSections, hiddenHealthMetrics, isCompactMode
+    }
+
+    init(
+        sectionOrder: [HomeSectionKind] = HomeSectionKind.allCases,
+        hiddenSections: [HomeSectionKind] = [],
+        hiddenHealthMetrics: [HealthMetricKind] = [],
+        isCompactMode: Bool = false
+    ) {
+        self.sectionOrder = sectionOrder
+        self.hiddenSections = hiddenSections
+        self.hiddenHealthMetrics = hiddenHealthMetrics
+        self.isCompactMode = isCompactMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sectionOrder = try c.decodeIfPresent([HomeSectionKind].self, forKey: .sectionOrder) ?? HomeSectionKind.allCases
+        hiddenSections = try c.decodeIfPresent([HomeSectionKind].self, forKey: .hiddenSections) ?? []
+        hiddenHealthMetrics = try c.decodeIfPresent([HealthMetricKind].self, forKey: .hiddenHealthMetrics) ?? []
+        isCompactMode = try c.decodeIfPresent(Bool.self, forKey: .isCompactMode) ?? false
+    }
 
     var normalizedOrder: [HomeSectionKind] {
         var result = sectionOrder.filter { HomeSectionKind.allCases.contains($0) }

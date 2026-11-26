@@ -17,6 +17,7 @@ struct DispositivosScreen: View {
     @State private var autoRunShortcutToggle: Bool = false
     @State private var savedBanner: Bool = false
     @State private var widgetSyncToast: String? = nil
+    @State private var widgetDiag: WidgetBridgeDiagnostic? = nil
     @State private var aiTestResult: (ok: Bool, text: String)? = nil
     @State private var testingAi: Bool = false
     @State private var profileSavedBanner: Bool = false
@@ -295,7 +296,7 @@ struct DispositivosScreen: View {
                             }
 
                         if !autoRunShortcutToggle {
-                            Text("Modo 100 % sin salir de Improving activo: configura en Atajos → Automatización → App «Improving» → Al abrirse → Ejecutar inmediatamente.")
+                            Text("Modo manual o programado activo: pulsa «Ejecutar Atajo» arriba o crea una automatización por hora del día en Atajos con «Sync Improving» para actualizar sin reabrir la app.")
                                 .font(ImprovingFont.caption(11))
                                 .foregroundColor(BevelColors.textSecondary)
                         }
@@ -663,7 +664,7 @@ struct DispositivosScreen: View {
                         HStack {
                             Text("Método VFC").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)
                             Spacer()
-                            Text("RMSSD (Bevel / WHOOP)").font(ImprovingFont.cardTitle(13.5)).foregroundColor(BevelColors.greenPrimary)
+                            Text("RMSSD (Estándar clínico / WHOOP)").font(ImprovingFont.cardTitle(13.5)).foregroundColor(BevelColors.greenPrimary)
                         }
                         HStack {
                             Text("Fuente VFC").font(ImprovingFont.body(13.5)).foregroundColor(BevelColors.textSecondary)
@@ -682,7 +683,7 @@ struct DispositivosScreen: View {
                                 .background(RoundedRectangle(cornerRadius: 8).fill(BevelColors.cardSubtle))
                         }
                         if let lbl = store.currentDaySummary?.hrvMethodLabel, lbl.hasPrefix("SDNN") {
-                            Text("Atajos de iOS solo exporta SDNN (sin serie latido a latido). Para RMSSD exacto como Bevel: importa exportar.zip o conecta Salud en vivo.")
+                            Text("Atajos de iOS solo exporta SDNN (sin serie latido a latido). Para RMSSD latido a latido: importa exportar.zip o conecta Salud en vivo.")
                                 .font(ImprovingFont.caption(10.5))
                                 .foregroundColor(BevelColors.textMuted)
                         }
@@ -716,9 +717,9 @@ struct DispositivosScreen: View {
                 }
                 .padding(.horizontal, 16)
 
-                // Smart Local Notifications & Wake Alarm Hub Card
+                // Widgets Diagnostics & Live Sync Hub Card (diagnostic I/O cached off body!)
                 BevelCard {
-                    let widgetDiag = WidgetSnapshotStore.diagnosticStatus()
+                    let diag = widgetDiag
                     VStack(alignment: .leading, spacing: 11) {
                         HStack(spacing: 8) {
                             Image(systemName: "rectangle.grid.2x2.fill")
@@ -734,43 +735,39 @@ struct DispositivosScreen: View {
                             }
                         }
 
-                        HStack(spacing: 8) {
-                            Image(systemName: widgetDiag.sharedContainerAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                .foregroundColor(widgetDiag.sharedContainerAvailable ? BevelColors.greenPrimary : BevelColors.amberStart)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(widgetDiag.sharedContainerAvailable
-                                    ? "Contenedor compartido activo (\(widgetDiag.resolvedGroup))"
-                                    : "App Group sin provisionar en la firma (\(widgetDiag.resolvedGroup))")
-                                    .font(ImprovingFont.caption(11.5))
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(widgetDiag.sharedContainerAvailable ? BevelColors.greenPrimary : BevelColors.amberStart)
-                                if !widgetDiag.sharedContainerAvailable {
-                                    Text("Si usas Sideloadly/AltStore/SideStore, asegúrate de firmar conservando App Groups para que el widget pueda leer los datos.")
-                                        .font(ImprovingFont.caption(10.5))
-                                        .foregroundColor(BevelColors.textMuted)
-                                } else if let updated = widgetDiag.lastUpdatedAt {
-                                    let fmt: DateFormatter = {
-                                        let f = DateFormatter()
-                                        f.dateFormat = "HH:mm:ss"
-                                        return f
-                                    }()
-                                    Text("Última publicación en vivo: \(fmt.string(from: updated))")
-                                        .font(ImprovingFont.caption(11))
-                                        .foregroundColor(BevelColors.textSecondary)
+                        if let diag {
+                            HStack(spacing: 8) {
+                                Image(systemName: diag.sharedContainerAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundColor(diag.sharedContainerAvailable ? BevelColors.greenPrimary : BevelColors.amberStart)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(diag.sharedContainerAvailable
+                                        ? "Contenedor compartido activo (\(diag.resolvedGroup))"
+                                        : "App Group sin provisionar en la firma (\(diag.resolvedGroup))")
+                                        .font(ImprovingFont.caption(11.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(diag.sharedContainerAvailable ? BevelColors.greenPrimary : BevelColors.amberStart)
+                                    if !diag.sharedContainerAvailable {
+                                        Text("Si usas Sideloadly/AltStore/SideStore, asegúrate de firmar conservando App Groups para que el widget pueda leer los datos.")
+                                            .font(ImprovingFont.caption(10.5))
+                                            .foregroundColor(BevelColors.textMuted)
+                                    } else if let updated = diag.lastUpdatedAt {
+                                        Text("Última publicación en vivo: \(AppFormatters.hhmmssString(from: updated))")
+                                            .font(ImprovingFont.caption(11))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                    }
                                 }
+                                Spacer()
                             }
-                            Spacer()
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
                         }
-                        .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
 
                         HStack(spacing: 10) {
                             Button {
                                 store.publishWidgetSnapshot(triggerReload: true, forceReload: true)
-                                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                                let fmt = DateFormatter()
-                                fmt.dateFormat = "HH:mm:ss"
-                                widgetSyncToast = "✓ Widgets actualizados (\(fmt.string(from: Date())))"
+                                widgetDiag = WidgetSnapshotStore.diagnosticStatus()
+                                AppHaptics.success()
+                                widgetSyncToast = "✓ Widgets actualizados (\(AppFormatters.hhmmssString(from: Date())))"
                             } label: {
                                 Label("Actualizar Widgets ahora", systemImage: "arrow.triangle.2.circlepath")
                                     .font(ImprovingFont.caption(12.5))
@@ -1010,6 +1007,7 @@ struct DispositivosScreen: View {
             darkToggle = BevelColors.isDarkMode
             savedBanner = false
             profileSavedBanner = false
+            widgetDiag = WidgetSnapshotStore.diagnosticStatus()
         }
         .onChange(of: birthDateDraft) { _, newDate in
             profileDraft.setBirthDate(newDate)
@@ -1163,7 +1161,7 @@ private struct ShortcutsAutomationGuideSheet: View {
                     lines: [
                         "Elimina cualquier atajo anterior e importa el nuevo «Sync Improving».",
                         "Envía los 14 bloques clave de Apple Salud (incluyendo Temperatura de la muñeca nocturna) por URL codificada sin usar el portapapeles, evitando el aviso «Permitir pegar desde Atajos».",
-                        "Si habías creado alguna Automatización «Al abrir Improving» en Atajos, bórrala para evitar que iOS reabra la app al cerrarla."
+                        "Recomendado: crea una automatización horaria en Atajos (por ejemplo a las 08:30 y 21:00) o pulsa «Ejecutar Atajo». Evita automatizaciones «Al abrir Improving» para que iOS no reabra la app en bucle."
                     ]
                 )
 

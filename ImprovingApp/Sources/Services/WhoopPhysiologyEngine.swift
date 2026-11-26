@@ -158,7 +158,7 @@ enum WhoopPhysiologyEngine {
     /// Master clinical & sports-physiology personalization engine (exact parity with Android `WhoopPhysiologyEngine.kt`).
     /// Computes every optimal range, vital band, sleep duration/architecture target, VO2/HRR cohort,
     /// macro/hydration/caffeine target, and movement goal from `(birthDate/age, sex, heightCm, weightKg)`.
-    static func computePersonalizedNorms(profile: UserPhysiologyProfile) -> PersonalizedPhysiologyNorms {
+    static func computePersonalizedNorms(profile: UserPhysiologyProfile, observedPeakHrBpm: Int = 0) -> PersonalizedPhysiologyNorms {
         let r1 = AppleHealthExportImporter.round1
         let age = min(max(profile.effectiveAgeYears, 13.0), 95.0)
         let weight = min(max(profile.weightKg, 32.0), 220.0)
@@ -209,7 +209,7 @@ enum WhoopPhysiologyEngine {
         let leanHigh = r1(100.0 - bfLow)
 
         // 2. Autonomic & Cardiopulmonary Vitals (HRV RMSSD, RHR, RR, SpO2, Skin Temp)
-        let maxHr = computeMaxHeartRate(profile: profile)
+        let maxHr = computeMaxHeartRate(profile: profile, observedPeakBpm: observedPeakHrBpm)
 
         // HRV RMSSD decays exponentially with age (Nunan / Shaffer & Ginsberg / WHOOP norms),
         // slightly higher in young adult women (Koenig & Thayer 2016), dampened at high BMI
@@ -250,11 +250,26 @@ enum WhoopPhysiologyEngine {
         let wristTempLow = r1((isFemale ? 35.4 : 35.3) + tempSeniorShift)
         let wristTempHigh = r1((isFemale ? 36.3 : 36.1) + tempSeniorShift)
 
-        // VO2max & HRR targets by Age & Sex (FRIEND / ACSM standards)
+        // VO2max & HRR targets by Age & Sex (FRIEND / ACSM standards — nonBinary uses true midpoint!)
         let decadeDrop = (max(0.0, age - 24.0) / 10.0) * 3.2
-        let vo2Good = r1(max((isFemale ? 39.5 : 48.0) - decadeDrop, 22.0))
-        let vo2Excellent = r1(max((isFemale ? 45.2 : 55.2) - decadeDrop, 26.0))
-        let hrrGood = min(max(Int((32.0 - max(0.0, age - 30.0) * 0.25 - (isFemale ? 1.5 : 0.0)).rounded()), 16), 36)
+        let vo2GoodBase: Double = switch profile.sex {
+        case .male: 48.0
+        case .female: 39.5
+        case .nonBinary: 43.75
+        }
+        let vo2ExcellentBase: Double = switch profile.sex {
+        case .male: 55.2
+        case .female: 45.2
+        case .nonBinary: 50.2
+        }
+        let hrrSexAdj: Double = switch profile.sex {
+        case .male: 0.0
+        case .female: 1.5
+        case .nonBinary: 0.75
+        }
+        let vo2Good = r1(max(vo2GoodBase - decadeDrop, 22.0))
+        let vo2Excellent = r1(max(vo2ExcellentBase - decadeDrop, 26.0))
+        let hrrGood = min(max(Int((32.0 - max(0.0, age - 30.0) * 0.25 - hrrSexAdj).rounded()), 16), 36)
         let ageBandStr: String = {
             if age < 20 { return "< 20" }
             if age < 30 { return "20–29" }
@@ -1865,9 +1880,10 @@ enum WhoopPhysiologyEngine {
             return periods.map { MetricTrendPeriodRow(id: $0, periodDays: $0, delta: nil, sparklinePoints: []) }
         }
 
-        // Build daily linearly interpolated series from first recorded value to latest recorded value for smooth 7-day rolling averages
-        let firstDay = dated.first!.dayIndex
-        let lastDay = dated.last!.dayIndex
+        // Build daily linearly interpolated series across short gaps (<= 14 days) so multi-month gaps never fabricate fake straight lines!
+        guard let firstDay = dated.first?.dayIndex, let lastDay = dated.last?.dayIndex else {
+            return periods.map { MetricTrendPeriodRow(id: $0, periodDays: $0, delta: nil, sparklinePoints: []) }
+        }
         var daily: [Double?] = Array(repeating: nil, count: 120)
         for idx in 0..<dated.count {
             let cur = dated[idx]
@@ -1875,7 +1891,7 @@ enum WhoopPhysiologyEngine {
             if idx + 1 < dated.count {
                 let nxt = dated[idx + 1]
                 let gap = nxt.dayIndex - cur.dayIndex
-                if gap > 1 {
+                if gap > 1 && gap <= 14 {
                     for step in 1..<gap {
                         let frac = Double(step) / Double(gap)
                         daily[cur.dayIndex + step] = cur.value + (nxt.value - cur.value) * frac

@@ -91,6 +91,9 @@ struct BiologiaScreen: View {
                             sampledDays: store.trailingCalendarSummaries(days: 30).filter { $0.summary != nil }.count,
                             hasData: hasBioBase
                         )
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Edad biológica")
+                        .accessibilityValue(hasBioBase ? String(format: "%.1f años", locale: Locale(identifier: "es_ES"), bioAge) : "Sin datos suficientes")
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -98,6 +101,35 @@ struct BiologiaScreen: View {
 
                 VStack(alignment: .leading, spacing: 16) {
                     // Quick Biology Actions: Scale + Blood Test AI (N6!)
+                    if !hasBioBase {
+                        Button { onNavigate(.dispositivos) } label: {
+                            BevelCard(cornerRadius: 20) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "heart.text.square.fill")
+                                        .font(.system(size: 20, weight: .semibold))
+                                        .foregroundColor(BevelColors.bioTeal)
+                                        .frame(width: 42, height: 42)
+                                        .background(Circle().fill(BevelColors.bioTeal.opacity(0.15)))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Activa tu Edad Biológica real")
+                                            .font(ImprovingFont.cardTitle(14.5))
+                                            .foregroundColor(BevelColors.textPrimary)
+                                        Text("Sincroniza Apple Salud o importa exportar.zip para calcular sueño, VFC, FCR y pasos reales.")
+                                            .font(ImprovingFont.caption(12))
+                                            .foregroundColor(BevelColors.textSecondary)
+                                            .multilineTextAlignment(.leading)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(BevelColors.bioTeal)
+                                }
+                                .padding(14)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     HStack(spacing: 10) {
                         Button { showScaleSheet = true } label: {
                             HStack(spacing: 7) {
