@@ -1211,7 +1211,7 @@ final class ImprovingStore: ObservableObject {
     var overtrainingAssessment: OvertrainingDeloadAssessment {
         let recent = trailingCalendarSummaries(days: 10).compactMap(\.summary)
         let cardioAnalysis = trainingLoadAnalysis(tab: .cardio, spanDays: 30, windowPageOffset: 0)
-        let chronic = max(Double(cardioAnalysis.points.last?.chronicLoad ?? 35), 15.0)
+        let chronic = max(Double(cardioAnalysis.optimalLow + cardioAnalysis.optimalHigh) / 2.0, 15.0)
         let acute = Double(cardioAnalysis.currentLoad)
         let acwr = cardioAnalysis.hasAnyData ? (acute / chronic) : 1.0
         return WhoopPhysiologyEngine.computeOvertrainingDeloadAssessment(
