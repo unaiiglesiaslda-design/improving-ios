@@ -897,54 +897,66 @@ struct NutritionMealItem: Identifiable, Codable, Hashable {
 
     var effectiveFiberG: Double {
         if let f = fiberG { return f }
-        let qf = qualityFactors
+        let veg = qualityFactors?.vegetables ?? 0
+        let wg = qualityFactors?.wholeGrains ?? 0
+        let fr = qualityFactors?.fruit ?? 0
         let base = Double(carbsG) * (qualityScore >= 80 ? 0.14 : 0.07)
-        let vegBonus = Double((qf?.vegetables ?? 0) + (qf?.wholeGrains ?? 0) + (qf?.fruits ?? 0)) * 3.2
+        let vegBonus = (veg + wg + fr) * 3.2
         return max(0, (base + vegBonus * 0.5).rounded())
     }
 
     var effectiveSugarG: Double {
         if let s = sugarG { return s }
-        let excess = Double(qualityFactors?.excessSugar ?? 0) * 14.0
-        let fruit = Double(qualityFactors?.fruits ?? 0) * 8.0
-        return max(0, (Double(carbsG) * (qualityScore < 65 ? 0.28 : 0.11) + excess + fruit * 0.4).rounded())
+        let excess = (qualityFactors?.excessSugar ?? 0) * 14.0
+        let fr = (qualityFactors?.fruit ?? 0) * 8.0
+        return max(0, (Double(carbsG) * (qualityScore < 65 ? 0.28 : 0.11) + excess + fr * 0.4).rounded())
     }
 
     var effectiveSodiumMg: Double {
         if let na = sodiumMg { return na }
-        let excess = Double((qualityFactors?.excessSodium ?? 0) + (qualityFactors?.processedMeats ?? 0)) * 420.0
+        let exNa = qualityFactors?.excessSodium ?? 0
+        let pm = qualityFactors?.processedMeat ?? 0
+        let excess = (exNa + pm) * 420.0
         return max(0, (Double(kcal) * 0.85 + excess).rounded())
     }
 
     var effectivePotassiumMg: Double {
         if let k = potassiumMg { return k }
-        let vegFruit = Double((qualityFactors?.vegetables ?? 0) + (qualityFactors?.fruits ?? 0)) * 340.0
+        let veg = qualityFactors?.vegetables ?? 0
+        let fr = qualityFactors?.fruit ?? 0
+        let vegFruit = (veg + fr) * 340.0
         return max(0, (Double(kcal) * 1.15 + vegFruit).rounded())
     }
 
     var effectiveMagnesiumMg: Double {
         if let mg = magnesiumMg { return mg }
-        let whole = Double((qualityFactors?.wholeGrains ?? 0) + (qualityFactors?.vegetables ?? 0) + (qualityFactors?.healthyFats ?? 0)) * 42.0
+        let wg = qualityFactors?.wholeGrains ?? 0
+        let veg = qualityFactors?.vegetables ?? 0
+        let hf = qualityFactors?.healthyFats ?? 0
+        let whole = (wg + veg + hf) * 42.0
         return max(0, (Double(kcal) * 0.14 + whole).rounded())
     }
 
     var effectiveIronMg: Double {
         if let fe = ironMg { return fe }
-        return max(0, ((Double(proteinG) * 0.11) + Double(qualityFactors?.vegetables ?? 0) * 1.1))
+        let veg = qualityFactors?.vegetables ?? 0
+        return max(0, (Double(proteinG) * 0.11) + veg * 1.1)
     }
 
     var effectiveVitaminDMcg: Double {
         if let vd = vitaminDMcg { return vd }
         let low = title.lowercased()
         let rich = (low.contains("salmón") || low.contains("huevo") || low.contains("atún") || low.contains("lácteo") || low.contains("leche")) ? 4.5 : 0.8
-        return rich + Double(qualityFactors?.omega3 ?? 0) * 3.2
+        let om3 = qualityFactors?.omega3 ?? 0
+        return rich + om3 * 3.2
     }
 
     var effectiveOmega3G: Double {
         if let o3 = omega3G { return o3 }
         let low = title.lowercased()
         let fishBonus = (low.contains("salmón") || low.contains("sardina") || low.contains("atún") || low.contains("nueces") || low.contains("chía")) ? 1.4 : 0.15
-        return fishBonus + Double(qualityFactors?.omega3 ?? 0) * 0.9
+        let om3 = qualityFactors?.omega3 ?? 0
+        return fishBonus + om3 * 0.9
     }
 }
 
