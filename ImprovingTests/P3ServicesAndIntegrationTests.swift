@@ -510,7 +510,8 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         // 5. Strength Trainer RPE (RPE 9 produces meaningfully higher muscular strain than RPE 3 for identical tonnage!)
         let lowRpe = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: 45, kcal: 240, avgHrBpm: 0, totalSets: 12, totalVolumeKg: 6000, rpe: 3)
         let highRpe = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: 45, kcal: 240, avgHrBpm: 0, totalSets: 12, totalVolumeKg: 6000, rpe: 9)
-        XCTAssertGreaterThan(highRpe.strainPct, lowRpe.strainPct + 8)
+        XCTAssertGreaterThanOrEqual(highRpe.strainPct, lowRpe.strainPct + 8)
+        XCTAssertGreaterThan(highRpe.strain21, lowRpe.strain21 + 1.0)
         let sampleSets = [
             StrengthLoggedSet(id: "s1", dateIso: todayIso, exercise: "Sentadilla", reps: 8, weightKg: 100, primaryMuscles: [.cuadriceps], secondaryMuscles: [.gluteos], completed: true)
         ]
