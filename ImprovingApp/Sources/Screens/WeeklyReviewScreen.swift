@@ -534,6 +534,7 @@ struct ClinicalReportExportCard: View {
     }
 }
 
+@MainActor
 enum ClinicalReportExporter {
     static func generateBiometricCSV(store: ImprovingStore, periodDays: Int = 30) throws -> URL {
         let items = store.trailingCalendarSummaries(days: periodDays)
@@ -543,23 +544,21 @@ enum ClinicalReportExporter {
         for item in items {
             let d = item.summary
             let nut = store.nutritionDayTotals(for: item.iso)
-            let row = [
-                item.iso,
-                d?.recoveryPct.map(String.init) ?? "",
-                d?.asleepMinutes.map(String.init) ?? "",
-                d?.sleepPct.map(String.init) ?? "",
-                d?.strainPct.map(String.init) ?? "",
-                d?.strain21.map { String(format: "%.1f", $0) } ?? "",
-                d?.hrvMs.map { String(format: "%.1f", $0) } ?? "",
-                d?.restingHrBpm.map { String(format: "%.1f", $0) } ?? "",
-                d?.respRateRpm.map { String(format: "%.1f", $0) } ?? "",
-                d?.spo2Percent.map { String(format: "%.1f", $0) } ?? "",
-                d?.wristTempAbsoluteC.map { String(format: "%.2f", $0) } ?? "",
-                d?.stepsCount.map(String.init) ?? "",
-                nut.kcal > 0 ? "\(nut.kcal)" : "",
-                nut.proteinG > 0 ? "\(Int(nut.proteinG.rounded()))" : ""
-            ].joined(separator: ",")
-            lines.append(row)
+            let recS: String = d?.recoveryPct.map { "\($0)" } ?? ""
+            let slpMinS: String = d?.asleepMinutes.map { "\($0)" } ?? ""
+            let slpPctS: String = d?.sleepPct.map { "\($0)" } ?? ""
+            let strPctS: String = d?.strainPct.map { "\($0)" } ?? ""
+            let str21S: String = d?.strain21.map { String(format: "%.1f", $0) } ?? ""
+            let hrvS: String = d?.hrvMs.map { String(format: "%.1f", $0) } ?? ""
+            let rhrS: String = d?.restingHrBpm.map { String(format: "%.1f", $0) } ?? ""
+            let rrS: String = d?.respRateRpm.map { String(format: "%.1f", $0) } ?? ""
+            let spo2S: String = d?.spo2Percent.map { String(format: "%.1f", $0) } ?? ""
+            let tmpS: String = d?.wristTempAbsoluteC.map { String(format: "%.2f", $0) } ?? ""
+            let stpS: String = d?.stepsCount.map { "\($0)" } ?? ""
+            let kcalS: String = nut.kcal > 0 ? "\(nut.kcal)" : ""
+            let protS: String = nut.proteinG > 0 ? "\(Int(nut.proteinG.rounded()))" : ""
+            let cols: [String] = [item.iso, recS, slpMinS, slpPctS, strPctS, str21S, hrvS, rhrS, rrS, spo2S, tmpS, stpS, kcalS, protS]
+            lines.append(cols.joined(separator: ","))
         }
         let csvData = Data(lines.joined(separator: "\n").utf8)
         let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("Improving_MPA_\(periodDays)d.csv")

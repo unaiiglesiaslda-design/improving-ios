@@ -2703,7 +2703,8 @@ enum WhoopPhysiologyEngine {
         var noZ2Hrv: [Double] = []
         for iso in sortedIsos {
             guard let day = history[iso], let nextDay = nextDaySummary(after: iso), let nextHrv = nextDay.hrvMs else { continue }
-            let z2Min = (day.hrZone1Minutes ?? 0) + (day.hrZone2Minutes ?? 0)
+            let zm = day.hrZoneMinutes
+            let z2Min = (zm.count > 0 ? zm[0] : 0) + (zm.count > 1 ? zm[1] : 0)
             if z2Min >= 25 { z2Hrv.append(nextHrv) }
             else { noZ2Hrv.append(nextHrv) }
         }

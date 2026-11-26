@@ -191,8 +191,9 @@ extension ImprovingStore {
         var strengthMin = 0
         for item in recent7 {
             guard let d = item.summary else { continue }
-            z13 += (d.hrZone1Minutes ?? 0) + (d.hrZone2Minutes ?? 0) + (d.hrZone3Minutes ?? 0)
-            z45 += (d.hrZone4Minutes ?? 0) + (d.hrZone5Minutes ?? 0)
+            let zm = d.hrZoneMinutes
+            z13 += (zm.count > 0 ? zm[0] : 0) + (zm.count > 1 ? zm[1] : 0) + (zm.count > 2 ? zm[2] : 0)
+            z45 += (zm.count > 3 ? zm[3] : 0) + (zm.count > 4 ? zm[4] : 0)
             let sWorkouts = d.workouts.filter { $0.categoryLabel == "Fuerza" || ($0.totalSets ?? 0) > 0 }
             strengthSessions += sWorkouts.count
             strengthMin += d.strengthMinutes ?? sWorkouts.reduce(0) { $0 + $1.durationMin }
