@@ -1813,7 +1813,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testAgenticCoachToolCallsAndOneTapUndoRoundTrip() throws {
-        XCTAssertEqual(GeminiCoachService.coachToolDeclarations.count, 11)
+        XCTAssertEqual(GeminiCoachService.coachToolDeclarations.count, 12)
 
         let store = makeIsolatedStore()
         let todayIso = store.selectedDateIso
@@ -1825,6 +1825,15 @@ final class AppleHealthExportImporterTests: XCTestCase {
         store.journalNotesByDate = [:]
         store.journalMoodByDate = [:]
         store.coachMessages = []
+        store.coachMemoryNotes = []
+
+        // 0. save_coach_memory persists long-term user facts via tool call
+        let memRes = store.executeCoachToolCall(
+            name: "save_coach_memory",
+            argsJson: #"{"note":"Entrena fuerza 4 días por semana"}"#
+        )
+        XCTAssertNotNil(memRes.appliedAction)
+        XCTAssertEqual(store.coachMemoryNotes, ["Entrena fuerza 4 días por semana"])
 
         // 1. log_meal with explicit time
         let logRes = store.executeCoachToolCall(
