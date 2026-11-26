@@ -877,6 +877,7 @@ struct StrengthSessionLoggerSheet: View {
     @State private var newReps: Int = 10
     @State private var newWeight: Double = 60
     @State private var newMuscle: MuscleGroupKind = .pectorales
+    @State private var rpeDraft: Int = 7
 
     var body: some View {
         NavigationStack {
@@ -901,6 +902,10 @@ struct StrengthSessionLoggerSheet: View {
                             Stepper("Energía est.: \(kcalEstimate) kcal", value: $kcalEstimate, in: 20...2000, step: 20)
                                 .font(ImprovingFont.caption(12.5))
                                 .foregroundColor(BevelColors.textPrimary)
+
+                            Divider().background(BevelColors.divider)
+
+                            rpeLiveStrainSection()
                         }
                         .padding(14)
                     }
@@ -1029,9 +1034,10 @@ struct StrengthSessionLoggerSheet: View {
                             title: sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Entrenamiento de fuerza tradicional" : sessionTitle,
                             durationMin: durationMin,
                             kcal: kcalEstimate,
-                            sets: setsDraft
+                            sets: setsDraft,
+                            rpe: rpeDraft
                         )
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        AppHaptics.success()
                         onClose()
                     } label: {
                         let doneCount = setsDraft.filter(\.completed).count
@@ -1073,6 +1079,54 @@ struct StrengthSessionLoggerSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    private func rpeLiveStrainSection() -> some View {
+        let completedSets = setsDraft.filter(\.completed)
+        let liveVol = completedSets.reduce(0.0) { $0 + Double($1.reps) * $1.weightKg }
+        let liveEst = WhoopPhysiologyEngine.computeWorkoutStrain(
+            durationMin: max(durationMin, 5),
+            kcal: kcalEstimate,
+            avgHrBpm: 0,
+            rhrBpm: store.restingHrBpm > 30 ? store.restingHrBpm : 55.0,
+            maxHrBpm: Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: store.userProfile)),
+            banisterB: store.userProfile.sex.banisterB,
+            totalSets: completedSets.count,
+            totalVolumeKg: liveVol,
+            rpe: rpeDraft
+        )
+        let rpeBadgeColor: Color = rpeDraft >= 8 ? BevelColors.coralHigh : (rpeDraft >= 5 ? BevelColors.amberStart : BevelColors.emeraldEnd)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Esfuerzo percibido (RPE)")
+                        .font(ImprovingFont.caption(12))
+                        .fontWeight(.semibold)
+                        .foregroundColor(BevelColors.textPrimary)
+                    Text("Carga muscular estimada: \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), liveEst.strain21)) / 21 (\(liveEst.strainPct)%)")
+                        .font(ImprovingFont.caption(11))
+                        .foregroundColor(BevelColors.amberStart)
+                }
+                Spacer()
+                Text("RPE \(rpeDraft)/10")
+                    .font(ImprovingFont.cardTitle(13.5))
+                    .monospacedDigit()
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(rpeBadgeColor))
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(rpeDraft) },
+                    set: { rpeDraft = Int($0.rounded()) }
+                ),
+                in: 1...10,
+                step: 1
+            )
+            .tint(rpeDraft >= 8 ? BevelColors.coralHigh : BevelColors.amberStart)
+            .accessibilityLabel("Esfuerzo percibido RPE del 1 al 10")
         }
     }
 }

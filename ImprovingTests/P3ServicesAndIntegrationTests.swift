@@ -406,4 +406,115 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         XCTAssertEqual(L10n.basics, "Fundamentos")
         XCTAssertEqual(L10n.yearToDate, "Año")
     }
+
+    // MARK: - 6. WHOOP Parity Suite (Next-Day Lag, Naps, Sleep Consistency, 2+ Vitals Alert, Pace of Aging & Strength RPE)
+
+    @MainActor
+    func testWhoopParityFeaturesEndToEnd() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("improving_whoop_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let storeUrl = tmpDir.appendingPathComponent("store.json")
+        let store = ImprovingStore(persistenceURL: storeUrl)
+        store.hasImportedOrPairedRealData = true
+
+        // 1. Sleep Consistency % (tight schedule > 90%, chaotic schedule < 60%)
+        let consistent = WhoopPhysiologyEngine.computeSleepConsistencyPercent(sessions: [
+            (23 * 60 + 10, 7 * 60 + 15),
+            (23 * 60 + 20, 7 * 60 + 20),
+            (23 * 60 + 15, 7 * 60 + 10),
+            (23 * 60 + 05, 7 * 60 + 15),
+        ])
+        let erratic = WhoopPhysiologyEngine.computeSleepConsistencyPercent(sessions: [
+            (22 * 60, 6 * 60),
+            (1 * 60 + 30, 10 * 60),
+            (23 * 60, 7 * 60),
+            (2 * 60, 11 * 60),
+        ])
+        XCTAssertGreaterThanOrEqual(consistent ?? 0, 90)
+        XCTAssertLessThan(erratic ?? 100, 60)
+
+        // 2. Nap Credit + WHOOP Sleep Coach 3-Mode Planner (100% / 85% / 70%) + Persistence
+        let todayIso = store.isoFormatter.string(from: Date())
+        store.setSleepGoalPct(100)
+        let fullNeed = store.tonightSleepNeedBreakdown.totalMin
+        store.logNap(minutes: 60, for: todayIso)
+        let afterNapNeed = store.tonightSleepNeedBreakdown.totalMin
+        XCTAssertEqual(store.napCreditMinutes(for: todayIso), 51) // 60 * 0.85 = 51 min credit
+        XCTAssertLessThan(afterNapNeed, fullNeed)
+        store.setSleepGoalPct(70)
+        let getByNeed = store.tonightSleepNeedBreakdown.totalMin
+        XCTAssertLessThan(getByNeed, afterNapNeed)
+        store.flushPersistenceNow()
+        let reloaded = ImprovingStore(persistenceURL: storeUrl)
+        XCTAssertEqual(reloaded.napMinutes(for: todayIso), 60)
+        XCTAssertEqual(reloaded.sleepGoalPct, 70)
+
+        // 3. 2+ Unhealthy Overnight Vitals -> Critical Health Monitor Alert + Automatic Effort Cap Reduction!
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        for back in 1...14 {
+            let dt = cal.date(byAdding: .day, value: -back, to: today)!
+            let iso = store.isoFormatter.string(from: dt)
+            store.realHistory[iso] = RealBiometricDaySummary(
+                dateIso: iso,
+                restingHrBpm: 50.0,
+                hrvMs: 78.0,
+                respRateRpm: 14.0,
+                wristTempAbsoluteC: 35.8,
+                spo2Percent: 98.0,
+                strainPct: 55,
+                recoveryPct: 75
+            )
+        }
+        // Normal day first
+        store.realHistory[todayIso] = RealBiometricDaySummary(
+            dateIso: todayIso,
+            restingHrBpm: 50.0,
+            hrvMs: 78.0,
+            respRateRpm: 14.0,
+            wristTempAbsoluteC: 35.8,
+            spo2Percent: 98.0,
+            recoveryPct: 75
+        )
+        store.dataRevision += 1
+        let normalRange = store.personalizedEffortTarget(for: todayIso).range
+        XCTAssertFalse(store.healthMonitorAlert(for: todayIso).isCritical)
+
+        // Now simulate illness onset: HRV drops sharply, RHR spikes, Wrist Temp elevates!
+        store.realHistory[todayIso] = RealBiometricDaySummary(
+            dateIso: todayIso,
+            restingHrBpm: 64.0,
+            hrvMs: 36.0,
+            respRateRpm: 17.5,
+            wristTempAbsoluteC: 37.2,
+            spo2Percent: 98.0,
+            recoveryPct: 75
+        )
+        store.dataRevision += 1
+        let sickAlert = store.healthMonitorAlert(for: todayIso)
+        let sickRange = store.personalizedEffortTarget(for: todayIso).range
+        XCTAssertTrue(sickAlert.isCritical)
+        XCTAssertGreaterThanOrEqual(sickAlert.count, 3)
+        XCTAssertLessThan(sickRange.upperBound, normalRange.upperBound - 0.12)
+
+        // 4. WHOOP Healthspan Pace of Aging (improving bio age -> < 1.0x; worsening -> > 1.0x)
+        let prof = UserPhysiologyProfile(ageYears: 30, sex: .male, weightKg: 74, heightCm: 178)
+        let youngEval = WhoopPhysiologyEngine.computeBiologicalAge(profile: prof, meanRhr: 47, meanHrv: 92, meanSleepHours: 8.0, meanSteps: 11500, vo2Max: 56)
+        let olderPrior = WhoopPhysiologyEngine.computeBiologicalAge(profile: prof, meanRhr: 58, meanHrv: 58, meanSleepHours: 6.8, meanSteps: 6000, vo2Max: 44)
+        let improvingPace = WhoopPhysiologyEngine.computePaceOfAging(currentEval: youngEval, priorEval: olderPrior)
+        XCTAssertLessThan(improvingPace.multiplier, 0.9)
+        let worseningPace = WhoopPhysiologyEngine.computePaceOfAging(currentEval: olderPrior, priorEval: youngEval)
+        XCTAssertGreaterThan(worseningPace.multiplier, 1.1)
+
+        // 5. Strength Trainer RPE (RPE 9 produces meaningfully higher muscular strain than RPE 3 for identical tonnage!)
+        let lowRpe = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: 45, kcal: 240, avgHrBpm: 0, totalSets: 12, totalVolumeKg: 6000, rpe: 3)
+        let highRpe = WhoopPhysiologyEngine.computeWorkoutStrain(durationMin: 45, kcal: 240, avgHrBpm: 0, totalSets: 12, totalVolumeKg: 6000, rpe: 9)
+        XCTAssertGreaterThan(highRpe.strainPct, lowRpe.strainPct + 8)
+        let sampleSets = [
+            StrengthLoggedSet(id: "s1", dateIso: todayIso, exercise: "Sentadilla", reps: 8, weightKg: 100, primaryMuscles: [.cuadriceps], secondaryMuscles: [.gluteos], completed: true)
+        ]
+        store.logCompletedStrengthSession(title: "Pierna Fuerza", durationMin: 50, kcal: 300, sets: sampleSets, rpe: 9)
+        XCTAssertEqual(store.realHistory[todayIso]?.workouts.first?.rpe, 9)
+    }
 }

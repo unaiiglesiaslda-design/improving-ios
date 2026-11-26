@@ -393,12 +393,13 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
     var totalSets: Int? = nil
     var totalVolumeKg: Double? = nil
     var targetMuscles: [String]? = nil
+    var rpe: Int? = nil // 1...10 Perceived Exertion (WHOOP Strength Trainer style)
 
     enum CodingKeys: String, CodingKey {
         case id, title, timeRange, durationMin, avgHrBpm, strainScore, strainPct
         case categoryLabel, kcal, distanceKm, elevationM, dateIso
         case startEpochSec, avgPowerW, avgCadenceRpm, hrZoneMinutes6
-        case hrRecovery1MinBpm, totalSets, totalVolumeKg, targetMuscles
+        case hrRecovery1MinBpm, totalSets, totalVolumeKg, targetMuscles, rpe
     }
 
     init(
@@ -421,7 +422,8 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
         hrRecovery1MinBpm: Double? = nil,
         totalSets: Int? = nil,
         totalVolumeKg: Double? = nil,
-        targetMuscles: [String]? = nil
+        targetMuscles: [String]? = nil,
+        rpe: Int? = nil
     ) {
         self.id = id
         self.title = title
@@ -443,6 +445,7 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
         self.totalSets = totalSets
         self.totalVolumeKg = totalVolumeKg
         self.targetMuscles = targetMuscles
+        self.rpe = rpe
     }
 
     init(from decoder: Decoder) throws {
@@ -467,6 +470,52 @@ struct EffortEventItem: Identifiable, Codable, Hashable {
         totalSets = try c.decodeIfPresent(Int.self, forKey: .totalSets)
         totalVolumeKg = try c.decodeIfPresent(Double.self, forKey: .totalVolumeKg)
         targetMuscles = try c.decodeIfPresent([String].self, forKey: .targetMuscles)
+        rpe = try c.decodeIfPresent(Int.self, forKey: .rpe)
+    }
+}
+
+/// Proactive WHOOP-style Health Monitor physiological alert when 2+ overnight vitals deviate negatively simultaneously.
+struct HealthMonitorPhysiologicalAlert: Equatable {
+    let flaggedVitals: [String]
+    let count: Int
+    let isCritical: Bool
+    let strainReductionPct: Int
+    let headline: String
+    let advice: String
+}
+
+/// WHOOP Healthspan-style Pace of Aging multiplier (0.3x ... 2.5x; <1.0x = aging slower than chronological pace).
+struct PaceOfAgingSnapshot: Equatable {
+    let multiplier: Double
+    let statusLabel: String
+    let deltaVsPrior30d: Double?
+    let explanation: String
+}
+
+/// WHOOP Sleep Coach 3-mode target selector for tonight's sleep plan.
+enum SleepCoachMode: Int, CaseIterable, Identifiable {
+    case peak = 100
+    case perform = 85
+    case getBy = 70
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .peak: return "Rendir"
+        case .perform: return "Mantener"
+        case .getBy: return "Mínimo"
+        }
+    }
+
+    var badgeText: String { "\(rawValue)%" }
+
+    var subtitle: String {
+        switch self {
+        case .peak: return "Máxima recuperación y rendimiento mañana"
+        case .perform: return "Equilibrio sostenible para tu rutina activa"
+        case .getBy: return "Mínimo funcional para días muy ajustados"
+        }
     }
 }
 

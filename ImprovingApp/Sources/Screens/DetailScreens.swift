@@ -512,11 +512,11 @@ struct SuenoDetailScreen: View {
     var body: some View {
         let avail = store.dataAvailability
         let sess = store.currentDaySummary?.sleepSession
-        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
-        let baseNeedMin = Int((norms.sleepTargetHours * 60.0).rounded())
-        let debt = store.currentDaySummary?.sleepDebtMinutes ?? 0
-        let needMin = baseNeedMin + debt + (store.strainPercent > 75 ? 25 : 0)
+        let needBreakdown = store.tonightSleepNeedBreakdown
+        let needMin = needBreakdown.totalMin
         let needText = "\(needMin / 60) h \(String(format: "%02d", needMin % 60)) min"
+        let consistencyOpt = store.sleepConsistencyPct
+        let napMinToday = store.napMinutesToday
 
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -549,6 +549,23 @@ struct SuenoDetailScreen: View {
                     HStack(spacing: 12) {
                         HeaderedMetricCard(icon: "bed.double.fill", title: "Tiempo en la cama", value: store.sleepInBedText)
                         HeaderedMetricCard(icon: "clock.fill", title: "Duración del sueño", value: store.sleepDurationText)
+                    }
+
+                    // WHOOP-style Sleep Consistency % + Nap Credit Quick Bar
+                    HStack(spacing: 12) {
+                        HeaderedMetricCard(
+                            icon: "calendar.badge.clock",
+                            title: "Consistencia horaria",
+                            value: consistencyOpt.map { "\($0)" } ?? "--",
+                            unit: consistencyOpt != nil ? "%" : ""
+                        )
+                        HeaderedMetricCard(
+                            icon: "powersleep",
+                            title: napMinToday > 0 ? "Siesta registrada" : "Registrar siesta",
+                            value: napMinToday > 0 ? "\(napMinToday)" : "+",
+                            unit: napMinToday > 0 ? "min" : "Añadir",
+                            onClick: onOpenSleepNeed
+                        )
                     }
 
                     // 4-Hour Time-Aware Sleep-Focused AI Coaching Card
@@ -623,7 +640,7 @@ struct SuenoDetailScreen: View {
                         .foregroundColor(BevelColors.textPrimary)
                         .padding(.top, 4)
 
-                    let sleepIcons = ["zzz", "clock.fill", "moon.fill", "moon.stars.fill", "heart.fill", "checkmark.seal.fill", "hourglass"]
+                    let sleepIcons = ["zzz", "clock.fill", "moon.fill", "moon.stars.fill", "heart.fill", "checkmark.seal.fill", "hourglass", "calendar.badge.clock"]
                     ForEach(Array(store.sleepTrends.enumerated()), id: \.element.id) { idx, item in
                         BevelTrendLightCard(
                             trend: item,
@@ -1228,49 +1245,19 @@ struct SleepNeedDetailScreen: View {
     }
 
     var body: some View {
-        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: store.userProfile)
-        let baseNeedMin = Int((norms.sleepTargetHours * 60.0).rounded())
-        let debt = store.currentDaySummary?.sleepDebtMinutes ?? 0
-        let strainExtra = store.dataAvailability.hasStrainData ? (store.strainPercent > 70 ? 25 : (store.strainPercent > 45 ? 10 : 0)) : 0
-        let totalNeed = baseNeedMin + debt + strainExtra
-        let plan = LocalNotificationManager.computeSleepNotificationPlan(
-            wakeHour: store.notificationSettings.smartAlarmHour,
-            wakeMinute: store.notificationSettings.smartAlarmMinute,
-            sleepNeedMinutes: totalNeed,
-            leadMinutes: store.notificationSettings.bedtimeLeadMinutes
-        )
+        let need = store.tonightSleepNeedBreakdown
+        let plan = store.computedSleepPlan
+        let activeMode = SleepCoachMode(rawValue: need.goalPct) ?? .peak
+        let consistencyOpt = store.sleepConsistencyPct
+        let todayIso = store.isoFormatter.string(from: Date())
+        let currentNapMin = store.napMinutes(for: todayIso)
 
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                DetailSheetHeader(title: "Necesidad de sueño y Alarma", onBack: onBack)
+                DetailSheetHeader(title: "Planificador de Sueño y Alarma", onBack: onBack)
 
-                BevelCard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("NECESIDAD DE SUEÑO ESTA NOCHE")
-                            .font(ImprovingFont.microLabel(11))
-                            .foregroundColor(BevelColors.periwinkleStart)
-                        Text("\(totalNeed / 60) h \(String(format: "%02d", totalNeed % 60)) min")
-                            .font(ImprovingFont.displayLarge(32))
-                            .monospacedDigit()
-                            .foregroundColor(BevelColors.textPrimary)
-                        Text("Para despertar a las \(plan.wakeLabel), tu hora óptima de acostarte hoy es las \(plan.bedtimeLabel).")
-                            .font(ImprovingFont.caption(12.5))
-                            .foregroundColor(BevelColors.greenPrimary)
-
-                        Divider().background(BevelColors.divider)
-
-                        planRow("Necesidad basal fisiológica", "\(baseNeedMin / 60) h \(String(format: "%02d", baseNeedMin % 60)) m", BevelColors.textPrimary)
-                        if store.dataAvailability.hasStrainData && strainExtra > 0 {
-                            planRow("+ Esfuerzo físico (\(store.strainPercent)%)", "+ 0 h \(String(format: "%02d", strainExtra)) m", BevelColors.orangeEnd)
-                        }
-                        if debt > 0 {
-                            planRow("+ Deuda de sueño acumulada", "+ \(debt / 60) h \(String(format: "%02d", debt % 60)) m", BevelColors.periwinkleStart)
-                        }
-                        planRow("Hora recomendada de dormir", plan.bedtimeLabel, BevelColors.skyBlue)
-                    }
-                    .padding(18)
-                }
-                .padding(.horizontal, 16)
+                sleepCoachSummaryCard(need: need, plan: plan, activeMode: activeMode, consistencyOpt: consistencyOpt)
+                napCreditSelectorCard(todayIso: todayIso, currentNapMin: currentNapMin, napCreditMin: need.napCreditMin)
 
                 // Real Wake-Up Alarm Card
                 BevelCard {
@@ -1390,6 +1377,136 @@ struct SleepNeedDetailScreen: View {
             Spacer()
             Text(val).font(ImprovingFont.cardTitle(13.5)).monospacedDigit().foregroundColor(color)
         }
+    }
+
+    private func sleepCoachSummaryCard(
+        need: (baseMin: Int, debtMin: Int, strainExtraMin: Int, napCreditMin: Int, goalPct: Int, totalMin: Int),
+        plan: ComputedSleepNotificationPlan,
+        activeMode: SleepCoachMode,
+        consistencyOpt: Int?
+    ) -> some View {
+        BevelCard {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack {
+                    Text("PLANIFICADOR DE SUEÑO · \(activeMode.title.uppercased()) (\(activeMode.badgeText))")
+                        .font(ImprovingFont.microLabel(10.5))
+                        .foregroundColor(BevelColors.periwinkleStart)
+                    Spacer()
+                    if let cons = consistencyOpt {
+                        Text("Consistencia \(cons)%")
+                            .font(ImprovingFont.caption(11))
+                            .fontWeight(.bold)
+                            .foregroundColor(cons >= 75 ? BevelColors.greenPrimary : BevelColors.amberStart)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill((cons >= 75 ? BevelColors.greenPrimary : BevelColors.amberStart).opacity(0.14)))
+                    }
+                }
+
+                Text("\(need.totalMin / 60) h \(String(format: "%02d", need.totalMin % 60)) min")
+                    .font(ImprovingFont.displayLarge(32))
+                    .monospacedDigit()
+                    .foregroundColor(BevelColors.textPrimary)
+
+                Text("Para despertar a las \(plan.wakeLabel) en modo \(activeMode.title) (\(activeMode.badgeText)), acuéstate hoy a las \(plan.bedtimeLabel).")
+                    .font(ImprovingFont.caption(12.5))
+                    .foregroundColor(BevelColors.greenPrimary)
+
+                // WHOOP 3-Mode Target Selector (Rendir 100% / Mantener 85% / Mínimo 70%)
+                HStack(spacing: 8) {
+                    ForEach(SleepCoachMode.allCases) { mode in
+                        let selected = activeMode == mode
+                        Button {
+                            AppHaptics.selection()
+                            store.setSleepGoalPct(mode.rawValue)
+                        } label: {
+                            VStack(spacing: 2) {
+                                Text(mode.title)
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.bold)
+                                Text(mode.badgeText)
+                                    .font(ImprovingFont.microLabel(10))
+                                    .monospacedDigit()
+                            }
+                            .foregroundColor(selected ? .white : BevelColors.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(selected ? BevelColors.indigoEnd : BevelColors.cardSubtle))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Text(activeMode.subtitle)
+                    .font(ImprovingFont.caption(11.5))
+                    .foregroundColor(BevelColors.textMuted)
+
+                Divider().background(BevelColors.divider)
+
+                planRow("Necesidad basal fisiológica", "\(need.baseMin / 60) h \(String(format: "%02d", need.baseMin % 60)) m", BevelColors.textPrimary)
+                if store.dataAvailability.hasStrainData && need.strainExtraMin > 0 {
+                    planRow("+ Esfuerzo físico (\(store.strainPercent)%)", "+ 0 h \(String(format: "%02d", need.strainExtraMin)) m", BevelColors.orangeEnd)
+                }
+                if need.debtMin > 0 {
+                    planRow("+ Deuda de sueño acumulada", "+ \(need.debtMin / 60) h \(String(format: "%02d", need.debtMin % 60)) m", BevelColors.periwinkleStart)
+                }
+                if need.napCreditMin > 0 {
+                    planRow("− Crédito por siesta hoy", "− \(need.napCreditMin) min", BevelColors.greenPrimary)
+                }
+                planRow("Hora recomendada de dormir", plan.bedtimeLabel, BevelColors.skyBlue)
+            }
+            .padding(18)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func napCreditSelectorCard(todayIso: String, currentNapMin: Int, napCreditMin: Int) -> some View {
+        let presets = [0, 20, 30, 45, 60, 90]
+        return BevelCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: "powersleep")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(BevelColors.greenPrimary)
+                    Text("CRÉDITO DE SIESTA HOY")
+                        .font(ImprovingFont.microLabel(10.5))
+                        .foregroundColor(BevelColors.greenPrimary)
+                    Spacer()
+                    if currentNapMin > 0 {
+                        Text("−\(napCreditMin) min esta noche")
+                            .font(ImprovingFont.caption(11.5))
+                            .fontWeight(.bold)
+                            .foregroundColor(BevelColors.greenPrimary)
+                    }
+                }
+                Text("Registrar una siesta reduce tu necesidad de sueño nocturno y ajusta automáticamente la hora recomendada para acostarte.")
+                    .font(ImprovingFont.caption(12))
+                    .foregroundColor(BevelColors.textSecondary)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(presets, id: \.self) { mins in
+                            let active = currentNapMin == mins
+                            Button {
+                                AppHaptics.selection()
+                                store.logNap(minutes: mins, for: todayIso)
+                            } label: {
+                                Text(mins == 0 ? "Sin siesta" : "\(mins) min")
+                                    .font(ImprovingFont.caption(12))
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(active ? .white : BevelColors.textSecondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Capsule().fill(active ? BevelColors.emeraldEnd : BevelColors.cardSubtle))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .padding(.horizontal, 16)
     }
 }
 

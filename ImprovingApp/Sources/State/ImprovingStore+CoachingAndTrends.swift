@@ -533,6 +533,14 @@ extension ImprovingStore {
                 detailNote: "Porcentaje del tiempo en cama que pasaste dormido."
             ),
             buildTrendItem(
+                id: "s_cons", title: "Consistencia horaria",
+                currentValue: sleepConsistencyPct.map { Double($0) },
+                valueFormatter: { "\(Int($0.rounded()))" }, unitText: "%",
+                series: window.map { _ in sleepConsistencyPct.map { Double($0) } },
+                bandLow: 75, bandHigh: 100, lineColorHex: 0x60A5FA,
+                detailNote: "Regularidad de tu hora de acostarte y despertarte en los últimos días (estilo WHOOP)."
+            ),
+            buildTrendItem(
                 id: "s_lat", title: "Tiempo que tardas en dormirte",
                 currentValue: currentDaySummary?.sleepSession?.latencyMinutes.map { Double($0) },
                 valueFormatter: { "\(Int($0.rounded())) min" }, unitText: "",

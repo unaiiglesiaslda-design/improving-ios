@@ -213,6 +213,43 @@ struct HoyScreen: View {
                     .buttonStyle(.plain)
                 }
 
+                // Proactive WHOOP-style Health Monitor multi-vital alert (2+ unhealthy overnight vitals simultaneously)
+                let vitalAlert = store.healthMonitorAlert(for: store.selectedDateIso)
+                if vitalAlert.isCritical {
+                    Button { onNavigate(.esfuerzo) } label: {
+                        BevelCard(cornerRadius: 18) {
+                            HStack(alignment: .top, spacing: 11) {
+                                Image(systemName: "exclamationmark.shield.fill")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundColor(BevelColors.coralHigh)
+                                    .frame(width: 36, height: 36)
+                                    .background(Circle().fill(BevelColors.coralSoftBg))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(vitalAlert.headline)
+                                        .font(ImprovingFont.cardTitle(14))
+                                        .foregroundColor(BevelColors.coralHigh)
+                                    Text(vitalAlert.advice)
+                                        .font(ImprovingFont.caption(11.5))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 4)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(BevelColors.coralHigh.opacity(0.8))
+                                    .padding(.top, 4)
+                            }
+                            .padding(14)
+                        }
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .strokeBorder(BevelColors.coralHigh.opacity(0.38), lineWidth: 1.0)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 // Customizable Ordered Home Sections (N2!)
                 ForEach(store.homeLayout.normalizedOrder) { section in
                     if store.homeLayout.isSectionVisible(section) {

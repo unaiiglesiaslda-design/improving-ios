@@ -68,6 +68,7 @@ final class ImprovingStore: ObservableObject {
         var allowKeylessAIFallback: Bool?
         var redactPIIFromAI: Bool?
         var healthKitPreviouslyAuthorized: Bool?
+        var napMinutesByDate: [String: Int]?
     }
 
     static weak var activeSharedStore: ImprovingStore?
@@ -112,6 +113,7 @@ final class ImprovingStore: ObservableObject {
     @Published var smartAlarmEnabled: Bool = true
     @Published var wakeOffsetMinutes: Int = 0
     @Published var sleepGoalPct: Int = 100
+    @Published var napMinutesByDate: [String: Int] = [:]
     @Published var visibleTabs: Set<MainTab> = Set(MainTab.allCases)
 
     @Published var whoopConnected: Bool = false
@@ -156,7 +158,7 @@ final class ImprovingStore: ObservableObject {
     var cachedVitalBands: [HealthMetricKind: (low: Double, high: Double, isPersonal: Bool)] = [:]
 
     func ensureDerivedCacheFresh() {
-        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)"
+        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)#\(napMinutesByDate.count)#\(sleepGoalPct)"
         if derivedCacheFingerprint != fp {
             derivedCacheFingerprint = fp
             cachedTrainingLoad.removeAll(keepingCapacity: true)
@@ -553,7 +555,8 @@ final class ImprovingStore: ObservableObject {
         title: String,
         durationMin: Int,
         kcal: Int,
-        sets: [StrengthLoggedSet]
+        sets: [StrengthLoggedSet],
+        rpe: Int? = nil
     ) {
         let completedOnly = sets.filter(\.completed)
         for s in completedOnly {
@@ -563,13 +566,17 @@ final class ImprovingStore: ObservableObject {
         let totalVol = completedOnly.reduce(0.0) { $0 + Double($1.reps) * $1.weightKg }
         let muscleNames = Array(Set(completedOnly.flatMap { $0.primaryMuscles.map(\.rawValue) }))
         let estKcal = kcal > 0 ? kcal : max(durationMin * 5, totalSets * 12)
+        let clampedRpe = rpe.map { min(max($0, 1), 10) }
         let ws = WhoopPhysiologyEngine.computeWorkoutStrain(
             durationMin: max(durationMin, 5),
             kcal: estKcal,
             avgHrBpm: 0,
             rhrBpm: restingHrBpm > 30 ? restingHrBpm : 55.0,
             maxHrBpm: Double(WhoopPhysiologyEngine.computeMaxHeartRate(profile: userProfile)),
-            banisterB: userProfile.sex.banisterB
+            banisterB: userProfile.sex.banisterB,
+            totalSets: totalSets,
+            totalVolumeKg: totalVol,
+            rpe: clampedRpe
         )
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
@@ -604,7 +611,8 @@ final class ImprovingStore: ObservableObject {
             startEpochSec: Int64(selectedStartDate.timeIntervalSince1970),
             totalSets: totalSets > 0 ? totalSets : nil,
             totalVolumeKg: totalVol > 0 ? AppleHealthExportImporter.round1(totalVol) : nil,
-            targetMuscles: muscleNames.isEmpty ? nil : muscleNames
+            targetMuscles: muscleNames.isEmpty ? nil : muscleNames,
+            rpe: clampedRpe
         )
         d.workouts.insert(ev, at: 0)
         d.strengthMinutes += clampedDuration
@@ -1015,6 +1023,7 @@ final class ImprovingStore: ObservableObject {
         }()
 
         let debtMin = targetDay?.sleepDebtMinutes
+        let vitalAlert = healthMonitorAlert(for: targetIso)
         let range = WhoopPhysiologyEngine.optimalTargetRange(
             for: recBasis,
             profile: userProfile,
@@ -1022,11 +1031,92 @@ final class ImprovingStore: ObservableObject {
             baselineSampleCount: prior28Strains.count,
             cardioLoadState: cardioState,
             sleepDebtMinutes: debtMin,
-            recent3DayAvgStrainPct: r3Mean
+            recent3DayAvgStrainPct: r3Mean,
+            unhealthyVitalsCount: vitalAlert.count
         )
         let res = (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
         cachedEffortTargets[cacheKey] = res
         return res
+    }
+
+    /// WHOOP-style Health Monitor multi-vital alert (fires protective warning + automatic strain cap when 2+ overnight vitals deviate negatively).
+    func healthMonitorAlert(for dateIso: String? = nil) -> HealthMonitorPhysiologicalAlert {
+        let iso = dateIso ?? selectedDateIso
+        guard let d = activeHistory[iso] else {
+            return HealthMonitorPhysiologicalAlert(flaggedVitals: [], count: 0, isCritical: false, strainReductionPct: 0, headline: "", advice: "")
+        }
+        var flagged: [String] = []
+
+        if let hrv = d.hrvMs, hrv > 2.0 {
+            let b = personalVitalNormalBand(for: .hrv)
+            let ev = WhoopPhysiologyEngine.evaluateVital(value: hrv, bandLow: b.low, bandHigh: b.high, higherIsBetter: true, hasData: true)
+            if ev.isBelowBand && (ev.severity == .borderlineWarning || ev.severity == .alertOutOfRange) {
+                flagged.append("VFC baja")
+            }
+        }
+        if let rhr = d.restingHrBpm, rhr > 25.0 {
+            let b = personalVitalNormalBand(for: .restingHeartRate)
+            let ev = WhoopPhysiologyEngine.evaluateVital(value: rhr, bandLow: b.low, bandHigh: b.high, lowerIsBetter: true, hasData: true)
+            if ev.isAboveBand && (ev.severity == .borderlineWarning || ev.severity == .alertOutOfRange) {
+                flagged.append("FCR elevada")
+            }
+        }
+        if let rr = d.respRateRpm, rr > 5.0 {
+            let b = personalVitalNormalBand(for: .respiratoryRate)
+            let ev = WhoopPhysiologyEngine.evaluateVital(value: rr, bandLow: b.low, bandHigh: b.high, lowerIsBetter: true, hasData: true)
+            if ev.isAboveBand && (ev.severity == .borderlineWarning || ev.severity == .alertOutOfRange) {
+                flagged.append("FR elevada")
+            }
+        }
+        if let spo2 = d.spo2Percent, spo2 > 60.0 {
+            let b = personalVitalNormalBand(for: .oxygenSaturation)
+            let ev = WhoopPhysiologyEngine.evaluateVital(value: spo2, bandLow: b.low, bandHigh: b.high, higherIsBetter: true, hasData: true)
+            if ev.isBelowBand && (ev.severity == .borderlineWarning || ev.severity == .alertOutOfRange) {
+                flagged.append("SpO₂ baja")
+            }
+        }
+        let tempAbs: Double? = d.wristTempAbsoluteC ?? d.wristTempDeltaC.map { AppleHealthExportImporter.round1(35.8 + $0) }
+        if let t = tempAbs {
+            let b = personalVitalNormalBand(for: .wristTemperature)
+            let ev = WhoopPhysiologyEngine.evaluateVital(value: t, bandLow: b.low, bandHigh: b.high, hasData: true)
+            if (ev.isAboveBand || ev.isBelowBand) && (ev.severity == .borderlineWarning || ev.severity == .alertOutOfRange) {
+                flagged.append(ev.isAboveBand ? "Temp. elevada" : "Temp. baja")
+            }
+        }
+
+        let cnt = flagged.count
+        let isCrit = cnt >= 2
+        let reduction = cnt >= 3 ? 20 : (cnt == 2 ? 14 : 0)
+        let headline = cnt >= 3
+            ? "Alerta fisiológica (\(cnt) constantes alteradas)"
+            : (cnt == 2 ? "Señal de estrés fisiológico (2 constantes)" : "")
+        let advice = isCrit
+            ? "\(flagged.joined(separator: " · ")). Posible fatiga acumulada o inicio de resfriado: objetivo de esfuerzo reducido un \(reduction)% automáticamente."
+            : ""
+        return HealthMonitorPhysiologicalAlert(
+            flaggedVitals: flagged,
+            count: cnt,
+            isCritical: isCrit,
+            strainReductionPct: reduction,
+            headline: headline,
+            advice: advice
+        )
+    }
+
+    var sleepConsistencyPct: Int? {
+        let recent = trailingCalendarSummaries(days: 6)
+        let parseMin: (String) -> Int? = { txt in
+            let parts = txt.split(separator: ":")
+            guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+            return h * 60 + m
+        }
+        let pairs: [(Int, Int)] = recent.compactMap { item in
+            guard let sess = item.summary?.sleepSession,
+                  let s = sess.startTimeLabel.flatMap(parseMin),
+                  let e = sess.endTimeLabel.flatMap(parseMin) else { return nil }
+            return (s, e)
+        }
+        return WhoopPhysiologyEngine.computeSleepConsistencyPercent(sessions: pairs)
     }
 
     var optimalEffortRange: ClosedRange<Double> {
@@ -1041,7 +1131,11 @@ final class ImprovingStore: ObservableObject {
     /// Transparent 1-line physiological explanation of today's personalized Optimal Strain range.
     var effortTargetCalibrationCaption: String {
         let info = personalizedEffortTarget(for: selectedDateIso)
+        let alert = healthMonitorAlert(for: selectedDateIso)
         var parts: [String] = ["Rec. \(info.recBasis)%"]
+        if alert.isCritical {
+            parts.append("protección -\(alert.strainReductionPct)% (\(alert.count) constantes)")
+        }
         if let base = info.baselineStrainPct, info.sampleCount >= 3 {
             parts.append("media 28 d \(Int(base.rounded()))%")
         }

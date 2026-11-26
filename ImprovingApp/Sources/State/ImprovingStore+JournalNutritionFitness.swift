@@ -189,7 +189,8 @@ extension ImprovingStore {
             var firstLoggedIso: String? = nil
             var totalExplicitDays = 0
 
-            for iso in last90Isos {
+            for idx in 0..<last90Isos.count {
+                let iso = last90Isos[idx]
                 let state: JournalCheckState
                 if entry.isAuto {
                     guard hasUserFilledForm, let day = activeHistory[iso] else { continue }
@@ -202,8 +203,11 @@ extension ImprovingStore {
                 if firstLoggedIso == nil { firstLoggedIso = iso }
                 totalExplicitDays += 1
 
-                guard let day = activeHistory[iso] else { continue }
-                let outcomeOpt: Int? = (target == .recovery) ? day.recoveryPct : day.sleepPct
+                // WHOOP causal Next-Day Lag (D -> D+1): habits logged on day D impact tonight's sleep & tomorrow morning's recovery!
+                guard idx + 1 < last90Isos.count else { continue }
+                let nextIso = last90Isos[idx + 1]
+                guard let nextDay = activeHistory[nextIso] else { continue }
+                let outcomeOpt: Int? = (target == .recovery) ? nextDay.recoveryPct : nextDay.sleepPct
                 guard let outcome = outcomeOpt else { continue }
 
                 if state == .yes { yesVals.append(Double(outcome)) }
@@ -800,9 +804,50 @@ extension ImprovingStore {
         )
     }
 
-    // MARK: - Smart Local Notifications & Real Wake Alarm
+    // MARK: - Smart Local Notifications, Nap Credit & WHOOP Sleep Coach Planner
 
-    var tonightSleepNeedBreakdown: (baseMin: Int, debtMin: Int, strainExtraMin: Int, totalMin: Int) {
+    var napMinutesToday: Int {
+        napMinutesByDate[selectedDateIso] ?? 0
+    }
+
+    func napMinutes(for dateIso: String) -> Int {
+        napMinutesByDate[dateIso] ?? 0
+    }
+
+    func napCreditMinutes(for dateIso: String) -> Int {
+        let mins = napMinutes(for: dateIso)
+        guard mins > 0 else { return 0 }
+        // WHOOP-style nap credit: ~85% restorative credit, capped at 90 min so main circadian sleep stays protected
+        return min(Int((Double(mins) * 0.85).rounded()), 90)
+    }
+
+    func logNap(minutes: Int, for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        let clamped = min(max(minutes, 0), 180)
+        if clamped == 0 {
+            napMinutesByDate.removeValue(forKey: iso)
+        } else {
+            napMinutesByDate[iso] = clamped
+        }
+        invalidateSectionCoachingCache(sections: [.hoy, .sueno, .energia])
+        dataRevision += 1
+        persistState()
+        refreshSmartNotificationSchedules(promptPermission: false)
+    }
+
+    func clearNap(for dateIso: String? = nil) {
+        logNap(minutes: 0, for: dateIso)
+    }
+
+    func setSleepGoalPct(_ pct: Int) {
+        let allowed = [70, 85, 100]
+        sleepGoalPct = allowed.contains(pct) ? pct : min(max(pct, 70), 100)
+        dataRevision += 1
+        persistState()
+        refreshSmartNotificationSchedules(promptPermission: false)
+    }
+
+    var tonightSleepNeedBreakdown: (baseMin: Int, debtMin: Int, strainExtraMin: Int, napCreditMin: Int, goalPct: Int, totalMin: Int) {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
         let baseMin = Int((norms.sleepTargetHours * 60.0).rounded())
         let todayIso = isoFormatter.string(from: Date())
@@ -810,7 +855,11 @@ extension ImprovingStore {
         let debt = refDay?.sleepDebtMinutes ?? 0
         let stPct = refDay?.strainPct ?? 0
         let extra = stPct > 70 ? 25 : (stPct > 45 ? 10 : 0)
-        return (baseMin, debt, extra, baseMin + debt + extra)
+        let napCredit = napCreditMinutes(for: todayIso)
+        let fullNeed = max(baseMin + debt + extra - napCredit, 300)
+        let pct = min(max(sleepGoalPct, 70), 100)
+        let scaledNeed = max(Int((Double(fullNeed) * Double(pct) / 100.0).rounded()), 300)
+        return (baseMin, debt, extra, napCredit, pct, scaledNeed)
     }
 
     var computedSleepPlan: ComputedSleepNotificationPlan {

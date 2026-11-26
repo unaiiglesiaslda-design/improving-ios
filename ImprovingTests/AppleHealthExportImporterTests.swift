@@ -217,12 +217,15 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let day15Impacts = store.computeJournalImpacts(for: .recovery)
         XCTAssertEqual(day15Impacts.first(where: { $0.id == "caffeine" })?.reliability, .locked)
 
-        // 32 days of manual logging with >=5 yes and >=5 no -> UNLOCKS high reliability!
-        for back in 0..<32 {
+        // 32 days of manual logging with >=5 yes and >=5 no -> UNLOCKS high reliability with WHOOP Next-Day Lag (D -> D+1)!
+        for back in 1...33 {
             let dt = cal.date(byAdding: .day, value: -back, to: today)!
             let iso = store.isoFormatter.string(from: dt)
-            store.journalCheckinsByDate[iso] = ["caffeine": back % 2 == 0 ? .yes : .no]
-            store.realHistory[iso]?.recoveryPct = back % 2 == 0 ? 68 : 82
+            let nextDt = cal.date(byAdding: .day, value: -(back - 1), to: today)!
+            let nextIso = store.isoFormatter.string(from: nextDt)
+            let isYes = back % 2 == 0
+            store.journalCheckinsByDate[iso] = ["caffeine": isYes ? .yes : .no]
+            store.realHistory[nextIso]?.recoveryPct = isYes ? 68 : 82
         }
         let day32Impacts = store.computeJournalImpacts(for: .recovery)
         let caf = day32Impacts.first(where: { $0.id == "caffeine" })

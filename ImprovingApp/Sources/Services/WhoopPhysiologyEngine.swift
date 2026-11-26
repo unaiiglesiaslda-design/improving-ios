@@ -1129,7 +1129,7 @@ enum WhoopPhysiologyEngine {
             zoneTrimp += Double(mins) * zoneWeights[idx] * ageZoneFactor
         }
 
-        // 2. Workout physiological load (HR TRIMP + mechanical/muscular strength tonnage & sets when logged)
+        // 2. Workout physiological load (HR TRIMP + mechanical/muscular strength tonnage, sets & RPE when logged)
         var workoutLoad = 0.0
         for w in workouts {
             var baseLoad = 0.0
@@ -1142,10 +1142,15 @@ enum WhoopPhysiologyEngine {
             } else {
                 baseLoad = Double(w.durationMin) * 0.55 * ageZoneFactor
             }
-            // Add neuromuscular load for logged strength sessions (sets & tonnage) so heavy lifting isn't underestimated!
-            let setsBonus = Double(w.totalSets ?? 0) * 1.6
-            let volBonus = min((w.totalVolumeKg ?? 0) / 420.0, 22.0)
-            let muscularLoad = setsBonus + volBonus
+            let rpeVal = w.rpe.map { Double(min(max($0, 1), 10)) }
+            let rpeMult = rpeVal.map { 0.72 + 0.055 * $0 } ?? 1.0
+            if w.avgHrBpm == 0, let rv = rpeVal {
+                baseLoad *= (0.82 + 0.036 * rv)
+            }
+            // Add neuromuscular load for logged strength sessions (sets, tonnage & RPE) so heavy lifting matches WHOOP Strength Trainer!
+            let setsBonus = Double(w.totalSets ?? 0) * 1.65
+            let volBonus = min((w.totalVolumeKg ?? 0) / 400.0, 24.0)
+            let muscularLoad = (setsBonus + volBonus) * rpeMult
             workoutLoad += max(baseLoad, muscularLoad) + min(baseLoad, muscularLoad) * 0.35
         }
 
@@ -1169,21 +1174,87 @@ enum WhoopPhysiologyEngine {
         avgHrBpm: Int,
         rhrBpm: Double = 55.0,
         maxHrBpm: Double = 192.0,
-        banisterB: Double = 1.92
+        banisterB: Double = 1.92,
+        totalSets: Int = 0,
+        totalVolumeKg: Double = 0,
+        rpe: Int? = nil
     ) -> (strain21: Double, strainPct: Int) {
-        let load: Double
+        var cardioLoad: Double
         if avgHrBpm > 40 {
             let frac = min(max((Double(avgHrBpm) - rhrBpm) / max(maxHrBpm - rhrBpm, 40.0), 0.22), 0.98)
-            load = Double(durationMin) * frac * 0.64 * exp(banisterB * frac) * 1.15
+            cardioLoad = Double(durationMin) * frac * 0.64 * exp(banisterB * frac) * 1.15
         } else if kcal > 0 {
-            load = Double(kcal) * 0.095
+            cardioLoad = Double(kcal) * 0.095
         } else {
-            load = Double(durationMin) * 0.52
+            cardioLoad = Double(durationMin) * 0.52
         }
+        let rpeVal = rpe.map { Double(min(max($0, 1), 10)) }
+        let rpeMult = rpeVal.map { 0.72 + 0.055 * $0 } ?? 1.0
+        if avgHrBpm <= 40, let rv = rpeVal {
+            cardioLoad *= (0.82 + 0.036 * rv)
+        }
+        let muscularLoad = (Double(max(totalSets, 0)) * 1.65 + min(max(totalVolumeKg, 0) / 400.0, 24.0)) * rpeMult
+        let load = muscularLoad > 0 ? (max(cardioLoad, muscularLoad) + min(cardioLoad, muscularLoad) * 0.35) : cardioLoad
         let pctDouble = 100.0 * (1.0 - exp(-max(load, 1.0) / 108.0))
         let pct = min(max(Int(pctDouble.rounded()), 2), 98)
         let s21 = AppleHealthExportImporter.round1(min(max((pctDouble / 100.0) * 20.8, 0.4), 20.8))
         return (s21, pct)
+    }
+
+    /// WHOOP-style Sleep Consistency % (0–100%) from circular bedtime & wake-time standard deviation across trailing nights.
+    static func computeSleepConsistencyPercent(sessions: [(startMinuteOfDay: Int, endMinuteOfDay: Int)]) -> Int? {
+        guard sessions.count >= 2 else { return nil }
+        // Shift post-midnight bedtimes (00:00..08:00) by +1440 for circular continuity around midnight
+        let beds = sessions.map { Double($0.startMinuteOfDay < 480 ? $0.startMinuteOfDay + 1440 : $0.startMinuteOfDay) }
+        let wakes = sessions.map { Double($0.endMinuteOfDay) }
+
+        func sd(_ vals: [Double]) -> Double {
+            let mean = vals.reduce(0, +) / Double(vals.count)
+            let variance = vals.reduce(0.0) { $0 + pow($1 - mean, 2) } / Double(vals.count)
+            return sqrt(variance)
+        }
+        let avgSdMin = (sd(beds) + sd(wakes)) / 2.0
+        // 0 min SD -> 100%, 20 min SD -> ~84%, 45 min SD -> ~68%, 90 min SD -> ~46%, 150 min SD -> ~27%
+        let score = 100.0 * exp(-avgSdMin / 115.0)
+        return min(max(Int(score.rounded()), 10), 100)
+    }
+
+    /// WHOOP Healthspan-style Pace of Aging multiplier (0.3x ... 2.5x).
+    /// Compares recent 30d biological age trajectory vs prior 30d baseline when available.
+    static func computePaceOfAging(
+        currentEval: BiologicalAgeEvaluation,
+        priorEval: BiologicalAgeEvaluation?
+    ) -> PaceOfAgingSnapshot {
+        // Base physiological pace anchored at 1.0x (negative bio delta slows aging below 1.0x)
+        var pace = 1.0 + currentEval.deltaYears * 0.085
+        let trendDelta: Double?
+        if let prev = priorEval {
+            let diff = AppleHealthExportImporter.round1(currentEval.deltaYears - prev.deltaYears)
+            trendDelta = diff
+            // Recent improvement (diff < 0) decelerates current pace; worsening accelerates it
+            pace += min(max(diff * 0.35, -0.45), 0.55)
+        } else {
+            trendDelta = nil
+        }
+        let clamped = AppleHealthExportImporter.round1(min(max(pace, 0.3), 2.5))
+        let status: String
+        let detail: String
+        if clamped <= 0.85 {
+            status = "Más lento que el promedio"
+            detail = "Tus hábitos y biomarcadores recientes frenan el desgaste fisiológico."
+        } else if clamped <= 1.15 {
+            status = "Ritmo equilibrado"
+            detail = "Envejeces en línea con tu edad cronológica; mejorar sueño o VO₂ máx. reducirá este ritmo."
+        } else {
+            status = "Ritmo acelerado"
+            detail = "Tus métricas recientes muestran carga o descanso subóptimo; prioriza sueño, VFC y actividad aeróbica."
+        }
+        return PaceOfAgingSnapshot(
+            multiplier: clamped,
+            statusLabel: status,
+            deltaVsPrior30d: trendDelta,
+            explanation: detail
+        )
     }
 
     // MARK: - Bevel-Calibrated Sleep Score % (Strictly Measured Components + Age/Sex Restorative Targets!)
@@ -1262,7 +1333,8 @@ enum WhoopPhysiologyEngine {
         baselineSampleCount: Int = 0,
         cardioLoadState: TrainingLoadState? = nil,
         sleepDebtMinutes: Int? = nil,
-        recent3DayAvgStrainPct: Double? = nil
+        recent3DayAvgStrainPct: Double? = nil,
+        unhealthyVitalsCount: Int = 0
     ) -> ClosedRange<Double> {
         let r = min(max(Double(recoveryPct), 0.0), 100.0) / 100.0
 
@@ -1309,6 +1381,13 @@ enum WhoopPhysiologyEngine {
         if let debt = sleepDebtMinutes, debt > 30 {
             let debtPenalty = min(Double(debt - 30) / 600.0, 0.08)
             mid -= debtPenalty
+        }
+
+        // 3b. WHOOP Health Monitor illness / physiological stress auto-protection when 2+ vitals deviate negatively!
+        if unhealthyVitalsCount >= 3 {
+            mid = min(mid - 0.20, 0.36)
+        } else if unhealthyVitalsCount == 2 {
+            mid = min(mid - 0.14, 0.44)
         }
 
         // 4. Age acts ONLY as a gentle calibration prior when history is sparse (fades to 0 at 14+ days!)

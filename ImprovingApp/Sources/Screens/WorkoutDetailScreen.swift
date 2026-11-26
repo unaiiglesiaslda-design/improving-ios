@@ -128,6 +128,14 @@ struct WorkoutDetailScreen: View {
                                 unit: "kg"
                             )
                         }
+                        if let rpe = w.rpe {
+                            HeaderedMetricCard(
+                                icon: "gauge.with.needle.fill",
+                                title: "Esfuerzo percibido (RPE)",
+                                value: "\(rpe)",
+                                unit: "/ 10"
+                            )
+                        }
                     }
 
                     // 2. Heart Rate Zones Breakdown (Z0 - Z5)

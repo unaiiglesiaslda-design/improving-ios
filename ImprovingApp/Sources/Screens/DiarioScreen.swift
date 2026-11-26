@@ -743,8 +743,8 @@ struct JournalInsightsScreen: View {
                             .foregroundColor(.white)
 
                         Text(target == .sleep
-                             ? "Aquí se analiza cómo tus comportamientos y hábitos diarios afectan el sueño."
-                             : "Aquí se analiza cómo tus comportamientos y hábitos diarios afectan la recuperación.")
+                             ? "Analiza cómo tus hábitos de cada día impactan tu sueño de esa noche y la mañana siguiente (efecto causal D → D+1)."
+                             : "Analiza cómo tus hábitos de cada día impactan tu recuperación de la mañana siguiente (efecto causal D → D+1).")
                             .font(ImprovingFont.body(14))
                             .foregroundColor(.white.opacity(0.84))
                             .fixedSize(horizontal: false, vertical: true)
@@ -971,7 +971,7 @@ struct JournalInsightsScreen: View {
                             .font(ImprovingFont.cardTitle(14.5))
                             .foregroundColor(BevelColors.textPrimary)
                             .lineLimit(1)
-                        Text("✓ \(item.yesCount) días · ✕ \(item.noCount) días")
+                        Text("✓ \(item.yesCount) días · ✕ \(item.noCount) días · \(isHighReliability ? "Alta confianza (D → D+1)" : "Preliminar")")
                             .font(ImprovingFont.caption(11))
                             .foregroundColor(BevelColors.textMuted)
                     }

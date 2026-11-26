@@ -101,6 +101,9 @@ struct BiologiaScreen: View {
 
                 VStack(alignment: .leading, spacing: 16) {
                     // Quick Biology Actions: Scale + Blood Test AI (N6!)
+                    if let pace = store.paceOfAgingSnapshot() {
+                        paceOfAgingCard(pace)
+                    }
                     if !hasBioBase {
                         Button { onNavigate(.dispositivos) } label: {
                             BevelCard(cornerRadius: 20) {
@@ -535,6 +538,96 @@ struct BiologiaScreen: View {
         } message: {
             Text("Se borrarán «\(pendingDeleteLabReport?.title ?? "este informe")» y sus \(pendingDeleteLabReport?.biomarkers.count ?? 0) biomarcadores.")
         }
+    }
+
+    private func paceOfAgingCard(_ pace: PaceOfAgingSnapshot) -> some View {
+        let accent: Color = {
+            if pace.multiplier <= 0.88 { return BevelColors.bioTeal }
+            if pace.multiplier <= 1.12 { return BevelColors.skyBlue }
+            return BevelColors.coralHigh
+        }()
+        let clampedFrac = min(max((pace.multiplier - 0.3) / 2.2, 0.04), 0.96)
+        return BevelCard(cornerRadius: 22) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 10) {
+                    Image(systemName: "speedometer")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(accent)
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(accent.opacity(0.15)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("RITMO DE ENVEJECIMIENTO")
+                            .font(ImprovingFont.microLabel(10.5))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(pace.statusLabel)
+                            .font(ImprovingFont.cardTitle(15))
+                            .foregroundColor(BevelColors.textPrimary)
+                    }
+                    Spacer()
+                    Text(String(format: "%.2fx", locale: Locale(identifier: "es_ES"), pace.multiplier))
+                        .font(ImprovingFont.displayLarge(22))
+                        .monospacedDigit()
+                        .foregroundColor(accent)
+                }
+
+                GeometryReader { geo in
+                    let w = max(geo.size.width, 1)
+                    let oneXPos = w * ((1.0 - 0.3) / 2.2)
+                    let curPos = w * clampedFrac
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [BevelColors.bioTeal, BevelColors.skyBlue, BevelColors.amberStart, BevelColors.coralHigh],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(height: 8)
+                            .opacity(0.32)
+                        Rectangle()
+                            .fill(BevelColors.textMuted.opacity(0.55))
+                            .frame(width: 1.5, height: 14)
+                            .offset(x: oneXPos)
+                        Circle()
+                            .fill(accent)
+                            .frame(width: 14, height: 14)
+                            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                            .offset(x: max(0, min(curPos - 7, w - 14)))
+                    }
+                }
+                .frame(height: 16)
+
+                HStack {
+                    Text("0,3x (Lento)")
+                        .font(ImprovingFont.caption(10.5))
+                        .foregroundColor(BevelColors.bioTeal)
+                    Spacer()
+                    Text("1,0x (Normal)")
+                        .font(ImprovingFont.caption(10.5))
+                        .foregroundColor(BevelColors.textMuted)
+                    Spacer()
+                    Text("2,5x (Rápido)")
+                        .font(ImprovingFont.caption(10.5))
+                        .foregroundColor(BevelColors.coralHigh)
+                }
+
+                Text(pace.explanation)
+                    .font(ImprovingFont.caption(12))
+                    .foregroundColor(BevelColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let delta = pace.deltaVsPrior30d {
+                    let signText = delta <= -0.05 ? "Mejora" : (delta >= 0.05 ? "Aceleración" : "Estable")
+                    Text("\(signText) vs. 30 días previos: \(String(format: "%+.1f", locale: Locale(identifier: "es_ES"), delta)) años biológicos")
+                        .font(ImprovingFont.caption(11.5))
+                        .fontWeight(.semibold)
+                        .foregroundColor(accent)
+                }
+            }
+            .padding(16)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func impactColor(_ deltaYears: Double) -> Color {

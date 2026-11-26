@@ -176,6 +176,35 @@ extension ImprovingStore {
         return res
     }
 
+    /// WHOOP Healthspan-style Pace of Aging (0.3x ... 2.5x) comparing recent 30d vs prior 30d (days 31...60).
+    func paceOfAgingSnapshot() -> PaceOfAgingSnapshot? {
+        let cur = biologicalAgeSnapshot()
+        guard cur.hasData else { return nil }
+        let last60 = trailingCalendarSummaries(days: 60)
+        let prior30 = Array(last60.prefix(30))
+        let pRhr = prior30.compactMap { $0.summary?.restingHrBpm }
+        let pHrv = prior30.compactMap { $0.summary?.hrvMs }
+        let pSleep = prior30.compactMap { $0.summary?.asleepMinutes.map { Double($0) / 60.0 } }
+        let pSteps = prior30.compactMap { $0.summary?.stepsCount }
+        let hasPrior = (pRhr.count + pHrv.count + pSleep.count + pSteps.count) >= 6
+
+        let priorEval: BiologicalAgeEvaluation? = hasPrior
+            ? WhoopPhysiologyEngine.computeBiologicalAge(
+                profile: userProfile,
+                meanRhr: pRhr.isEmpty ? nil : pRhr.reduce(0, +) / Double(pRhr.count),
+                meanHrv: pHrv.isEmpty ? nil : pHrv.reduce(0, +) / Double(pHrv.count),
+                meanSleepHours: pSleep.isEmpty ? nil : pSleep.reduce(0, +) / Double(pSleep.count),
+                meanSteps: pSteps.isEmpty ? nil : pSteps.reduce(0, +) / pSteps.count,
+                vo2Max: cur.vo2Val,
+                latestWeightKg: latestBodyWeightKg,
+                latestBodyFatPct: latestBodyFatPct,
+                labBiomarkers: latestBiomarkersByName
+            )
+            : nil
+
+        return WhoopPhysiologyEngine.computePaceOfAging(currentEval: cur.eval, priorEval: priorEval)
+    }
+
     var latestBiomarkersByName: [LabBiomarkerItem] {
         let sortedReports = labReports.sorted { $0.dateIso > $1.dateIso }
         var seen = Set<String>()
@@ -517,7 +546,8 @@ extension ImprovingStore {
             cloudAIEnabled: cloudAIEnabled,
             allowKeylessAIFallback: allowKeylessAIFallback,
             redactPIIFromAI: redactPIIFromAI,
-            healthKitPreviouslyAuthorized: healthKitPreviouslyAuthorized
+            healthKitPreviouslyAuthorized: healthKitPreviouslyAuthorized,
+            napMinutesByDate: napMinutesByDate
         )
     }
 
@@ -670,6 +700,7 @@ extension ImprovingStore {
         if let keylessOn = snap.allowKeylessAIFallback { allowKeylessAIFallback = keylessOn }
         if let redactOn = snap.redactPIIFromAI { redactPIIFromAI = redactOn }
         if let hkPrev = snap.healthKitPreviouslyAuthorized { healthKitPreviouslyAuthorized = hkPrev }
+        if let naps = snap.napMinutesByDate { napMinutesByDate = naps }
 
         // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
         if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {
