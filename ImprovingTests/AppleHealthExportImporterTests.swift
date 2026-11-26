@@ -1984,6 +1984,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
         let storeUrl = tmpDir.appendingPathComponent("store.json")
 
         let store = ImprovingStore(persistenceURL: storeUrl)
+        store.mealsByDate = [:]
         store.addQuickMeal(title: "Avena con proteína", kcal: 420, protein: 34, carbs: 48, fat: 9)
         store.flushPersistenceNow()
         // Second save ensures `.bak` has valid prior snapshot!
