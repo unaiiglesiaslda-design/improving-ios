@@ -1387,4 +1387,66 @@ extension ImprovingStore {
         )
     }
 
+    // MARK: - Pharmacokinetic Caffeine Window & Quick Beverage Logging
+
+    var caffeineWindowSnapshot: CaffeineWindowTimelineSnapshot {
+        let iso = selectedDateIso
+        let meals = mealsByDate[iso] ?? []
+        let plan = computedSleepPlan
+
+        // Derive real wake time from last sleep session end time or smart alarm hour/minute
+        let wakeMin: Int = {
+            if let endLbl = currentDaySummary?.sleepSession?.endTimeLabel,
+               let parsed = WhoopPhysiologyEngine.parseTimeLabelToMinutes(endLbl) {
+                return parsed
+            }
+            return notificationSettings.smartAlarmHour * 60 + notificationSettings.smartAlarmMinute
+        }()
+        let bedMin = plan.bedtimeHour * 60 + plan.bedtimeMinute
+        let cal = Calendar.current
+        let nowComps = cal.dateComponents([.hour, .minute], from: Date())
+        let nowMin = (nowComps.hour ?? 12) * 60 + (nowComps.minute ?? 0)
+        let manCaff = journalQuantitiesByDate[iso]?["caffeine"] ?? (journalCheckinsByDate[iso]?["caffeine"] == .yes ? 95.0 : nil)
+        let manTime = journalEventTimesByDate[iso]?["caffeine"]
+
+        return WhoopPhysiologyEngine.computeCaffeineWindowTimeline(
+            meals: meals,
+            wakeMinuteOfDay: wakeMin,
+            bedtimeMinuteOfDay: bedMin,
+            nowMinuteOfDay: nowMin,
+            manualCaffeineMg: manCaff,
+            manualCaffeineTime: manTime
+        )
+    }
+
+    func logQuickCaffeineDrink(title: String, mg: Double, emoji: String = "☕", timeLabel: String? = nil, for dateIso: String? = nil) {
+        guard mg > 0 else { return }
+        let iso = dateIso ?? selectedDateIso
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        let stamp = (timeLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? timeLabel! : f.string(from: Date())
+        let meal = NutritionMealItem(
+            id: UUID().uuidString,
+            title: title,
+            timeLabel: stamp,
+            kcal: 0,
+            proteinG: 0,
+            carbsG: 0,
+            fatG: 0,
+            qualityScore: 80,
+            caffeineMg: mg,
+            emoji: emoji
+        )
+        saveMeal(meal, for: iso)
+    }
+
+    func deleteCaffeineIntake(id: String, for dateIso: String? = nil) {
+        let iso = dateIso ?? selectedDateIso
+        if id == "manual_caffeine" {
+            setJournalCheck(habitId: "caffeine", state: .unset, for: iso)
+        } else {
+            deleteMeal(id: id, for: iso, deletePhotoFromDisk: false)
+        }
+    }
+
 }

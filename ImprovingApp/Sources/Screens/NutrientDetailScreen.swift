@@ -41,6 +41,10 @@ struct NutrientDetailScreen: View {
                     )
 
                     nutrientGaugeCard(spec: spec, totalVal: totalVal, frac: frac)
+                    if low.contains("cafe") {
+                        CaffeineWindowCard(store: store)
+                            .padding(.horizontal, 16)
+                    }
                     nutrientEntriesSection(spec: spec, manualVal: manualVal)
                 }
                 .padding(.bottom, 185)

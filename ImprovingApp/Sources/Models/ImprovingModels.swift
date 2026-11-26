@@ -2015,6 +2015,16 @@ enum GlobalGoalMode: String, Codable, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    var emoji: String {
+        switch self {
+        case .rendimiento: return "⚡"
+        case .longevidad: return "⏳"
+        case .definicion: return "🔥"
+        case .volumen: return "💪"
+        case .recuperacion: return "🌿"
+        }
+    }
+
     var shortSubtitle: String {
         switch self {
         case .rendimiento: return "Máxima potencia aeróbica y fuerza; carbohidratos peri-entreno"
@@ -2248,4 +2258,107 @@ struct OvertrainingDeloadAssessment: Equatable {
     let triggers: [String]
     let recommendation: String
     let deloadWeightFactor: Double
+}
+
+// MARK: - Caffeine Pharmacokinetic Window & Beverage Sources (5.5h Half-Life, 20 mg Sleep Threshold)
+
+enum CaffeineWindowPhase: String, Equatable {
+    case postWakeDelay = "Espera inicial"
+    case optimal = "Ventana óptima"
+    case caution = "Precaución"
+    case tooLate = "Demasiado tarde"
+}
+
+struct CaffeineBeverageSource: Identifiable, Equatable, Hashable {
+    let id: String
+    let name: String
+    let servingLabel: String
+    let mg: Double
+    let emoji: String
+
+    var displayTitle: String { "\(name) (\(servingLabel))" }
+
+    static let commonSources: [CaffeineBeverageSource] = [
+        CaffeineBeverageSource(id: "green_tea", name: "Té verde", servingLabel: "240 ml", mg: 28, emoji: "🍵"),
+        CaffeineBeverageSource(id: "cola", name: "Cola", servingLabel: "330 ml", mg: 34, emoji: "🥤"),
+        CaffeineBeverageSource(id: "diet_cola", name: "Coca-Cola light", servingLabel: "355 ml", mg: 46, emoji: "🥤"),
+        CaffeineBeverageSource(id: "black_tea", name: "Té negro", servingLabel: "240 ml", mg: 47, emoji: "🫖"),
+        CaffeineBeverageSource(id: "mountain_dew", name: "Mountain Dew", servingLabel: "355 ml", mg: 55, emoji: "🥫"),
+        CaffeineBeverageSource(id: "instant_coffee", name: "Café soluble", servingLabel: "240 ml", mg: 60, emoji: "☕"),
+        CaffeineBeverageSource(id: "espresso", name: "Espresso", servingLabel: "30 ml", mg: 65, emoji: "☕"),
+        CaffeineBeverageSource(id: "red_bull", name: "Red Bull", servingLabel: "250 ml", mg: 80, emoji: "⚡"),
+        CaffeineBeverageSource(id: "filter_coffee", name: "Café de filtro", servingLabel: "240 ml", mg: 95, emoji: "☕"),
+        CaffeineBeverageSource(id: "double_espresso", name: "Espresso doble", servingLabel: "60 ml", mg: 130, emoji: "☕"),
+        CaffeineBeverageSource(id: "monster", name: "Monster Energy", servingLabel: "473 ml", mg: 160, emoji: "⚡"),
+        CaffeineBeverageSource(id: "cold_brew", name: "Cold Brew", servingLabel: "350 ml", mg: 200, emoji: "🧊")
+    ]
+}
+
+struct CaffeineLoggedIntake: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let mg: Double
+    let timeLabel: String
+    let minuteOfDay: Int
+}
+
+struct CaffeineDecayCurvePoint: Equatable {
+    let minuteOffsetFromWake: Double
+    let mg: Double
+}
+
+struct CaffeineWindowTimelineSnapshot: Equatable {
+    let wakeMinute: Int
+    let optimalStartMinute: Int
+    let cutoffMinute: Int
+    let cautionEndMinute: Int
+    let bedtimeMinute: Int
+    let nowMinute: Int
+    let currentBodyMg: Double
+    let totalTodayMg: Double
+    let residualAtBedtimeMg: Double
+    let phase: CaffeineWindowPhase
+    let minutesRemainingInOptimal: Int
+    let minutesUntilOptimalStarts: Int
+    let sleepThresholdMg: Double
+    let curvePoints: [CaffeineDecayCurvePoint]
+    let intakes: [CaffeineLoggedIntake]
+
+    var totalSpanMinutes: Double {
+        Double(max(bedtimeMinute - wakeMinute, 360))
+    }
+
+    var nowProgressFraction: Double {
+        let clamped = min(max(Double(nowMinute - wakeMinute) / totalSpanMinutes, 0.0), 1.0)
+        return clamped
+    }
+
+    var delayFraction: Double {
+        min(max(Double(optimalStartMinute - wakeMinute) / totalSpanMinutes, 0.04), 0.20)
+    }
+
+    var optimalEndFraction: Double {
+        min(max(Double(cutoffMinute - wakeMinute) / totalSpanMinutes, delayFraction + 0.15), 0.65)
+    }
+
+    var cautionEndFraction: Double {
+        min(max(Double(cautionEndMinute - wakeMinute) / totalSpanMinutes, optimalEndFraction + 0.08), 0.80)
+    }
+
+    static func formatMinuteOfDay(_ minute: Int) -> String {
+        let norm = ((minute % 1440) + 1440) % 1440
+        return String(format: "%02d:%02d", norm / 60, norm % 60)
+    }
+
+    var wakeLabel: String { Self.formatMinuteOfDay(wakeMinute) }
+    var optimalStartLabel: String { Self.formatMinuteOfDay(optimalStartMinute) }
+    var cutoffLabel: String { Self.formatMinuteOfDay(cutoffMinute) }
+    var bedtimeLabel: String { Self.formatMinuteOfDay(bedtimeMinute) }
+
+    var axisTickLabels: [String] {
+        let step = Int((totalSpanMinutes / 4.0).rounded())
+        return (0...4).map { idx in
+            Self.formatMinuteOfDay(wakeMinute + idx * step)
+        }
+    }
 }

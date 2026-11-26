@@ -7,6 +7,7 @@ struct HoyScreen: View {
     var onOpenWorkout: ((EffortEventItem) -> Void)? = nil
 
     @State private var showCalendarSheet: Bool = false
+    @State private var showBriefingDropdown: Bool = false
     @State private var showShareDailySheet: Bool = false
     @State private var showEditHomeSheet: Bool = false
     @State private var editHomeFocusHealth: Bool = false
@@ -94,15 +95,31 @@ struct HoyScreen: View {
                     .opacity(Double(min(progress * 1.4, 1.0)))
                 }
 
-                // 1. Top Bar with Dropdown Calendar Picker + < Date > + Real Daily Share Card & Profile Avatar (P1!)
+                // 1. Top Bar with Dropdown Calendar Picker + Emoji Morning Briefing & Mode Button + < Date > + Daily Share & Avatar
                 HStack(spacing: 8) {
-                    Button { showCalendarSheet = true } label: {
-                        Image(systemName: "calendar")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(BevelColors.textPrimary)
-                            .frame(width: 40, height: 40)
-                            .background(Circle().fill(BevelColors.glassChromeFill))
-                            .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                    HStack(spacing: 6) {
+                        Button { showCalendarSheet = true } label: {
+                            Image(systemName: "calendar")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(BevelColors.glassChromeFill))
+                                .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                        }
+
+                        Button {
+                            AppHaptics.selection()
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                                showBriefingDropdown.toggle()
+                            }
+                        } label: {
+                            Text(store.globalGoalMode.emoji)
+                                .font(.system(size: 18))
+                                .frame(width: 40, height: 40)
+                                .background(Circle().fill(showBriefingDropdown ? BevelColors.indigoEnd.opacity(0.24) : BevelColors.glassChromeFill))
+                                .overlay(Circle().strokeBorder(showBriefingDropdown ? BevelColors.indigoEnd.opacity(0.75) : BevelColors.glassChromeBorder, lineWidth: showBriefingDropdown ? 1.2 : 0.8))
+                        }
+                        .accessibilityLabel("Briefing matutino y modo \(store.globalGoalMode.rawValue)")
                     }
 
                     Spacer(minLength: 4)
@@ -173,6 +190,23 @@ struct HoyScreen: View {
                     .frame(height: 40)
                     .background(Capsule().fill(BevelColors.glassChromeFill))
                     .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                }
+
+                // Expandable Morning Briefing & Global Goal Mode Dropdown (triggered by the circular emoji button beside the calendar!)
+                if showBriefingDropdown {
+                    MorningBriefingAndGoalModeCard(
+                        store: store,
+                        onNavigate: { route in
+                            showBriefingDropdown = false
+                            onNavigate(route)
+                        },
+                        onClose: {
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.86)) {
+                                showBriefingDropdown = false
+                            }
+                        }
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
                 // Explicit Preview Mode Banner + Setup CTA whenever no real wearable/Health data has been synced yet
@@ -249,9 +283,6 @@ struct HoyScreen: View {
                     }
                     .buttonStyle(.plain)
                 }
-
-                // Proactive Morning Briefing & Global Goal Mode Synchronizer (Apartados 1.4 & 2.3)
-                MorningBriefingAndGoalModeCard(store: store, onNavigate: onNavigate)
 
                 // Customizable Ordered Home Sections (N2!)
                 ForEach(store.homeLayout.normalizedOrder) { section in
@@ -967,12 +998,12 @@ struct DatePickerSheetView: View {
     }
 }
 
-// MARK: - Morning Briefing Check-In & Global Goal Mode Selector Card (Apartados 1.4 & 2.3)
+// MARK: - Morning Briefing Check-In & Global Goal Mode Dropdown Card (Triggered by Circular Emoji Button)
 
 struct MorningBriefingAndGoalModeCard: View {
     @ObservedObject var store: ImprovingStore
     let onNavigate: (OverlayRoute) -> Void
-    @State private var isExpanded: Bool = false
+    var onClose: (() -> Void)? = nil
 
     var body: some View {
         let brief = store.morningBriefingSnapshot
@@ -980,15 +1011,14 @@ struct MorningBriefingAndGoalModeCard: View {
         BevelCard(cornerRadius: 20) {
             VStack(alignment: .leading, spacing: 11) {
                 HStack(spacing: 10) {
-                    Image(systemName: brief.goalMode.icon)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(BevelColors.skyBlue)
-                        .frame(width: 34, height: 34)
+                    Text(brief.goalMode.emoji)
+                        .font(.system(size: 19))
+                        .frame(width: 36, height: 36)
                         .background(Circle().fill(BevelColors.skySoftBg))
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
-                            Text("BRIEFING MATUTINO Y OBJETIVO")
+                            Text("BRIEFING MATUTINO")
                                 .font(ImprovingFont.microLabel(9.5))
                                 .foregroundColor(BevelColors.textMuted)
                             Text(brief.recoveryBadge)
@@ -1003,27 +1033,19 @@ struct MorningBriefingAndGoalModeCard: View {
                             .foregroundColor(BevelColors.textPrimary)
                     }
                     Spacer()
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isExpanded.toggle()
+                    if let onClose {
+                        Button(action: onClose) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11.5, weight: .bold))
+                                .foregroundColor(BevelColors.textSecondary)
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(BevelColors.cardSubtle))
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(isExpanded ? "Ocultar" : "Plan hoy")
-                                .font(ImprovingFont.caption(11.5))
-                                .fontWeight(.bold)
-                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 10, weight: .bold))
-                        }
-                        .foregroundColor(BevelColors.skyBlue)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(BevelColors.skySoftBg))
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
 
-                // 5-Mode Global Goal Selector (synchronizes Macros + Optimal Strain + Sleep Coach + AI Coach)
+                // 5-Mode Global Goal Selector with Dynamic Emojis (synchronizes top bar emoji + Macros + Strain + Sleep Coach + AI Coach)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 7) {
                         ForEach(GlobalGoalMode.allCases) { mode in
@@ -1033,8 +1055,8 @@ struct MorningBriefingAndGoalModeCard: View {
                                 store.setGlobalGoalMode(mode)
                             } label: {
                                 HStack(spacing: 5) {
-                                    Image(systemName: mode.icon)
-                                        .font(.system(size: 11, weight: .semibold))
+                                    Text(mode.emoji)
+                                        .font(.system(size: 13))
                                     Text(mode.rawValue)
                                         .font(ImprovingFont.caption(12))
                                         .fontWeight(.bold)
@@ -1049,52 +1071,55 @@ struct MorningBriefingAndGoalModeCard: View {
                     }
                 }
 
-                if isExpanded {
-                    Divider().background(BevelColors.divider)
+                Divider().background(BevelColors.divider)
 
-                    VStack(alignment: .leading, spacing: 7) {
-                        Label(brief.sleepSummary, systemImage: "moon.stars.fill")
-                            .font(ImprovingFont.caption(12))
-                            .foregroundColor(BevelColors.textPrimary)
-                        Label(brief.effortPlanText, systemImage: "flame.fill")
-                            .font(ImprovingFont.caption(12))
-                            .foregroundColor(BevelColors.amberStart)
-                        Label(brief.nutritionPlanText, systemImage: "fork.knife")
-                            .font(ImprovingFont.caption(12))
-                            .foregroundColor(BevelColors.greenPrimary)
+                VStack(alignment: .leading, spacing: 7) {
+                    Label(brief.sleepSummary, systemImage: "moon.stars.fill")
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textPrimary)
+                    Label(brief.effortPlanText, systemImage: "flame.fill")
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.amberStart)
+                    Label(brief.nutritionPlanText, systemImage: "fork.knife")
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.greenPrimary)
 
-                        if let deloadTxt = brief.deloadAlertText {
-                            Label(deloadTxt, systemImage: "bolt.shield.fill")
-                                .font(ImprovingFont.caption(12))
-                                .foregroundColor(BevelColors.coralHigh)
-                        }
-
-                        HStack {
-                            Text(brief.goalMode.shortSubtitle)
-                                .font(ImprovingFont.caption(11))
-                                .foregroundColor(BevelColors.textMuted)
-                            Spacer()
-                            Button {
-                                onNavigate(.askBevel)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "sparkles")
-                                    Text("Consultar Coach")
-                                }
-                                .font(ImprovingFont.caption(11.5))
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 6)
-                                .background(Capsule().fill(BevelColors.indigoEnd))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.top, 2)
+                    if let deloadTxt = brief.deloadAlertText {
+                        Label(deloadTxt, systemImage: "bolt.shield.fill")
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.coralHigh)
                     }
+
+                    HStack {
+                        Text(brief.goalMode.shortSubtitle)
+                            .font(ImprovingFont.caption(11))
+                            .foregroundColor(BevelColors.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button {
+                            onNavigate(.askBevel)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "sparkles")
+                                Text("Coach IA")
+                            }
+                            .font(ImprovingFont.caption(11.5))
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(BevelColors.indigoEnd))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 2)
                 }
             }
             .padding(15)
         }
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(BevelColors.indigoEnd.opacity(0.32), lineWidth: 0.9)
+        )
     }
 }

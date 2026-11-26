@@ -2758,4 +2758,160 @@ enum WhoopPhysiologyEngine {
 
         return insights
     }
+
+    // MARK: - Caffeine Pharmacokinetic Window Engine (5.5h Half-Life, 20 mg Sleep Threshold)
+
+    static let caffeineHalfLifeHours: Double = 5.5
+    static let caffeineSleepThresholdMg: Double = 20.0
+
+    /// Exact clearance time in minutes for a caffeine load (`totalMg`) to fall below `thresholdMg` (20 mg) using T½ = 5.5 h.
+    /// Matches clinical pharmacokinetic benchmarks: 28 mg -> 2h 40m, 80 mg -> 11h, 160 mg -> 16h 30m, 200 mg -> 18h 16m.
+    static func caffeineClearanceMinutes(
+        totalMg: Double,
+        halfLifeHours: Double = caffeineHalfLifeHours,
+        thresholdMg: Double = caffeineSleepThresholdMg
+    ) -> Int {
+        guard totalMg > thresholdMg, halfLifeHours > 0.5 else { return 0 }
+        let hours = halfLifeHours * log2(totalMg / thresholdMg)
+        return max(0, Int((hours * 60.0).rounded()))
+    }
+
+    static func formatClearanceDuration(_ totalMinutes: Int) -> String {
+        guard totalMinutes > 0 else { return "0 min" }
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        if h == 0 { return "\(m) min" }
+        if m == 0 { return "\(h) h" }
+        return "\(h) h \(m) min"
+    }
+
+    static func computeCaffeineWindowTimeline(
+        meals: [NutritionMealItem],
+        wakeMinuteOfDay: Int,
+        bedtimeMinuteOfDay: Int,
+        nowMinuteOfDay: Int,
+        manualCaffeineMg: Double? = nil,
+        manualCaffeineTime: String? = nil,
+        halfLifeHours: Double = caffeineHalfLifeHours,
+        sleepThresholdMg: Double = caffeineSleepThresholdMg
+    ) -> CaffeineWindowTimelineSnapshot {
+        let wake = ((wakeMinuteOfDay % 1440) + 1440) % 1440
+        var bedAdj = ((bedtimeMinuteOfDay % 1440) + 1440) % 1440
+        if bedAdj <= wake + 360 { bedAdj += 1440 }
+        // Clamp awake span to realistic 12..18h window
+        let span = min(max(bedAdj - wake, 720), 1080)
+        bedAdj = wake + span
+
+        // Normalize current clock minute onto [wake ... bedAdj] timeline
+        var nowAdj = ((nowMinuteOfDay % 1440) + 1440) % 1440
+        if nowAdj < wake - 120 { nowAdj += 1440 }
+        let nowClamped = min(max(nowAdj, wake), bedAdj)
+
+        // Physiological phase boundaries:
+        // 1. Delay (0..90m post-wake)
+        // 2. Optimal window (wake+90m .. bedtime-10h, minimum 3h wide)
+        // 3. Caution window (~2h after cutoff)
+        // 4. Too late / sleep-risk zone (final ~8h before bedtime)
+        let optStart = wake + 90
+        let cutoff = min(max(optStart + 180, bedAdj - 600), bedAdj - 360)
+        let cautionEnd = min(cutoff + 135, bedAdj - 240)
+
+        let halfLifeMin = halfLifeHours * 60.0
+        var intakes: [CaffeineLoggedIntake] = []
+        for m in meals {
+            guard let mg = m.caffeineMg, mg > 0 else { continue }
+            var tMin = parseTimeLabelToMinutes(m.timeLabel) ?? (wake + 120)
+            if tMin < wake - 120 { tMin += 1440 }
+            intakes.append(CaffeineLoggedIntake(
+                id: m.id,
+                title: m.title,
+                mg: mg,
+                timeLabel: m.timeLabel,
+                minuteOfDay: tMin
+            ))
+        }
+        if intakes.isEmpty, let manMg = manualCaffeineMg, manMg > 0 {
+            let lbl = manualCaffeineTime ?? CaffeineWindowTimelineSnapshot.formatMinuteOfDay(wake + 120)
+            var tMin = parseTimeLabelToMinutes(lbl) ?? (wake + 120)
+            if tMin < wake - 120 { tMin += 1440 }
+            intakes.append(CaffeineLoggedIntake(
+                id: "manual_caffeine",
+                title: "Cafeína registrada (Diario)",
+                mg: manMg,
+                timeLabel: lbl,
+                minuteOfDay: tMin
+            ))
+        }
+        intakes.sort { $0.minuteOfDay < $1.minuteOfDay }
+
+        func concentration(at minute: Double) -> Double {
+            var sum = 0.0
+            for item in intakes {
+                let dt = minute - Double(item.minuteOfDay)
+                if dt >= 0 {
+                    // Rapid 25-min absorption ramp + 5.5h exponential decay
+                    let absorption = dt < 25.0 ? (0.35 + 0.65 * (dt / 25.0)) : 1.0
+                    sum += item.mg * absorption * pow(0.5, dt / halfLifeMin)
+                }
+            }
+            return sum
+        }
+
+        let steps = 64
+        var curve: [CaffeineDecayCurvePoint] = []
+        curve.reserveCapacity(steps + 1)
+        for i in 0...steps {
+            let frac = Double(i) / Double(steps)
+            let offset = frac * Double(span)
+            let t = Double(wake) + offset
+            curve.append(CaffeineDecayCurvePoint(minuteOffsetFromWake: offset, mg: concentration(at: t)))
+        }
+
+        let nowBody = AppleHealthExportImporter.round1(concentration(at: Double(nowClamped)))
+        let bedResidual = AppleHealthExportImporter.round1(concentration(at: Double(bedAdj)))
+        let totalToday = AppleHealthExportImporter.round1(intakes.reduce(0.0) { $0 + $1.mg })
+
+        let phase: CaffeineWindowPhase
+        if nowClamped < optStart {
+            phase = .postWakeDelay
+        } else if nowClamped <= cutoff {
+            phase = .optimal
+        } else if nowClamped <= cautionEnd {
+            phase = .caution
+        } else {
+            phase = .tooLate
+        }
+
+        let remOpt = phase == .optimal ? max(cutoff - nowClamped, 0) : 0
+        let waitOpt = phase == .postWakeDelay ? max(optStart - nowClamped, 0) : 0
+
+        return CaffeineWindowTimelineSnapshot(
+            wakeMinute: wake,
+            optimalStartMinute: optStart,
+            cutoffMinute: cutoff,
+            cautionEndMinute: cautionEnd,
+            bedtimeMinute: bedAdj,
+            nowMinute: nowClamped,
+            currentBodyMg: nowBody,
+            totalTodayMg: totalToday,
+            residualAtBedtimeMg: bedResidual,
+            phase: phase,
+            minutesRemainingInOptimal: remOpt,
+            minutesUntilOptimalStarts: waitOpt,
+            sleepThresholdMg: sleepThresholdMg,
+            curvePoints: curve,
+            intakes: intakes
+        )
+    }
+
+    static func isDrinkSafeForSleepNow(
+        drinkMg: Double,
+        snapshot: CaffeineWindowTimelineSnapshot,
+        halfLifeHours: Double = caffeineHalfLifeHours
+    ) -> Bool {
+        let halfLifeMin = halfLifeHours * 60.0
+        let minutesUntilBed = Double(max(snapshot.bedtimeMinute - snapshot.nowMinute, 0))
+        let addedResidualAtBed = drinkMg * pow(0.5, minutesUntilBed / halfLifeMin)
+        return (snapshot.residualAtBedtimeMg + addedResidualAtBed) <= snapshot.sleepThresholdMg
+    }
 }

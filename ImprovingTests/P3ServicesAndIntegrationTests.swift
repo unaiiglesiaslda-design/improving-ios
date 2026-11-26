@@ -679,5 +679,29 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         XCTAssertEqual(reloaded.nutritionRecipes.count, 1)
         XCTAssertTrue(reloaded.cycleTrackingSettings.isEnabled)
         XCTAssertTrue(reloaded.autoDeloadModeActive)
+
+        // 6. Caffeine Pharmacokinetic Window (T½ 5.5 h, 20 mg sleep threshold) & Goal Mode Emojis
+        XCTAssertEqual(GlobalGoalMode.allCases.map(\.emoji).count, 5)
+        XCTAssertEqual(WhoopPhysiologyEngine.caffeineClearanceMinutes(totalMg: 28), 160)   // 2 h 40 min
+        XCTAssertEqual(WhoopPhysiologyEngine.caffeineClearanceMinutes(totalMg: 34), 253)   // 4 h 13 min
+        XCTAssertEqual(WhoopPhysiologyEngine.caffeineClearanceMinutes(totalMg: 46), 397)   // 6 h 37 min
+        XCTAssertEqual(WhoopPhysiologyEngine.caffeineClearanceMinutes(totalMg: 80), 660)   // 11 h
+        XCTAssertEqual(WhoopPhysiologyEngine.caffeineClearanceMinutes(totalMg: 160), 990)  // 16 h 30 min
+        XCTAssertEqual(WhoopPhysiologyEngine.caffeineClearanceMinutes(totalMg: 200), 1096) // 18 h 16 min
+
+        store.mealsByDate[todayIso] = []
+        store.logQuickCaffeineDrink(title: "Espresso (30 ml)", mg: 65, emoji: "☕", timeLabel: "10:00", for: todayIso)
+        let cSnap = WhoopPhysiologyEngine.computeCaffeineWindowTimeline(
+            meals: store.mealsByDate[todayIso] ?? [],
+            wakeMinuteOfDay: 7 * 60 + 30,
+            bedtimeMinuteOfDay: 23 * 60 + 30,
+            nowMinuteOfDay: 11 * 60
+        )
+        XCTAssertEqual(cSnap.phase, .optimal)
+        XCTAssertGreaterThan(cSnap.currentBodyMg, 50.0)
+        XCTAssertLessThanOrEqual(cSnap.residualAtBedtimeMg, 20.0)
+        XCTAssertTrue(WhoopPhysiologyEngine.isDrinkSafeForSleepNow(drinkMg: 28, snapshot: cSnap))
+        XCTAssertFalse(WhoopPhysiologyEngine.isDrinkSafeForSleepNow(drinkMg: 160, snapshot: cSnap))
+        XCTAssertEqual(cSnap.curvePoints.count, 65)
     }
 }

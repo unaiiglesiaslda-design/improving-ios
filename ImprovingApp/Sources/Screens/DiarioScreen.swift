@@ -343,8 +343,8 @@ struct DiarioScreen: View {
                         .padding(13)
                     }
 
-                    // Curva de vida media de cafeína (5h), ventana cena → sueño y auto-sincronización desde Nutrición (Apartado 1.2)
-                    CaffeineHalfLifeAndAutoSyncCard(store: store)
+                    // Ventana de cafeína (curva farmacocinética T½ 5,5 h, umbral de sueño 20 mg y registro rápido)
+                    CaffeineWindowCard(store: store, onAskCoach: { onNavigate(.askBevel) })
 
                     HStack {
                         Text("Marca tus hábitos activos (\(store.requiredManualCountForCompletion) para completar el día).")
