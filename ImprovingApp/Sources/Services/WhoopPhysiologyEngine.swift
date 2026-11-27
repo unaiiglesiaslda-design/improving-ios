@@ -2760,11 +2760,17 @@ enum WhoopPhysiologyEngine {
             let avgL = lateCaffHrv.reduce(0, +) / Double(lateCaffHrv.count)
             let diff = AppleHealthExportImporter.round1(avgC - avgL)
             if abs(diff) >= 1.5 {
-                let recBit: String = {
-                    guard cleanCaffRec.count >= 2 && lateCaffRec.count >= 2 else { return "" }
-                    let rDiff = Int(((cleanCaffRec.reduce(0, +) / Double(cleanCaffRec.count)) - (lateCaffRec.reduce(0, +) / Double(lateCaffRec.count))).rounded())
-                    return abs(rDiff) >= 2 ? String(format: " (%+d%% Recuperación)", rDiff) : ""
-                }()
+                var recBit = ""
+                if cleanCaffRec.count >= 2 && lateCaffRec.count >= 2 {
+                    let avgCleanRec = cleanCaffRec.reduce(0, +) / Double(cleanCaffRec.count)
+                    let avgLateRec = lateCaffRec.reduce(0, +) / Double(lateCaffRec.count)
+                    let rDiff = Int((avgCleanRec - avgLateRec).rounded())
+                    if abs(rDiff) >= 2 {
+                        recBit = String(format: " (%+d%% Recuperación)", rDiff)
+                    }
+                }
+                let avgCStr = String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgC)
+                let avgLStr = String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgL)
                 insights.append(UnifiedCausalInsight(
                     id: "cross_caffeine_hrv",
                     categoryBadge: "CAFEÍNA → VFC NOCTURNA (D+1)",
@@ -2772,7 +2778,7 @@ enum WhoopPhysiologyEngine {
                     title: "Acostarte con <25 mg de cafeína residual",
                     impactBadge: String(format: "%+.1f ms VFC", locale: Locale(identifier: "es_ES"), diff),
                     isPositive: diff >= 0,
-                    detail: "Cuando llegas a dormir con cafeína residual baja, tu VFC nocturna promedia \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgC)) ms frente a \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgL)) ms con cafeína tardía\(recBit).",
+                    detail: "Cuando llegas a dormir con cafeína residual baja, tu VFC nocturna promedia \(avgCStr) ms frente a \(avgLStr) ms con cafeína tardía\(recBit).",
                     sampleDays: cleanCaffHrv.count + lateCaffHrv.count
                 ))
             }
@@ -2827,21 +2833,22 @@ enum WhoopPhysiologyEngine {
         // 3. Blood Biomarkers × Biometrics & Nutrition cross-insight (multi-marker clinical correlation)
         if let latestLab = labReports.sorted(by: { $0.dateIso > $1.dateIso }).first, !latestLab.biomarkers.isEmpty {
             let recent14 = sortedIsos.suffix(14).compactMap { history[$0] }
-            let avgHrv14 = recent14.compactMap(\.hrvMs).isEmpty ? nil : (recent14.compactMap(\.hrvMs).reduce(0, +) / Double(recent14.compactMap(\.hrvMs).count))
-            let avgRhr14 = recent14.compactMap(\.restingHrBpm).isEmpty ? nil : (recent14.compactMap(\.restingHrBpm).reduce(0, +) / Double(recent14.compactMap(\.restingHrBpm).count))
+            let hrvVals14 = recent14.compactMap(\.hrvMs)
+            let rhrVals14 = recent14.compactMap(\.restingHrBpm)
+            let avgHrv14: Double? = hrvVals14.isEmpty ? nil : (hrvVals14.reduce(0, +) / Double(hrvVals14.count))
+            let avgRhr14: Double? = rhrVals14.isEmpty ? nil : (rhrVals14.reduce(0, +) / Double(rhrVals14.count))
             let outOfRange = latestLab.biomarkers.filter { $0.status != .normal }
+            var bioBits: [String] = []
+            if let h = avgHrv14 { bioBits.append(String(format: "VFC 14d %.0f ms", h)) }
+            if let r = avgRhr14 { bioBits.append(String(format: "FCR 14d %.0f ppm", r)) }
+            let bioContext = bioBits.isEmpty ? "" : " Cruzado con tu \(bioBits.joined(separator: " y ")):"
             for flag in outOfRange.prefix(2) {
-                let bioContext: String = {
-                    var bits: [String] = []
-                    if let h = avgHrv14 { bits.append(String(format: "VFC 14d %.0f ms", h)) }
-                    if let r = avgRhr14 { bits.append(String(format: "FCR 14d %.0f ppm", r)) }
-                    return bits.isEmpty ? "" : " Cruzado con tu \(bits.joined(separator: " y ")):"
-                }()
+                let valStr = String(format: "%.1f", locale: Locale(identifier: "es_ES"), flag.value)
                 insights.append(UnifiedCausalInsight(
                     id: "cross_blood_\(flag.id)",
                     categoryBadge: "SANGRE × BIOMETRÍA × NUTRICIÓN",
                     icon: "cross.case.fill",
-                    title: "Analítica: \(flag.name) (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), flag.value)) \(flag.unit))",
+                    title: "Analítica: \(flag.name) (\(valStr) \(flag.unit))",
                     impactBadge: flag.status.rawValue,
                     isPositive: false,
                     detail: "Fuera de rango en tu analítica (\(latestLab.dateIso)).\(bioContext) priorizar micronutrientes clave, sueño ≥85% y carga controlada acelerará su normalización y mejorará tu Edad Biológica.",
