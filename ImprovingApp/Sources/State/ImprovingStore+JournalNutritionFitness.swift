@@ -408,7 +408,8 @@ extension ImprovingStore {
                     floorSigma: WhoopPhysiologyEngine.baselineFloorRespSigma
                 )
 
-                if let newRec = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+                if day.hasRecordedSleep,
+                   let newRec = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
                     hrvMs: day.hrvMs,
                     rhrBpm: day.restingHrBpm,
                     respRpm: day.respRateRpm,
@@ -419,8 +420,10 @@ extension ImprovingStore {
                     respBaseline: respBase,
                     profile: profile,
                     sleepPct: day.sleepPct
-                ) {
+                   ) {
                     day.recoveryPct = newRec
+                } else if !day.hasRecordedSleep {
+                    day.recoveryPct = nil
                 }
 
                 if let h = day.hrvMs, h > 2.0 {
@@ -1463,13 +1466,15 @@ extension ImprovingStore {
         let manCaff = journalQuantitiesByDate[iso]?["caffeine"] ?? (journalCheckinsByDate[iso]?["caffeine"] == .yes ? 95.0 : nil)
         let manTime = journalEventTimesByDate[iso]?["caffeine"]
 
+        let twinHalfLife = personalSensitivityTwinSnapshot.caffeineHalfLifeHours
         return WhoopPhysiologyEngine.computeCaffeineWindowTimeline(
             meals: meals,
             wakeMinuteOfDay: wakeMin,
             bedtimeMinuteOfDay: bedMin,
             nowMinuteOfDay: nowMin,
             manualCaffeineMg: manCaff,
-            manualCaffeineTime: manTime
+            manualCaffeineTime: manTime,
+            halfLifeHours: twinHalfLife
         )
     }
 

@@ -21,9 +21,36 @@ extension ImprovingStore {
         return (blockIdx, "\(todayIso)_b\(blockIdx)", generatedAt, nextUpdate)
     }
 
+    /// Domain-scoped signature so logging a glass of water or meal NEVER invalidates unrelated sections (e.g. Sueño or Fitness), saving Gemini quota!
+    func sectionDataSignature(for section: CoachingSection) -> String {
+        let d = currentDaySummary
+        let wSig = (dayOffset == 0) ? "\(weatherSnapshot?.heatStressLevel ?? -1)" : "h"
+        let styleSig = "\(coachPersonalityTone.rawValue)_\(coachDetailLevel.rawValue)_\(globalGoalMode.rawValue)"
+        switch section {
+        case .sueno:
+            return "\(styleSig)_slp_\(d?.asleepMinutes ?? -1)_\(d?.sleepPct ?? -1)_\(d?.deepMinutes ?? -1)_\(d?.remMinutes ?? -1)"
+        case .recuperacion:
+            return "\(styleSig)_rec_\(validRecoveryPct(for: d) ?? -1)_\(Int((d?.hrvMs ?? -1) * 10))_\(Int((d?.restingHrBpm ?? -1) * 10))_\(wSig)"
+        case .esfuerzo:
+            return "\(styleSig)_str_\(d?.strainPct ?? -1)_\(d?.workouts.count ?? 0)_\(d?.stepsCount ?? -1)_\(autoDeloadModeActive)_\(wSig)"
+        case .estres:
+            return "\(styleSig)_sts_\(d?.stressScore ?? -1)_\(d?.stressSamples5m.count ?? 0)"
+        case .energia:
+            return "\(styleSig)_eng_\(d?.energyBankPercent ?? -1)_\(d?.energySamples5m.count ?? 0)_\(totalCaloriesToday)"
+        case .fitness:
+            return "\(styleSig)_fit_\(d?.workouts.count ?? 0)_\(strengthLogs.count)_\(activeGoalEventPlan?.id ?? "none")_\(autoDeloadModeActive)"
+        case .diario:
+            let jCount = manualCompletedCount(for: selectedDateIso)
+            let nHash = journalNote(for: selectedDateIso).hashValue
+            return "\(styleSig)_dia_\(jCount)_\(nHash)_\(totalCaloriesToday)_\(Int(totalHydrationTodayMl))_\(labReports.count)_\(wSig)"
+        case .hoy:
+            return "\(styleSig)_hoy_\(validRecoveryPct(for: d) ?? -1)_\(d?.strainPct ?? -1)_\(d?.sleepPct ?? -1)_\(d?.workouts.count ?? 0)_\(totalCaloriesToday)"
+        }
+    }
+
     func coachingSlotKey(for section: CoachingSection, now: Date = Date()) -> String {
         let info = currentFourHourBlockInfo(for: now)
-        return "\(section.rawValue)_\(info.slotId)_\(selectedDateIso)_r\(dataRevision)"
+        return "\(section.rawValue)_\(info.slotId)_\(selectedDateIso)_\(sectionDataSignature(for: section))"
     }
 
     func coachingCard(for section: CoachingSection) -> SectionCoachingCard? {
@@ -482,11 +509,11 @@ extension ImprovingStore {
         return [
             buildTrendItem(
                 id: "r_rec", title: "Puntuación de Recuperación",
-                currentValue: currentDaySummary?.recoveryPct.map { Double($0) },
+                currentValue: validRecoveryPct(for: currentDaySummary).map { Double($0) },
                 valueFormatter: { "\(Int($0.rounded()))" }, unitText: "%",
-                series: window.map { $0.summary?.recoveryPct.map { Double($0) } },
+                series: window.map { validRecoveryPct(for: $0.summary).map { Double($0) } },
                 bandLow: 55, bandHigh: 92, lineColorHex: 0x3BD671,
-                detailNote: "Capacidad de tu sistema nervioso autónomo para asimilar carga."
+                detailNote: "Capacidad de tu sistema nervioso autónomo para asimilar carga (requiere sueño registrado)."
             ),
             buildTrendItem(
                 id: "r_hrv", title: "VFC en reposo",
@@ -678,7 +705,10 @@ extension ImprovingStore {
                 return Double(st) - (r.lowerBound + r.upperBound) * 50.0
             }
         case "r_rec":
-            return { $0.recoveryPct.map { Double($0) } }
+            return { [weak self] d in
+                guard let self else { return d.recoveryPct.map { Double($0) } }
+                return self.validRecoveryPct(for: d).map { Double($0) }
+            }
         case "r_hrv":
             return { $0.hrvMs }
         case "r_rhr":

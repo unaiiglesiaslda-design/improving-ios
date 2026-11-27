@@ -161,8 +161,8 @@ extension GeminiCoachService {
     func callGeminiJsonOneShot(prompt: String, sysPrompt: String, apiKey: String, model: String) async -> (text: String?, statusCode: Int) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { return (nil, 0) }
         var genConfig: [String: Any] = [
-            "temperature": 0.9,
-            "maxOutputTokens": 600,
+            "temperature": 0.85,
+            "maxOutputTokens": 1400,
             "responseMimeType": "application/json"
         ]
         if model.hasPrefix("gemini-2.5-flash") {
@@ -462,15 +462,30 @@ extension GeminiCoachService {
         if let st = stressScore { realParts.append("estrés en \(st) sobre 100") }
 
         let contextClause = realParts.isEmpty
-            ? "manteniendo seguimiento sobre tu referencia de \(cleanRange)"
-            : "en línea con \(realParts.prefix(3).joined(separator: ", "))"
+            ? "manteniendo seguimiento sobre tu referencia personal de \(cleanRange)"
+            : "cruzado con \(realParts.prefix(3).joined(separator: ", "))"
 
-        let actions = [
-            "Hidrátate hacia los \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), norms.hydrationGoalLiters)) litros hoy y respeta tu zona de carga.",
-            "Corta estimulantes a media tarde y cena ligero para proteger la lectura de mañana.",
-            "Ajusta la intensidad de hoy según cómo combine este dato con tus sensaciones.",
-        ]
-        let action = actions[abs(s * 3) % actions.count]
+        let moment = describeLocalMoment(Date())
+        let isLowRec = (recoveryPct ?? 70) < 42
+        let isHighStress = (stressScore ?? 30) >= 62
+        let action: String = {
+            if isLowRec {
+                return "Con recuperación baja hoy, prioriza movilidad o Zona 1–2 suave, añade electrolitos y adelanta el descanso nocturno."
+            }
+            if isHighStress {
+                return "Tu activación simpática va elevada; 4 minutos de respiración con exhalación doble bajarán tu pulso antes del siguiente bloque."
+            }
+            switch moment.blockIndex {
+            case 0, 5:
+                return "En esta franja nocturna evita cenas copiosas y pantallas brillantes para consolidar sueño profundo y VFC mañana."
+            case 1, 2:
+                return "Aprovecha esta ventana matinal para hidratarte hacia los \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), norms.hydrationGoalLiters)) L y concentrar tu estímulo principal del día."
+            case 3:
+                return "A mitad de jornada prioriza proteína limpia y un paseo breve post-comida para sostener tu batería sin picos de estrés."
+            default:
+                return "En esta franja de tarde vigila tu corte personal de cafeína y ajusta el esfuerzo restante según tus sensaciones reales."
+            }
+        }()
 
         let shortMsg = Self.sanitizeDirectHumanText("\(nameLead)\(cleanVal) en \(metricTitle.lowercased()), \(contextClause). \(action)")
         let fullMsg = Self.sanitizeDirectHumanText("\(nameLead)hoy registras \(cleanVal) en \(metricTitle.lowercased()) frente a tu rango de \(cleanRange), \(contextClause). \(realParts.count > 3 ? "Además cuentas con \(realParts.dropFirst(3).joined(separator: ", ")). " : "")\(action)")

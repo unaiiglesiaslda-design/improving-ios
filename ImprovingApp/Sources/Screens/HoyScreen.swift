@@ -260,6 +260,18 @@ struct HoyScreen: View {
                     .buttonStyle(.plain)
                 }
 
+                // Proactive 24-48h Immunity, Overreaching & Subjective Sensation Radar
+                if store.proactiveImmunityRadarSnapshot.hasActiveWarning {
+                    ProactiveImmunityRadarCard(store: store)
+                }
+
+                // Proactive Evening Check-In (20:00+ Night Optimization)
+                if store.eveningCheckInSnapshot.isEveningWindow {
+                    EveningCheckInProactiveCard(store: store) {
+                        onNavigate(.askBevel)
+                    }
+                }
+
                 // Proactive WHOOP-style Health Monitor multi-vital alert (2+ unhealthy overnight vitals simultaneously)
                 if vitalAlert.isCritical {
                     Button { onNavigate(.esfuerzo) } label: {

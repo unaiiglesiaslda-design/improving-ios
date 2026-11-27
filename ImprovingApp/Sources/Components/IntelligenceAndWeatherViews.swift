@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 // MARK: - Open-Meteo Environmental & Thermal Physiology Card (Effort & Recovery)
 
@@ -327,7 +328,7 @@ struct CoachPersonalityAndArchiveSheet: View {
         _selectedTab = State(initialValue: initialTab)
     }
 
-    private let sectionFilterOptions = ["Todos", "Diario", "Resumen del día", "Recuperación", "Esfuerzo", "Sueño", "Fitness"]
+    private let sectionFilterOptions = ["Todos", "Chat Coach", "Diario", "Resumen del día", "Recuperación", "Esfuerzo", "Sueño", "Fitness"]
 
     private var filteredArchive: [ArchivedAiInsight] {
         store.archivedAiInsights.filter { item in
@@ -441,6 +442,26 @@ struct CoachPersonalityAndArchiveSheet: View {
                 Text("Aplica automáticamente al chat con el Coach IA y a todas las tarjetas de valoración en Hoy, Diario, Esfuerzo, Recuperación y Sueño.")
                     .font(ImprovingFont.caption(12))
                     .foregroundColor(BevelColors.textMuted)
+
+                Toggle(isOn: Binding(
+                    get: { store.voiceReadoutAutoEnabled },
+                    set: {
+                        store.voiceReadoutAutoEnabled = $0
+                        if !$0 { CoachVoiceSynthesizer.shared.stop() }
+                        store.persistState()
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Respuestas por voz automáticas")
+                            .font(ImprovingFont.cardTitle(13.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                        Text("Lee en voz natural española cada respuesta del Coach (sin cortar tu música al terminar).")
+                            .font(ImprovingFont.caption(11.5))
+                            .foregroundColor(BevelColors.textSecondary)
+                    }
+                }
+                .tint(BevelColors.emeraldEnd)
+                .padding(.top, 4)
 
                 if let onOpenSettings {
                     Button {
@@ -567,5 +588,757 @@ struct CoachPersonalityAndArchiveSheet: View {
                 }
             }
         }
+    }
+}
+
+
+// MARK: - Natural Spanish Voice Synthesizer (100% Local AVSpeechSynthesizer + Clean AudioSession Deactivation)
+
+final class CoachVoiceSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    static let shared = CoachVoiceSynthesizer()
+
+    @Published var speakingMessageId: String? = nil
+    private let synthesizer = AVSpeechSynthesizer()
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func toggleSpeak(text: String, messageId: String) {
+        if speakingMessageId == messageId && synthesizer.isSpeaking {
+            stop()
+        } else {
+            speak(text: text, messageId: messageId)
+        }
+    }
+
+    func speak(text: String, messageId: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+
+        let utterance = AVSpeechUtterance(string: clean)
+        utterance.voice = AVSpeechSynthesisVoice(language: "es-ES")
+        utterance.rate = 0.51
+        utterance.pitchMultiplier = 1.0
+        speakingMessageId = messageId
+        synthesizer.speak(utterance)
+    }
+
+    func stop() {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        DispatchQueue.main.async {
+            self.speakingMessageId = nil
+        }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.speakingMessageId = nil
+        }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.speakingMessageId = nil
+        }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+// MARK: - Proactive 24-48h Immunity, Overreaching & Subjective Sensation Radar Card
+
+struct ProactiveImmunityRadarCard: View {
+    @ObservedObject var store: ImprovingStore
+
+    var body: some View {
+        let radar = store.proactiveImmunityRadarSnapshot
+        if radar.hasActiveWarning {
+            let accent: Color = radar.riskLevel >= 2
+                ? BevelColors.coralHigh
+                : (radar.riskLevel == 1 ? BevelColors.amberStart : BevelColors.skyBlue)
+
+            BevelCard(cornerRadius: 18) {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 10) {
+                        Image(systemName: radar.riskLevel >= 2 ? "cross.vial.fill" : "waveform.path.ecg.rectangle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(accent)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(accent.opacity(0.15)))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text("RADAR PROACTIVO IA")
+                                    .font(ImprovingFont.microLabel(9.5))
+                                    .foregroundColor(BevelColors.textMuted)
+                                Text("Confianza \(radar.confidencePct)%")
+                                    .font(ImprovingFont.microLabel(9.5))
+                                    .foregroundColor(accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(accent.opacity(0.14)))
+                            }
+                            Text(radar.headline)
+                                .font(ImprovingFont.cardTitle(14))
+                                .foregroundColor(BevelColors.textPrimary)
+                        }
+                        Spacer()
+                    }
+
+                    Text(radar.summary)
+                        .font(ImprovingFont.caption(12))
+                        .foregroundColor(BevelColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !radar.signals.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(radar.signals, id: \.self) { sig in
+                                    Text(sig)
+                                        .font(ImprovingFont.caption(10.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(accent)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Capsule().fill(accent.opacity(0.12)))
+                                }
+                            }
+                        }
+                    }
+
+                    if !store.autoDeloadModeActive && radar.riskLevel >= 1 {
+                        Button {
+                            store.applyImmunityProtectiveProtocol()
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "shield.checkered")
+                                    .font(.system(size: 11.5, weight: .bold))
+                                Text("Aplicar protocolo protector (Descarga + Sueño 100% + Agua)")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .fontWeight(.bold)
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(Capsule().fill(accent))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(14)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(accent.opacity(0.35), lineWidth: 0.9)
+            )
+        }
+    }
+}
+
+// MARK: - Proactive Evening Check-In Card (20:00+ Night Optimization)
+
+struct EveningCheckInProactiveCard: View {
+    @ObservedObject var store: ImprovingStore
+    let onAskDinnerCoach: () -> Void
+
+    var body: some View {
+        let ev = store.eveningCheckInSnapshot
+        BevelCard(cornerRadius: 18) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 9) {
+                    Image(systemName: "moon.haze.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(BevelColors.periwinkleStart)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(BevelColors.indigoSoftBg))
+                    VStack(alignment: .leading, spacing: 1.5) {
+                        Text("CIERRE NOCTURNO PROACTIVO")
+                            .font(ImprovingFont.microLabel(9.5))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(ev.headline)
+                            .font(ImprovingFont.cardTitle(13.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                    }
+                    Spacer()
+                }
+
+                Text(ev.summaryText)
+                    .font(ImprovingFont.caption(12))
+                    .foregroundColor(BevelColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if ev.remainingProteinG > 10 {
+                    Button(action: onAskDinnerCoach) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("Proponer cena para clavar +\(ev.remainingProteinG) g proteína")
+                                .font(ImprovingFont.caption(11.5))
+                                .fontWeight(.bold)
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(BevelColors.indigoEnd))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(13)
+        }
+    }
+}
+
+// MARK: - Hyper-Personalized Physiological Twin & Interactive What-If Simulator
+
+struct PersonalTwinAndSimulatorCard: View {
+    @ObservedObject var store: ImprovingStore
+    @State private var showSimulatorSheet: Bool = false
+
+    var body: some View {
+        let twin = store.personalSensitivityTwinSnapshot
+
+        BevelCard(cornerRadius: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.wave.2.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(BevelColors.skyBlue)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(BevelColors.skySoftBg))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("GEMELO FISIOLÓGICO PERSONAL")
+                                .font(ImprovingFont.microLabel(9.5))
+                                .foregroundColor(BevelColors.textMuted)
+                            Text(twin.isCalibrated ? "Calibrado" : "Aprendiendo")
+                                .font(ImprovingFont.microLabel(9.5))
+                                .foregroundColor(twin.isCalibrated ? BevelColors.greenPrimary : BevelColors.amberStart)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill((twin.isCalibrated ? BevelColors.greenPrimary : BevelColors.amberStart).opacity(0.15)))
+                        }
+                        Text("Tus umbrales únicos aprendidos en local")
+                            .font(ImprovingFont.cardTitle(14))
+                            .foregroundColor(BevelColors.textPrimary)
+                    }
+                    Spacer()
+                }
+
+                HStack(spacing: 8) {
+                    twinMetricPill(icon: "cup.and.saucer.fill", label: "Corte café", value: twin.recommendedCaffeineCutoffLabel)
+                    twinMetricPill(icon: "fork.knife", label: "Cena ideal", value: String(format: "≥%.1f h", locale: Locale(identifier: "es_ES"), twin.optimalDinnerLeadHours))
+                    twinMetricPill(icon: "bed.double.fill", label: "Sueño pico", value: String(format: "%.1f h", locale: Locale(identifier: "es_ES"), twin.personalOptimalSleepHours))
+                    twinMetricPill(icon: "flame.fill", label: "Strain dulce", value: String(format: "%.1f", locale: Locale(identifier: "es_ES"), twin.personalStrainSweetSpot))
+                }
+
+                Button {
+                    AppHaptics.selection()
+                    showSimulatorSheet = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "slider.horizontal.below.waveform")
+                            .font(.system(size: 12, weight: .bold))
+                        Text("Simulador «¿Qué pasa mañana si…?»")
+                            .font(ImprovingFont.caption(12.5))
+                            .fontWeight(.bold)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(BevelColors.indigoEnd))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+        }
+        .sheet(isPresented: $showSimulatorSheet) {
+            WhatIfPhysiologySimulatorSheet(store: store, onClose: { showSimulatorSheet = false })
+        }
+    }
+
+    private func twinMetricPill(icon: String, label: String, value: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(BevelColors.skyBlue)
+            Text(value)
+                .font(ImprovingFont.cardTitle(12.5))
+                .monospacedDigit()
+                .foregroundColor(BevelColors.textPrimary)
+            Text(label)
+                .font(ImprovingFont.caption(9.5))
+                .foregroundColor(BevelColors.textMuted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 11).fill(BevelColors.cardSubtle))
+    }
+}
+
+struct WhatIfPhysiologySimulatorSheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onClose: () -> Void
+
+    @State private var input = WhatIfScenarioInput()
+
+    var body: some View {
+        let sim = store.simulateWhatIf(input)
+        let accent: Color = sim.predictedRecoveryPct >= 67
+            ? BevelColors.greenPrimary
+            : (sim.predictedRecoveryPct >= 34 ? BevelColors.amberStart : BevelColors.coralHigh)
+
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    // Live Prediction Header Card
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("RECUPERACIÓN ESTIMADA MAÑANA")
+                                        .font(ImprovingFont.microLabel(10))
+                                        .foregroundColor(BevelColors.textMuted)
+                                    Text(sim.verdictTitle)
+                                        .font(ImprovingFont.sectionTitle(17))
+                                        .foregroundColor(accent)
+                                }
+                                Spacer()
+                                Text("\(sim.predictedRecoveryPct)%")
+                                    .font(ImprovingFont.displayLarge(34))
+                                    .monospacedDigit()
+                                    .foregroundColor(accent)
+                            }
+
+                            HStack(spacing: 8) {
+                                simDeltaBadge(label: "VFC", value: String(format: "%+.1f ms", locale: Locale(identifier: "es_ES"), sim.hrvDeltaMs), good: sim.hrvDeltaMs >= 0)
+                                simDeltaBadge(label: "Profundo", value: String(format: "%+d min", sim.deepSleepDeltaMin), good: sim.deepSleepDeltaMin >= 0)
+                                simDeltaBadge(label: "FCR", value: String(format: "%+.1f ppm", locale: Locale(identifier: "es_ES"), sim.rhrDeltaBpm), good: sim.rhrDeltaBpm <= 0)
+                            }
+
+                            Text(sim.explanation)
+                                .font(ImprovingFont.caption(12))
+                                .foregroundColor(BevelColors.textSecondary)
+                        }
+                        .padding(16)
+                    }
+
+                    // Interactive Scenario Sliders
+                    BevelCard(cornerRadius: 20) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            sliderRow(
+                                title: "Horas de sueño esta noche",
+                                valueText: String(format: "%.1f h", locale: Locale(identifier: "es_ES"), input.sleepHours),
+                                value: $input.sleepHours,
+                                range: 4.5...10.0,
+                                step: 0.5,
+                                tint: BevelColors.periwinkleStart
+                            )
+                            sliderRow(
+                                title: "Bebidas de alcohol",
+                                valueText: input.alcoholDrinks == 0 ? "0" : String(format: "%.0f copas", input.alcoholDrinks),
+                                value: $input.alcoholDrinks,
+                                range: 0...6,
+                                step: 1,
+                                tint: BevelColors.coralHigh
+                            )
+                            sliderRow(
+                                title: "Última cafeína (mg)",
+                                valueText: "\(Int(input.caffeineMg)) mg a las \(input.caffeineHour):00",
+                                value: $input.caffeineMg,
+                                range: 0...300,
+                                step: 30,
+                                tint: BevelColors.amberStart
+                            )
+                            if input.caffeineMg > 0 {
+                                Stepper("Hora del último café: \(input.caffeineHour):00", value: $input.caffeineHour, in: 7...22)
+                                    .font(ImprovingFont.caption(12.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            sliderRow(
+                                title: "Margen cena → acostarse",
+                                valueText: String(format: "%.1f h antes", locale: Locale(identifier: "es_ES"), input.dinnerLeadHours),
+                                value: $input.dinnerLeadHours,
+                                range: 0.5...5.0,
+                                step: 0.5,
+                                tint: BevelColors.emeraldEnd
+                            )
+
+                            Toggle("Sesión física intensa hoy (Strain ≥ 15)", isOn: $input.highStrainSession)
+                                .font(ImprovingFont.caption(13))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .tint(BevelColors.amberStart)
+
+                            Toggle("Magnesio / Sauna / Respiración nocturna", isOn: $input.magnesiumOrSauna)
+                                .font(ImprovingFont.caption(13))
+                                .foregroundColor(BevelColors.textPrimary)
+                                .tint(BevelColors.greenPrimary)
+                        }
+                        .padding(16)
+                    }
+
+                    // Mitigation Protocol
+                    BevelCard(cornerRadius: 18) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("PROTOCOLO DE MITIGACIÓN PERSONALIZADO")
+                                .font(ImprovingFont.microLabel(10))
+                                .foregroundColor(BevelColors.skyBlue)
+                            ForEach(sim.mitigationSteps, id: \.self) { step in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(BevelColors.greenPrimary)
+                                        .padding(.top, 2)
+                                    Text(step)
+                                        .font(ImprovingFont.caption(12.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                }
+                            }
+                        }
+                        .padding(15)
+                    }
+                }
+                .padding(16)
+            }
+            .background(BevelColors.canvas.ignoresSafeArea())
+            .navigationTitle("Simulador «¿Qué pasa si…?»")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Listo", action: onClose).fontWeight(.bold)
+                }
+            }
+            .onAppear {
+                let twin = store.personalSensitivityTwinSnapshot
+                input.sleepHours = twin.personalOptimalSleepHours
+                input.dinnerLeadHours = twin.optimalDinnerLeadHours
+            }
+        }
+    }
+
+    private func simDeltaBadge(label: String, value: String, good: Bool) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(ImprovingFont.cardTitle(13))
+                .monospacedDigit()
+                .foregroundColor(good ? BevelColors.greenPrimary : BevelColors.coralHigh)
+            Text(label)
+                .font(ImprovingFont.caption(10))
+                .foregroundColor(BevelColors.textMuted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
+    }
+
+    private func sliderRow(title: String, valueText: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(ImprovingFont.caption(12.5))
+                    .foregroundColor(BevelColors.textSecondary)
+                Spacer()
+                Text(valueText)
+                    .font(ImprovingFont.cardTitle(13))
+                    .monospacedDigit()
+                    .foregroundColor(tint)
+            }
+            Slider(value: value, in: range, step: step)
+                .tint(tint)
+        }
+    }
+}
+
+// MARK: - Adaptive Event Periodization Microcycle Card (Fitness) & Setup Sheet
+
+struct AdaptiveMicrocycleCard: View {
+    @ObservedObject var store: ImprovingStore
+    @State private var showSetupSheet: Bool = false
+
+    var body: some View {
+        Group {
+            if let micro = store.adaptiveMicrocycleSnapshot {
+                let badgeColor = Color(hex: micro.phaseBadgeColorHex)
+                BevelCard(cornerRadius: 20) {
+                    VStack(alignment: .leading, spacing: 11) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "flag.checkered")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(badgeColor)
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(badgeColor.opacity(0.15)))
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text("MICROCICLO ADAPTATIVO")
+                                        .font(ImprovingFont.microLabel(9.5))
+                                        .foregroundColor(BevelColors.textMuted)
+                                    Text(micro.phaseName)
+                                        .font(ImprovingFont.microLabel(9.5))
+                                        .foregroundColor(badgeColor)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(badgeColor.opacity(0.15)))
+                                }
+                                Text("\(micro.plan.title) · Faltan \(micro.daysRemaining) d")
+                                    .font(ImprovingFont.cardTitle(14.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                            }
+                            Spacer()
+                            Button {
+                                showSetupSheet = true
+                            } label: {
+                                Image(systemName: "slider.horizontal.3")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(BevelColors.textSecondary)
+                                    .frame(width: 30, height: 30)
+                                    .background(Circle().fill(BevelColors.cardSubtle))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Text(micro.todayPrescription)
+                            .font(ImprovingFont.caption(12))
+                            .foregroundColor(BevelColors.textSecondary)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(micro.days) { d in
+                                    let c = Color(hex: d.accentHex)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text(d.dayShortLabel.uppercased())
+                                                .font(ImprovingFont.microLabel(9.5))
+                                                .foregroundColor(d.isToday ? .white : BevelColors.textMuted)
+                                            Spacer()
+                                            Text(d.targetStrainRange)
+                                                .font(ImprovingFont.caption(10))
+                                                .monospacedDigit()
+                                                .foregroundColor(c)
+                                        }
+                                        Text(d.sessionTitle)
+                                            .font(ImprovingFont.caption(11.5))
+                                            .fontWeight(.semibold)
+                                            .foregroundColor(BevelColors.textPrimary)
+                                            .lineLimit(2)
+                                        Text(d.intensityTag)
+                                            .font(ImprovingFont.microLabel(9))
+                                            .foregroundColor(c)
+                                    }
+                                    .frame(width: 132, alignment: .leading)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 13).fill(d.isToday ? c.opacity(0.16) : BevelColors.cardSubtle))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 13)
+                                            .strokeBorder(d.isToday ? c.opacity(0.65) : .clear, lineWidth: 1)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .padding(15)
+                }
+            } else {
+                Button {
+                    showSetupSheet = true
+                } label: {
+                    BevelCard(cornerRadius: 18) {
+                        HStack(spacing: 11) {
+                            Image(systemName: "flag.checkered")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(BevelColors.periwinkleStart)
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(BevelColors.indigoSoftBg))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Periodización por objetivo o competición")
+                                    .font(ImprovingFont.cardTitle(13.5))
+                                    .foregroundColor(BevelColors.textPrimary)
+                                Text("Crea un microciclo semanal vivo con taper que se recalibra cada día a tu recuperación")
+                                    .font(ImprovingFont.caption(11.5))
+                                    .foregroundColor(BevelColors.textSecondary)
+                            }
+                            Spacer(minLength: 4)
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundColor(BevelColors.indigoEnd)
+                        }
+                        .padding(14)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $showSetupSheet) {
+            GoalEventSetupSheet(store: store, onClose: { showSetupSheet = false })
+        }
+    }
+}
+
+struct GoalEventSetupSheet: View {
+    @ObservedObject var store: ImprovingStore
+    let onClose: () -> Void
+
+    @State private var titleDraft: String = ""
+    @State private var focusDraft: String = "Híbrido / Rendimiento"
+    @State private var targetDate: Date = Calendar.current.date(byAdding: .day, value: 45, to: Date()) ?? Date()
+
+    private let focusOptions = ["Carrera / Resistencia", "Fuerza / Hipertrofia", "Híbrido / Rendimiento", "Definición / Salud"]
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                BevelCard(cornerRadius: 18) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("OBJETIVO CON FECHA Y PERIODIZACIÓN VIVA")
+                            .font(ImprovingFont.microLabel(10))
+                            .foregroundColor(BevelColors.skyBlue)
+
+                        TextField("Ej: Media Maratón Valencia, Bloque Fuerza 8 sem…", text: $titleDraft)
+                            .font(ImprovingFont.body(14.5))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .padding(11)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(BevelColors.cardSubtle))
+
+                        Picker("Foco", selection: $focusDraft) {
+                            ForEach(focusOptions, id: \.self) { opt in
+                                Text(opt).tag(opt)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        DatePicker("Fecha objetivo", selection: $targetDate, in: Date()..., displayedComponents: .date)
+                            .font(ImprovingFont.body(14))
+                            .foregroundColor(BevelColors.textPrimary)
+
+                        Button {
+                            let clean = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !clean.isEmpty else { return }
+                            let plan = GoalEventPlan(
+                                id: store.activeGoalEventPlan?.id ?? "goal_\(UUID().uuidString.prefix(8))",
+                                title: clean,
+                                sportFocus: focusDraft,
+                                targetDateIso: store.isoFormatter.string(from: targetDate),
+                                createdAtIso: store.isoFormatter.string(from: Date()),
+                                notes: ""
+                            )
+                            store.setGoalEventPlan(plan)
+                            onClose()
+                        } label: {
+                            Text("Activar microciclo inteligente")
+                                .font(ImprovingFont.cardTitle(14))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Capsule().fill(BevelColors.indigoEnd))
+                        }
+
+                        if store.activeGoalEventPlan != nil {
+                            Button(role: .destructive) {
+                                store.setGoalEventPlan(nil)
+                                onClose()
+                            } label: {
+                                Text("Eliminar plan activo")
+                                    .font(ImprovingFont.caption(12.5))
+                                    .foregroundColor(BevelColors.coralHigh)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                    }
+                    .padding(15)
+                }
+                Spacer()
+            }
+            .padding(16)
+            .background(BevelColors.canvas.ignoresSafeArea())
+            .navigationTitle("Planificar Objetivo")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cerrar", action: onClose)
+                }
+            }
+            .onAppear {
+                if let cur = store.activeGoalEventPlan {
+                    titleDraft = cur.title
+                    focusDraft = cur.sportFocus
+                    if let dt = store.isoFormatter.date(from: cur.targetDateIso) {
+                        targetDate = dt
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+// MARK: - Post-Workout AI Physiological Audit Card (WorkoutDetailScreen)
+
+struct PostWorkoutPhysiologyAuditCard: View {
+    let audit: PostWorkoutPhysiologyAudit
+
+    var body: some View {
+        let accent = Color(hex: audit.efficiencyColorHex)
+        BevelCard(cornerRadius: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "bolt.heart.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(accent)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(accent.opacity(0.15)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("AUDITORÍA POST-ENTRENO IA")
+                            .font(ImprovingFont.microLabel(9.5))
+                            .foregroundColor(BevelColors.textMuted)
+                        Text(audit.efficiencyLabel)
+                            .font(ImprovingFont.cardTitle(14.5))
+                            .foregroundColor(accent)
+                    }
+                    Spacer()
+                }
+
+                Text(audit.summaryText)
+                    .font(ImprovingFont.caption(12.5))
+                    .foregroundColor(BevelColors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 8) {
+                    refillPill(label: "Carbos", value: "+\(audit.glycogenRefillCarbsG) g", color: BevelColors.amberStart)
+                    refillPill(label: "Proteína", value: "+\(audit.proteinRefillG) g", color: BevelColors.greenPrimary)
+                    refillPill(label: "Rehidratar", value: "+\(audit.rehydrationMl) ml", color: BevelColors.skyBlue)
+                    refillPill(label: "Sodio", value: "~\(audit.sodiumMg) mg", color: BevelColors.periwinkleStart)
+                }
+            }
+            .padding(15)
+        }
+    }
+
+    private func refillPill(label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(ImprovingFont.cardTitle(12.5))
+                .monospacedDigit()
+                .foregroundColor(color)
+            Text(label)
+                .font(ImprovingFont.caption(10))
+                .foregroundColor(BevelColors.textMuted)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 10).fill(BevelColors.cardSubtle))
     }
 }

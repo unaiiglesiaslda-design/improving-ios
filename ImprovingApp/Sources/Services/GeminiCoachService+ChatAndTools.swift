@@ -37,19 +37,23 @@ extension GeminiCoachService {
         CÓMO CONVERSAR Y ACTUAR DENTRO DE LA APP:
         - \(continuityRule)
         - Si te pregunta sobre entrenamiento, sueño, comida, salir de fiesta, suplementos, molestias, horarios o cualquier tema cotidiano o deportivo, responde con naturalidad, criterio real y cercanía.
-        - TIENES CAPACIDAD REAL PARA PLANIFICAR, REGISTRAR, EDITAR Y BORRAR DATOS EN IMPROVING mediante tus 14 herramientas (`log_meal`, `edit_meal`, `delete_meal`, `add_quick_nutrient`, `update_nutrition_goals`, `set_journal_habit`, `set_journal_note_and_mood`, `create_custom_habit`, `log_workout`, `edit_or_delete_workout`, `log_body_measurement`, `save_coach_memory`, `create_strength_routine`, `propose_macro_meals`).
-        - PLANIFICACIÓN EJECUTABLE DE ENTRENOS: Cuando \(name) te pida que le crees o prepares una rutina de fuerza para hoy ("créame la rutina de hoy según mi recuperación y músculos frescos", "diseña mi sesión de hoy"), revisa `metricas_hoy.recuperacion_pct`, `frescura_muscular` y `diario_hoy.modo_objetivo_global`, y LLAMA DIRECTAMENTE a `create_strength_routine` con 4 a 6 ejercicios reales (series, repeticiones, kg aproximados y grupo muscular) para guardarla y abrirla en 1 toque en Strength Builder.
-        - PLANIFICACIÓN EJECUTABLE DE COMIDAS PARA CLAVAR MACROS: Cuando \(name) te pregunte qué cenar, comer o merendar para cuadrar los macros que le faltan hoy ("dime qué cenar para clavar mis macros", "qué puedo comer ahora"), consulta `nutricion_hoy.macros_restantes_hoy` y `nutricion_dinamica_strain`, y LLAMA DIRECTAMENTE a `propose_macro_meals` proponiendo exactamente 2 opciones realistas en español con gramos aproximados que claven esos macros restantes para que pueda guardarlas en 1 toque desde el chat.
-        - MEMORIA A LARGO PLAZO Y MODO ACTIVO: Respeta siempre los recuerdos permanentes en `diario_hoy.memoria_largo_plazo_usuario` (lesiones, objetivos deportivos, intolerancias, horarios) y la directriz del modo elegido en `diario_hoy.modo_objetivo_global`. Si \(name) te pide que recuerdes algo para el futuro ("recuerda que tengo tendinitis", "apunta que preparo media maratón"), llama directamente a `save_coach_memory`.
-        - CONTEXTO INTEGRAL: Aprovecha `contexto_meteorologico_hoy` (si hay calor/humedad explica la deriva de FC y sube hidratación), `nutricion_dinamica_strain` (Carb Cycling según Strain), `causalidad_cruzada_local` (Nutrición × Analíticas × Biometría) y `correlaciones_diario_30d_6m` para dar explicaciones causales de alto nivel.
-        - Cuando \(name) te pida registrar algo ("he comido...", "apunta...", "hoy pesé...", "hice 45 min de pádel...", "marca creatina en el diario...") o modificar/borrar un registro ("cambia la hora del desayuno a las 9:15", "borra la merienda", "pasa la cena a ayer"), EJECUTA LA HERRAMIENTA DIRECTAMENTE SIN PEDIR PERMISO PREVIO (el usuario siempre tiene un botón Deshacer en tu respuesta).
-        - Si \(name) adjunta una foto de un plato y dice que se lo comió o pide registrarlo, estima con precisión título, kcal, proteína, carbos, grasas, puntuación 1–100 y factores nutricionales y llama a `log_meal` directamente con la hora indicada (o la hora actual si no indicó otra).
-        - Para editar o borrar comidas/entrenamientos usa siempre el `id` exacto que aparece en `nutricion_hoy.comidas_registradas`, `comidas_ayer` o `metricas_hoy.entrenamientos_hoy`.
-        - En el Diario (`set_journal_habit`), la hora del evento (`event_time`) es SIEMPRE OPCIONAL: pásala SOLO si el usuario dice una hora concreta (ej. "café a las 16:30"); si no dice hora, omítela.
-        - Cuando el usuario solo hace una consulta general sin pedir acción ni plan ejecutable, NO llames a ninguna herramienta y responde normalmente.
+        - TIENES CAPACIDAD REAL PARA PLANIFICAR, SIMULAR, REGISTRAR, EDITAR Y BORRAR DATOS EN IMPROVING mediante tus 19 herramientas (`log_meal`, `edit_meal`, `delete_meal`, `add_quick_nutrient`, `update_nutrition_goals`, `set_journal_habit`, `set_journal_note_and_mood`, `create_custom_habit`, `log_workout`, `edit_or_delete_workout`, `log_body_measurement`, `save_coach_memory`, `create_strength_routine`, `propose_macro_meals`, `manage_coach_memory`, `update_strength_routine`, `set_goal_and_sleep_mode`, `simulate_what_if_scenario`, `generate_weekly_microcycle`).
+        - PLANIFICACIÓN EJECUTABLE DE ENTRENOS CON PESOS REALES: Cuando \(name) te pida crear o editar una rutina de fuerza, revisa `metricas_hoy.recuperacion_pct`, `frescura_muscular`, `marcas_fuerza_reales` (sus pesos reales y 1RM estimados), `rutinas_guardadas` y sus lesiones/equipo en `diario_hoy.memoria_largo_plazo_usuario`. Llama a `create_strength_routine` (para una nueva) o `update_strength_routine` (para modificar una existente).
+        - PLANIFICACIÓN EJECUTABLE DE COMIDAS PERSONALIZADAS: Cuando pida qué cenar/comer para clavar macros, revisa `nutricion_hoy.macros_restantes_hoy`, `nutricion_dinamica_strain`, `platos_habituales_usuario` (prioriza alimentos que ya suele comer) e intolerancias en memoria, y llama a `propose_macro_meals`.
+        - SIMULADOR FISIOLÓGICO «¿QUÉ PASA SI...?»: Cuando pregunte qué pasaría mañana si sale, bebe alcohol, cena tarde, toma café a cierta hora o duerme X horas ("¿qué pasa si hoy tomo 2 cervezas y duermo 6h?"), llama a `simulate_what_if_scenario` para calcular el impacto calibrado con su gemelo fisiológico personal (`gemelo_fisiologico_personal`).
+        - PERIODIZACIÓN POR EVENTO U OBJETIVO: Si te pide preparar una carrera, competición o bloque con fecha ("preparo media maratón el 20 de diciembre", "planifícame la semana hacia mi objetivo"), llama a `generate_weekly_microcycle`. Si pide cambiar su Modo Global o Modo de Sueño ("ponme en modo recuperación"), llama a `set_goal_and_sleep_mode`.
+        - MEMORIA VIVA A LARGO PLAZO: Si te cuenta una lesión, objetivo, alergia u horario permanente, llama a `save_coach_memory`. Si dice que algo antiguo ya cambió o se curó ("ya no me duele el hombro", "borra ese recuerdo"), llama a `manage_coach_memory`.
+        - SENSACIÓN SUBJETIVA Y RADAR PROACTIVO: Revisa `radar_proactivo_y_sensacion` y `lineas_base_7d_30d`. Si hay contradicción entre recuperación verde y fatiga/malestar en el Diario (`contradiccion_subjetiva`), prioriza SIEMPRE cómo se siente realmente por encima del número frío. Si `metricas_hoy.recuperacion_pct` dice `PENDIENTE_REGISTRO_SUENO`, explica con naturalidad que la recuperación se calculará en cuanto conste el sueño de hoy, apoyándote mientras tanto en su línea base de 7d/30d.
+        - CONTEXTO INTEGRAL: Aprovecha `lineas_base_7d_30d`, `contexto_meteorologico_hoy`, `nutricion_dinamica_strain`, `causalidad_cruzada_local`, `gemelo_fisiologico_personal` y `correlaciones_diario_30d_6m` para dar explicaciones causales hiper-personalizadas.
+        - Cuando \(name) te pida registrar, editar o borrar algo, EJECUTA LA HERRAMIENTA DIRECTAMENTE SIN PEDIR PERMISO PREVIO (siempre hay botón Deshacer).
+        - Si adjunta una foto de un plato y pide registrarlo, estima título, kcal, macros, fibra y micronutrientes y llama a `log_meal` directamente.
+        - Para editar o borrar comidas/entrenamientos/rutinas usa siempre el `id` exacto que aparece en el contexto o en el historial de acciones previas.
+        - En el Diario (`set_journal_habit`), `event_time` es OPCIONAL: pásala SOLO si el usuario indica una hora.
+        - Cuando el usuario solo hace una consulta general sin pedir acción, simulación ni plan ejecutable, NO llames a ninguna herramienta y responde normalmente.
         - Escribe en texto natural fluido en español de tú a tú respetando la personalidad y el nivel de detalle configurados.
-        - NO respondas en JSON, NO uses llaves {}, NO uses markdown con asteriscos ** ni paréntesis (). Integra las cifras de forma natural en la frase.
+        - NO respondas en JSON, NO uses llaves {}, NO uses markdown con asteriscos ** ni paréntesis (). Integra las cifras con naturalidad.
         - NO empieces con prefijos robóticos como "Análisis:", "Veredicto:" ni "Opinión IA:".
+        - Al final del todo de tu respuesta añade en una última línea separada 2 o 3 sugerencias cortas de seguimiento accionables (máx 34 caracteres cada una) con este formato exacto: `[[SUGERENCIAS: Opción 1 | Opción 2 | Opción 3]]`.
 
         VERACIDAD ABSOLUTA Y CERO INVENCIÓN DE DATOS:
         - \(dataConnection)
@@ -64,10 +68,20 @@ extension GeminiCoachService {
 
     // MARK: - Multi-Turn Role Normalization (Prevents Gemini HTTP 400 on Turn 2+ & Supports Photo Attachments!)
 
-    func buildNormalizedGeminiContents(history: [CoachChatMessage], currentPrompt: String, jpegImageData: Data? = nil) -> [[String: Any]] {
-        var turns: [(role: String, text: String)] = []
+    func buildNormalizedGeminiContents(
+        history: [CoachChatMessage],
+        currentPrompt: String,
+        jpegImageData: Data? = nil,
+        priorPhotoLoader: (@Sendable (String) -> Data?)? = nil
+    ) -> [[String: Any]] {
+        var turns: [(role: String, text: String, photoData: Data?)] = []
+        let recentSlice = Array(history.suffix(16))
+        // Find the most recent prior user message with an attached photo so follow-ups ("duplica el arroz de esa foto") still see the image!
+        let lastPriorPhotoMsgId: String? = (jpegImageData == nil)
+            ? recentSlice.last(where: { $0.attachedPhotoFilename != nil })?.id
+            : nil
 
-        for msg in history.suffix(16) {
+        for msg in recentSlice {
             let role = msg.isUser ? "user" : "model"
             var pieces: [String] = []
             if let t = msg.verdictTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
@@ -78,29 +92,51 @@ extension GeminiCoachService {
             if !msg.bullets.isEmpty {
                 pieces.append(msg.bullets.joined(separator: " "))
             }
+            // Preserve executed actions & IDs in conversation history so Turn 2+ remembers created routines/meals/simulations!
+            if !msg.appliedActions.isEmpty {
+                let actRecap = msg.appliedActions.map { act -> String in
+                    var line = "\(act.title): \(act.detail)"
+                    if let rId = act.launchedRoutineId { line += " [routine_id=\(rId)]" }
+                    if !act.suggestedMeals.isEmpty {
+                        let opts = act.suggestedMeals.map { "\($0.title) (\($0.kcal) kcal, \($0.proteinG)g P)" }.joined(separator: "; ")
+                        line += " [opciones=\(opts)]"
+                    }
+                    if act.isUndone { line += " [DESHECHO]" }
+                    return line
+                }.joined(separator: " | ")
+                pieces.append("[Acciones aplicadas en la app: \(actRecap)]")
+            }
+            if msg.attachedPhotoFilename != nil {
+                pieces.append("[Imagen adjunta por el usuario]")
+            }
             let combined = pieces.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !combined.isEmpty else { continue }
 
-            // Drop leading model messages so Gemini always begins with a user turn
             if turns.isEmpty && role == "model" { continue }
+
+            let loadedPriorImg: Data? = (msg.id == lastPriorPhotoMsgId)
+                ? msg.attachedPhotoFilename.flatMap { priorPhotoLoader?($0) }
+                : nil
 
             if let last = turns.last, last.role == role {
                 turns[turns.count - 1].text = last.text + "\n\n" + combined
+                if let img = loadedPriorImg { turns[turns.count - 1].photoData = img }
             } else {
-                turns.append((role, combined))
+                turns.append((role, combined, loadedPriorImg))
             }
         }
 
         let cleanPrompt = currentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if let last = turns.last, last.role == "user" {
             turns[turns.count - 1].text = last.text + "\n\n" + cleanPrompt
+            if let img = jpegImageData { turns[turns.count - 1].photoData = img }
         } else {
-            turns.append(("user", cleanPrompt))
+            turns.append(("user", cleanPrompt, jpegImageData))
         }
 
-        return turns.enumerated().map { idx, turn in
+        return turns.map { turn in
             var parts: [[String: Any]] = []
-            if idx == turns.count - 1, let img = jpegImageData, !img.isEmpty {
+            if let img = turn.photoData, !img.isEmpty {
                 parts.append([
                     "inline_data": [
                         "mime_type": "image/jpeg",
@@ -165,6 +201,14 @@ extension GeminiCoachService {
                     "caffeine_mg": ["type": "NUMBER", "description": "Cafeína en mg si aplica"],
                     "alcohol_drinks": ["type": "NUMBER", "description": "Bebidas estándar de alcohol si aplica"],
                     "calcium_mg": ["type": "NUMBER", "description": "Calcio en mg si aplica"],
+                    "fiber_g": ["type": "NUMBER", "description": "Fibra dietética estimada en g"],
+                    "sugar_g": ["type": "NUMBER", "description": "Azúcares estimados en g"],
+                    "sodium_mg": ["type": "NUMBER", "description": "Sodio estimado en mg"],
+                    "potassium_mg": ["type": "NUMBER", "description": "Potasio estimado en mg"],
+                    "magnesium_mg": ["type": "NUMBER", "description": "Magnesio estimado en mg"],
+                    "iron_mg": ["type": "NUMBER", "description": "Hierro estimado en mg"],
+                    "vitamin_d_mcg": ["type": "NUMBER", "description": "Vitamina D estimada en mcg"],
+                    "omega3_g": ["type": "NUMBER", "description": "Omega-3 estimado en g"],
                     "notes": ["type": "STRING", "description": "Nota breve nutricional"],
                     "whole_grains": ["type": "NUMBER", "description": "Factor cereales integrales (0 a +10)"],
                     "excess_sugar": ["type": "NUMBER", "description": "Factor exceso azúcar (0 a -15)"],
@@ -399,6 +443,88 @@ extension GeminiCoachService {
                 ],
                 "required": ["options"]
             ]
+        ],
+        [
+            "name": "manage_coach_memory",
+            "description": "Actualiza o elimina un recuerdo antiguo de la memoria a largo plazo del Coach (por ejemplo, cuando una lesión ya se ha curado o cambia un horario/objetivo).",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "action": ["type": "STRING", "description": "Uno de: delete, replace"],
+                    "match_text": ["type": "STRING", "description": "Texto o palabra clave del recuerdo existente a borrar o sustituir"],
+                    "new_note": ["type": "STRING", "description": "Nuevo texto actualizado si action es replace"]
+                ],
+                "required": ["action", "match_text"]
+            ]
+        ],
+        [
+            "name": "update_strength_routine",
+            "description": "Modifica una rutina de fuerza existente (cambiar ejercicios, pesos, series, repeticiones o nombre) con opción Deshacer.",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "routine_id": ["type": "STRING", "description": "ID exacto de la rutina desde rutinas_guardadas o acciones previas"],
+                    "match_name": ["type": "STRING", "description": "Nombre aproximado de la rutina si no hay ID"],
+                    "new_name": ["type": "STRING", "description": "Nuevo nombre opcional"],
+                    "exercises": [
+                        "type": "ARRAY",
+                        "description": "Lista completa actualizada de ejercicios de la rutina",
+                        "items": [
+                            "type": "OBJECT",
+                            "properties": [
+                                "name": ["type": "STRING", "description": "Nombre del ejercicio"],
+                                "sets": ["type": "INTEGER", "description": "Series"],
+                                "reps": ["type": "INTEGER", "description": "Repeticiones"],
+                                "weight_kg": ["type": "NUMBER", "description": "Peso en kg basado en marcas_fuerza_reales"],
+                                "primary_muscle": ["type": "STRING", "description": "Grupo muscular principal"]
+                            ],
+                            "required": ["name", "sets", "reps"]
+                        ]
+                    ]
+                ]
+            ]
+        ],
+        [
+            "name": "set_goal_and_sleep_mode",
+            "description": "Cambia el Modo Objetivo Global (Rendimiento, Longevidad, Definición, Volumen, Recuperación), el modo de Sleep Coach (100, 85, 70) y/o activa o desactiva la Semana de Descarga.",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "goal_mode": ["type": "STRING", "description": "Uno de: Rendimiento, Longevidad, Definición, Volumen, Recuperación"],
+                    "sleep_mode_pct": ["type": "INTEGER", "description": "100 (Rendir), 85 (Mantener) o 70 (Mínimo)"],
+                    "auto_deload": ["type": "BOOLEAN", "description": "true para activar modo descarga, false para desactivarlo"]
+                ]
+            ]
+        ],
+        [
+            "name": "simulate_what_if_scenario",
+            "description": "Ejecuta el Simulador Fisiológico Personal «¿Qué pasa si...?» (sueño, alcohol, cafeína y hora, hora de cena, entreno intenso o magnesio/sauna) para predecir la Recuperación, VFC y sueño profundo de mañana.",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "sleep_hours": ["type": "NUMBER", "description": "Horas de sueño previstas esta noche (ej. 6.5 o 8.0)"],
+                    "alcohol_drinks": ["type": "NUMBER", "description": "Bebidas alcohólicas (0 a 8)"],
+                    "caffeine_mg": ["type": "NUMBER", "description": "Dosis última toma de cafeína en mg (ej. 95)"],
+                    "caffeine_hour": ["type": "INTEGER", "description": "Hora 0-23 de esa toma de cafeína (ej. 17)"],
+                    "dinner_lead_hours": ["type": "NUMBER", "description": "Horas entre la cena y acostarse (ej. 1.5 si cena tarde, 3.5 si cena pronto)"],
+                    "high_strain_session": ["type": "BOOLEAN", "description": "true si incluye sesión física exigente hoy"],
+                    "magnesium_or_sauna": ["type": "BOOLEAN", "description": "true si incluye magnesio, sauna o respiración parasimpática"]
+                ]
+            ]
+        ],
+        [
+            "name": "generate_weekly_microcycle",
+            "description": "Crea o actualiza un Plan de Periodización Adaptativa con microciclo semanal vivo hacia un evento u objetivo con fecha (ej. Media maratón, Definición 8 semanas, Fuerza PB).",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "title": ["type": "STRING", "description": "Nombre del objetivo o competición (ej. Media Maratón Valencia)"],
+                    "sport_focus": ["type": "STRING", "description": "Carrera / Resistencia, Fuerza / Hipertrofia, Híbrido / Cross o Definición / Salud"],
+                    "target_date_iso": ["type": "STRING", "description": "Fecha objetivo yyyy-MM-dd"],
+                    "notes": ["type": "STRING", "description": "Notas clave de periodización"]
+                ],
+                "required": ["title", "target_date_iso"]
+            ]
         ]
     ]
 
@@ -420,6 +546,8 @@ extension GeminiCoachService {
         allowKeylessFallback: Bool = false,
         tone: CoachPersonalityTone = .directo,
         detailLevel: CoachDetailLevel = .equilibrado,
+        priorPhotoLoader: (@Sendable (String) -> Data?)? = nil,
+        onStreamingDelta: (@Sendable (String) async -> Void)? = nil,
         actionExecutor: (@Sendable (String, String) async -> (responseJson: String, appliedAction: CoachAppliedAction?))? = nil
     ) async -> GeminiCoachResult {
         let seed = nextSeed()
@@ -438,7 +566,7 @@ extension GeminiCoachService {
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel
         var lastCloudError: String? = nil
 
-        // Tier 1: User's Gemini API Key (auto-discovers live active models via /v1beta/models + Native Function Calling!)
+        // Tier 1: User's Gemini API Key (auto-discovers live active models + SSE Streaming + 19 Native Tools!)
         if allowCloudAI && !cleanKey.isEmpty {
             var candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: model, forceDiscovery: false)
             var tried = Set<String>()
@@ -456,6 +584,8 @@ extension GeminiCoachService {
                     apiKey: cleanKey,
                     model: m,
                     jpegImageData: jpegImageData,
+                    priorPhotoLoader: priorPhotoLoader,
+                    onStreamingDelta: onStreamingDelta,
                     actionExecutor: actionExecutor
                 )
                 if let res = attempt.result {
@@ -466,7 +596,6 @@ extension GeminiCoachService {
                     if err.contains("401") || err.contains("403") || err.contains("API_KEY_INVALID") || err.contains("API key not valid") {
                         break
                     }
-                    // On HTTP 404 (model retired / unavailable to new users), immediately query Google's live /models endpoint!
                     if !didDynamicDiscovery && (err.contains("404") || err.lowercased().contains("no longer available") || err.lowercased().contains("not found")) {
                         didDynamicDiscovery = true
                         let fresh = await discoverAvailableModels(apiKey: cleanKey, forceRefresh: true)
@@ -478,7 +607,7 @@ extension GeminiCoachService {
             }
         }
 
-        // Tier 2: Optional Keyless Cloud LLM — DISABLED by default for privacy (never sends health data to 3rd-party proxy unless user opts in!)
+        // Tier 2: Optional Keyless Cloud LLM — DISABLED by default for privacy
         if allowCloudAI && allowKeylessFallback && jpegImageData == nil,
            let cloudRes = await callKeylessCloudChat(prompt: prompt, sysPrompt: sysPrompt, history: history, seed: seed) {
             return cloudRes
@@ -504,58 +633,96 @@ extension GeminiCoachService {
         )
     }
 
-    func callGeminiInteractionsChat(
-        prompt: String,
-        sysPrompt: String,
-        history: [CoachChatMessage],
-        apiKey: String,
+    /// Streams SSE chunks from `:streamGenerateContent?alt=sse` in real time, emitting progressive text via `onDelta`
+    /// while preserving any `functionCall` parts for seamless multi-step tool execution!
+    func sendStreamingGeminiGenerateRequest(
         model: String,
-        previousInteractionId: String?
-    ) async -> GeminiCoachResult? {
-        guard let url = URL(string: interactionsEndpoint) else { return nil }
+        apiKey: String,
+        body: [String: Any],
+        onDelta: @Sendable (String) async -> Void
+    ) async -> (parts: [[String: Any]]?, statusCode: Int, errorDetail: String?) {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse") else {
+            return (nil, 0, "URL de streaming inválida")
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 25
+        req.timeoutInterval = 34
         req.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-        req.setValue(apiRevision, forHTTPHeaderField: "Api-Revision")
-
-        // Include recent conversation recap when previous_interaction_id isn't available
-        var inputText = prompt
-        if previousInteractionId == nil && !history.isEmpty {
-            let recap = history.suffix(8).map { ($0.isUser ? "Usuario: " : "Coach: ") + $0.text }.joined(separator: "\n")
-            inputText = "Contexto de la conversación previa:\n\(recap)\n\nNuevo mensaje del usuario:\n\(prompt)"
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else {
+            return (nil, 0, "Error serializando consulta")
         }
-
-        var body: [String: Any] = [
-            "model": model,
-            "system_instruction": sysPrompt,
-            "input": inputText
-        ]
-        if let prev = previousInteractionId, !prev.isEmpty {
-            body["previous_interaction_id"] = prev
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        req.httpBody = data
+        req.httpBody = httpBody
 
         do {
-            let (respData, resp) = try await session.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let obj = try JSONSerialization.jsonObject(with: respData) as? [String: Any] else { return nil }
-            let newId = obj["id"] as? String
-            var outText = (obj["output_text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if outText.isEmpty, let steps = obj["steps"] as? [[String: Any]] {
-                for step in steps.reversed() where (step["type"] as? String) == "model_output" {
-                    if let content = step["content"] as? [[String: Any]] {
-                        let joined = content.compactMap { ($0["type"] as? String) == "text" ? ($0["text"] as? String) : nil }.joined()
-                        if !joined.isEmpty { outText = joined; break }
+            let (bytes, resp) = try await session.bytes(for: req)
+            guard let http = resp as? HTTPURLResponse else {
+                return (nil, 0, "Respuesta SSE inválida")
+            }
+            guard (200...299).contains(http.statusCode) else {
+                var errBytes = Data()
+                for try await b in bytes {
+                    errBytes.append(b)
+                    if errBytes.count > 2048 { break }
+                }
+                return (nil, http.statusCode, Self.extractGeminiErrorMessage(from: errBytes, statusCode: http.statusCode))
+            }
+
+            var accumulatedText = ""
+            var functionCallParts: [[String: Any]] = []
+            var lastEmitAt = Date.distantPast
+
+            for try await line in bytes.lines {
+                if Task.isCancelled { return (nil, 0, "Cancelado") }
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("data:") else { continue }
+                let jsonSlice = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                if jsonSlice == "[DONE]" || jsonSlice.isEmpty { continue }
+                guard let chunkData = jsonSlice.data(using: .utf8),
+                      let chunkObj = try? JSONSerialization.jsonObject(with: chunkData) as? [String: Any],
+                      let candidates = chunkObj["candidates"] as? [[String: Any]],
+                      let content = candidates.first?["content"] as? [String: Any],
+                      let parts = content["parts"] as? [[String: Any]] else {
+                    continue
+                }
+                for p in parts {
+                    if p["functionCall"] is [String: Any] {
+                        functionCallParts.append(p)
+                    } else if (p["thought"] as? Bool) != true, let txt = p["text"] as? String, !txt.isEmpty {
+                        accumulatedText += txt
+                        let now = Date()
+                        if now.timeIntervalSince(lastEmitAt) >= 0.045 {
+                            lastEmitAt = now
+                            let preview = Self.stripFollowUpMarker(from: accumulatedText).cleanText
+                            if !preview.isEmpty {
+                                await onDelta(Self.sanitizeDirectHumanText(preview))
+                            }
+                        }
                     }
                 }
             }
-            guard !outText.isEmpty else { return nil }
-            return parseConversationalReply(rawText: outText, interactionId: newId, modelUsed: model)
+
+            if !functionCallParts.isEmpty {
+                var combined: [[String: Any]] = []
+                if !accumulatedText.isEmpty {
+                    combined.append(["text": accumulatedText])
+                }
+                combined.append(contentsOf: functionCallParts)
+                return (combined, http.statusCode, nil)
+            }
+            if !accumulatedText.isEmpty {
+                let preview = Self.stripFollowUpMarker(from: accumulatedText).cleanText
+                if !preview.isEmpty {
+                    await onDelta(Self.sanitizeDirectHumanText(preview))
+                }
+                return ([["text": accumulatedText]], http.statusCode, nil)
+            }
+            return (nil, http.statusCode, "Stream vacío")
+        } catch is CancellationError {
+            return (nil, 0, "Cancelado")
         } catch {
-            return nil
+            return (nil, 0, error.localizedDescription)
         }
     }
 
@@ -630,16 +797,23 @@ extension GeminiCoachService {
         apiKey: String,
         model: String,
         jpegImageData: Data? = nil,
+        priorPhotoLoader: (@Sendable (String) -> Data?)? = nil,
+        onStreamingDelta: (@Sendable (String) async -> Void)? = nil,
         actionExecutor: (@Sendable (String, String) async -> (responseJson: String, appliedAction: CoachAppliedAction?))? = nil
     ) async -> (result: GeminiCoachResult?, errorDetail: String?) {
         guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
             return (nil, "URL de modelo inválida")
         }
 
-        var contents = buildNormalizedGeminiContents(history: history, currentPrompt: prompt, jpegImageData: jpegImageData)
+        var contents = buildNormalizedGeminiContents(
+            history: history,
+            currentPrompt: prompt,
+            jpegImageData: jpegImageData,
+            priorPhotoLoader: priorPhotoLoader
+        )
         var genConfig: [String: Any] = [
             "temperature": actionExecutor != nil ? 0.65 : 0.78,
-            "maxOutputTokens": model.contains("pro") ? 2400 : 1800
+            "maxOutputTokens": model.contains("pro") ? 2800 : 2200
         ]
         if model.hasPrefix("gemini-2.5-flash") {
             genConfig["thinkingConfig"] = ["thinkingBudget": 0]
@@ -660,11 +834,20 @@ extension GeminiCoachService {
 
         var useTools = (actionExecutor != nil)
         var collectedActions: [CoachAppliedAction] = []
+        var executedCallSignatures = Set<String>()
 
-        // Allow up to 2 tool-calling rounds so multi-step edits finish cleanly and return a natural reply
         for _ in 0..<3 {
-            var resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: makeRequestBody(withTools: useTools))
-            // Graceful fallback if a specific model doesn't support functionDeclarations (HTTP 400)
+            let reqBody = makeRequestBody(withTools: useTools)
+            var resp: (parts: [[String: Any]]?, statusCode: Int, errorDetail: String?)
+            if let streamCb = onStreamingDelta {
+                resp = await sendStreamingGeminiGenerateRequest(model: model, apiKey: apiKey, body: reqBody, onDelta: streamCb)
+                // Seamless fallback to standard generateContent on non-auth transport/protocol issues
+                if resp.parts == nil && resp.statusCode != 401 && resp.statusCode != 403 && resp.statusCode != 404 {
+                    resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: reqBody)
+                }
+            } else {
+                resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: reqBody)
+            }
             if resp.parts == nil, useTools, resp.statusCode == 400, collectedActions.isEmpty {
                 let lowErr = (resp.errorDetail ?? "").lowercased()
                 if lowErr.contains("tool") || lowErr.contains("function") || lowErr.contains("declaration") {
@@ -712,9 +895,15 @@ extension GeminiCoachService {
                         return "{}"
                     }()
 
-                    let outcome = await executor(toolName, argsJsonStr)
-                    if let applied = outcome.appliedAction {
-                        collectedActions.append(applied)
+                    let callSig = "\(toolName)#\(argsJsonStr)"
+                    let outcome: (responseJson: String, appliedAction: CoachAppliedAction?)
+                    if executedCallSignatures.insert(callSig).inserted {
+                        outcome = await executor(toolName, argsJsonStr)
+                        if let applied = outcome.appliedAction {
+                            collectedActions.append(applied)
+                        }
+                    } else {
+                        outcome = ("{\"ok\":true,\"deduplicated\":true}", nil)
                     }
                     let respObj: [String: Any] = {
                         if let d = outcome.responseJson.data(using: .utf8),
@@ -746,6 +935,7 @@ extension GeminiCoachService {
 
             if !joined.isEmpty {
                 let base = parseConversationalReply(rawText: joined, interactionId: nil, modelUsed: model)
+                let chips = base.followUpChips.isEmpty ? Self.defaultFollowUpChips(for: base.text, actions: collectedActions) : base.followUpChips
                 return (
                     GeminiCoachResult(
                         verdictTitle: base.verdictTitle,
@@ -755,7 +945,8 @@ extension GeminiCoachService {
                         interactionId: base.interactionId,
                         usedLiveCloud: base.usedLiveCloud,
                         modelUsed: base.modelUsed,
-                        appliedActions: collectedActions
+                        appliedActions: collectedActions,
+                        followUpChips: chips
                     ),
                     nil
                 )
@@ -850,9 +1041,46 @@ extension GeminiCoachService {
         return nil
     }
 
+    nonisolated static func stripFollowUpMarker(from raw: String) -> (cleanText: String, chips: [String]) {
+        guard let markerRange = raw.range(of: "[[SUGERENCIAS:", options: [.caseInsensitive, .backwards]) else {
+            // Also strip partial streaming marker `[[SUGER` while chunks arrive
+            if let partial = raw.range(of: "[[SUGER", options: [.caseInsensitive, .backwards]) {
+                return (String(raw[..<partial.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines), [])
+            }
+            return (raw, [])
+        }
+        let before = String(raw[..<markerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = String(raw[markerRange.upperBound...])
+        let inner: String = {
+            if let end = after.range(of: "]]") {
+                return String(after[..<end.lowerBound])
+            }
+            return after
+        }()
+        let chips = inner
+            .split(separator: "|")
+            .map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'•-"))) }
+            .filter { $0.count >= 4 && $0.count <= 54 }
+        return (before, Array(chips.prefix(3)))
+    }
+
+    nonisolated static func defaultFollowUpChips(for replyText: String, actions: [CoachAppliedAction]) -> [String] {
+        if actions.contains(where: { $0.launchedRoutineId != nil }) {
+            return ["Baja el volumen un 15%", "Cambia a mancuernas", "¿Qué como post-entreno?"]
+        }
+        if actions.contains(where: { !$0.suggestedMeals.isEmpty }) {
+            return ["Dame una opción vegetariana", "¿A qué hora ceno hoy?", "Simula mi sueño esta noche"]
+        }
+        let low = replyText.lowercased()
+        if low.contains("vfc") || low.contains("recuperación") || low.contains("sueño") {
+            return ["Créame la rutina de hoy", "Simula si duermo 8 h", "Dime qué cenar hoy"]
+        }
+        return ["Créame la rutina de hoy", "Clavar mis macros hoy", "¿Qué pasa si ceno tarde?"]
+    }
+
     func parseConversationalReply(rawText: String, interactionId: String?, modelUsed: String) -> GeminiCoachResult {
-        var cleaned = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip accidental code fences or JSON if a model still emitted JSON
+        let extracted = Self.stripFollowUpMarker(from: rawText)
+        var cleaned = extracted.cleanText.trimmingCharacters(in: .whitespacesAndNewlines)
         for prefix in ["```json", "```JSON", "```"] {
             if cleaned.hasPrefix(prefix) { cleaned = String(cleaned.dropFirst(prefix.count)) }
         }
@@ -871,11 +1099,11 @@ extension GeminiCoachService {
                 actionLabel: nil,
                 interactionId: interactionId,
                 usedLiveCloud: true,
-                modelUsed: modelUsed
+                modelUsed: modelUsed,
+                followUpChips: extracted.chips
             )
         }
 
-        // Preserve natural paragraph breaks while sanitizing each paragraph cleanly
         let paragraphs = cleaned
             .components(separatedBy: "\n\n")
             .map { Self.sanitizeDirectHumanText($0) }
@@ -889,7 +1117,8 @@ extension GeminiCoachService {
             actionLabel: nil,
             interactionId: interactionId,
             usedLiveCloud: true,
-            modelUsed: modelUsed
+            modelUsed: modelUsed,
+            followUpChips: extracted.chips
         )
     }
 

@@ -20,7 +20,9 @@ struct AskBevelScreen: View {
     @State private var showPersonalityArchiveSheet: Bool = false
     @State private var personalitySheetInitialTab: Int = 0
     @State private var copiedMessageId: String? = nil
+    @State private var dictationBasePrefix: String = ""
     @StateObject private var speechRecognizer = SpeechDictationController()
+    @ObservedObject private var voiceSynth = CoachVoiceSynthesizer.shared
 
     private var hasUserConversation: Bool {
         !store.coachMessages.isEmpty
@@ -184,12 +186,12 @@ struct AskBevelScreen: View {
                                         .id(msg.id)
                                 }
 
-                                if store.isCoachThinking {
+                                if store.isCoachThinking && (store.coachMessages.last?.text.isEmpty ?? true) {
                                     HStack(spacing: 10) {
                                         BevelMascotOrb(size: 26)
                                         HStack(spacing: 8) {
                                             ProgressView().scaleEffect(0.85)
-                                            Text("Escribiendo con tus datos reales...")
+                                            Text("Analizando tus últimos 30 días y constantes...")
                                                 .font(ImprovingFont.caption(12.5))
                                                 .foregroundColor(BevelColors.textSecondary)
                                         }
@@ -203,6 +205,11 @@ struct AskBevelScreen: View {
                             .padding(16)
                         }
                         .scrollDismissesKeyboard(.interactively)
+                        .onChange(of: store.coachMessages.last?.text ?? "") { _, _ in
+                            if store.isCoachThinking, let last = store.coachMessages.last {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
                         .onChange(of: store.coachMessages.count) { _, _ in
                             DispatchQueue.main.async {
                                 if store.isCoachThinking {
@@ -368,8 +375,15 @@ struct AskBevelScreen: View {
 
                         Button {
                             AppHaptics.selection()
+                            if !speechRecognizer.isRecording {
+                                dictationBasePrefix = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            }
                             speechRecognizer.toggleRecording { transcript in
-                                inputText = transcript
+                                if dictationBasePrefix.isEmpty {
+                                    inputText = transcript
+                                } else {
+                                    inputText = dictationBasePrefix + " " + transcript
+                                }
                             }
                         } label: {
                             HStack(spacing: 5) {
@@ -473,6 +487,9 @@ struct AskBevelScreen: View {
             if speechRecognizer.isRecording {
                 speechRecognizer.stopRecording()
             }
+            if voiceSynth.speakingMessageId != nil {
+                voiceSynth.stop()
+            }
         }
     }
 
@@ -480,8 +497,37 @@ struct AskBevelScreen: View {
     private func coachMessageRow(_ msg: CoachChatMessage) -> some View {
         if msg.isUser {
             userMessageBubble(msg)
-        } else {
-            assistantMessageBubble(msg)
+        } else if !msg.isStreaming || !msg.text.isEmpty || !msg.appliedActions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                assistantMessageBubble(msg)
+                if !msg.isStreaming, msg.id == store.coachMessages.last?.id, !msg.followUpChips.isEmpty, !store.isCoachThinking {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 7) {
+                            ForEach(msg.followUpChips, id: \.self) { chip in
+                                Button {
+                                    AppHaptics.selection()
+                                    store.sendCoachPrompt(chip)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "sparkles")
+                                            .font(.system(size: 10, weight: .bold))
+                                        Text(chip)
+                                            .font(ImprovingFont.caption(11.5))
+                                            .fontWeight(.semibold)
+                                    }
+                                    .foregroundColor(BevelColors.skyBlue)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 7)
+                                    .background(Capsule().fill(BevelColors.skySoftBg))
+                                    .overlay(Capsule().strokeBorder(BevelColors.skyBlue.opacity(0.28), lineWidth: 0.7))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.leading, 38)
+                    }
+                }
+            }
         }
     }
 
@@ -672,7 +718,7 @@ struct AskBevelScreen: View {
                             Button {
                                 store.logSuggestedMealFromCoach(messageId: messageId, actionId: act.id, optionId: opt.id)
                             } label: {
-                                Text(opt.isLogged ? "✓ Guardada" : "+ Registrar")
+                                Text(opt.isLogged ? "✓ Deshacer" : "+ Registrar")
                                     .font(ImprovingFont.caption(11))
                                     .fontWeight(.bold)
                                     .foregroundColor(opt.isLogged ? BevelColors.greenPrimary : .white)
@@ -681,11 +727,36 @@ struct AskBevelScreen: View {
                                     .background(Capsule().fill(opt.isLogged ? BevelColors.greenSoftBg : BevelColors.indigoEnd))
                             }
                             .buttonStyle(.plain)
-                            .disabled(opt.isLogged)
                         }
                         .padding(9)
                         .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(BevelColors.card))
                     }
+                }
+            }
+
+            if let sim = act.simulationResult {
+                HStack(spacing: 6) {
+                    Text(String(format: "VFC %+.1f ms", locale: Locale(identifier: "es_ES"), sim.hrvDeltaMs))
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.bold)
+                        .foregroundColor(sim.hrvDeltaMs >= 0 ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(BevelColors.card))
+                    Text(String(format: "Profundo %+d min", sim.deepSleepDeltaMin))
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.bold)
+                        .foregroundColor(sim.deepSleepDeltaMin >= 0 ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(BevelColors.card))
+                    Text(String(format: "FCR %+.1f ppm", locale: Locale(identifier: "es_ES"), sim.rhrDeltaBpm))
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.bold)
+                        .foregroundColor(sim.rhrDeltaBpm <= 0 ? BevelColors.greenPrimary : BevelColors.coralHigh)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(BevelColors.card))
                 }
             }
         }
@@ -700,6 +771,7 @@ struct AskBevelScreen: View {
 
     private func assistantMessageFooter(_ msg: CoachChatMessage) -> some View {
         let isCopied = copiedMessageId == msg.id
+        let isSpeaking = voiceSynth.speakingMessageId == msg.id
         return HStack(spacing: 8) {
             if let model = msg.modelUsed, !model.isEmpty {
                 Text("\(msg.timestampLabel) · \(model)")
@@ -711,6 +783,23 @@ struct AskBevelScreen: View {
                     .foregroundColor(BevelColors.textMuted)
             }
             Spacer()
+            Button {
+                AppHaptics.selection()
+                voiceSynth.toggleSpeak(text: msg.text, messageId: msg.id)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isSpeaking ? "stop.circle.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Text(isSpeaking ? "Parar" : "Escuchar")
+                        .font(ImprovingFont.caption(10.5))
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(isSpeaking ? BevelColors.coralHigh : BevelColors.skyBlue)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Color.white.opacity(0.06)))
+            }
+            .buttonStyle(.plain)
             Button {
                 var full = msg.text
                 if !msg.bullets.isEmpty {

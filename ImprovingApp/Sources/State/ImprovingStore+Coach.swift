@@ -79,7 +79,13 @@ extension ImprovingStore {
         ]
 
         var metricas: [String: Any] = [:]
-        metricas["recuperacion_pct"] = av.hasRecoveryData ? (recoveryPercent as Any) : "NO_DISPONIBLE"
+        if av.hasRecoveryData {
+            metricas["recuperacion_pct"] = recoveryPercent
+        } else if hasImportedOrPairedRealData && !(d?.hasRecordedSleep ?? false) {
+            metricas["recuperacion_pct"] = "PENDIENTE_REGISTRO_SUENO"
+        } else {
+            metricas["recuperacion_pct"] = "NO_DISPONIBLE"
+        }
         metricas["esfuerzo_pct"] = av.hasStrainData ? (strainPercent as Any) : "NO_DISPONIBLE"
         metricas["strain_21"] = av.hasStrainData ? (strain21 as Any) : "NO_DISPONIBLE"
         metricas["sueno_pct"] = av.hasSleepData ? (sleepPercent as Any) : "NO_DISPONIBLE"
@@ -224,6 +230,97 @@ extension ImprovingStore {
         }
         let longTermJournalRows = computeLongTermJournalTrendsSummaryForAI()
 
+        // 7-day & 30-day longitudinal baselines so the Coach knows whether today's HRV/RHR/Sleep is high or low FOR THIS USER!
+        let trail7 = trailingCalendarSummaries(days: 7).compactMap(\.summary)
+        let trail30 = trailingCalendarSummaries(days: 30).compactMap(\.summary)
+        func meanD(_ arr: [Double]) -> Double? { arr.isEmpty ? nil : AppleHealthExportImporter.round1(arr.reduce(0, +) / Double(arr.count)) }
+        func meanI(_ arr: [Int]) -> Int? { arr.isEmpty ? nil : Int((Double(arr.reduce(0, +)) / Double(arr.count)).rounded()) }
+        let cardioLoadSnap = trainingLoadAnalysis(tab: .cardio, spanDays: 30, windowPageOffset: 0)
+        let overtrain = overtrainingAssessment
+        let hmAlert = healthMonitorAlert(for: selectedDateIso)
+        let lineasBase7d30d: [String: Any] = [
+            "vfc_media_7d_ms": meanD(trail7.compactMap(\.hrvMs)).map { $0 as Any } ?? "SIN_DATOS",
+            "vfc_media_30d_ms": meanD(trail30.compactMap(\.hrvMs)).map { $0 as Any } ?? "SIN_DATOS",
+            "fcr_media_7d_ppm": meanD(trail7.compactMap(\.restingHrBpm)).map { $0 as Any } ?? "SIN_DATOS",
+            "fcr_media_30d_ppm": meanD(trail30.compactMap(\.restingHrBpm)).map { $0 as Any } ?? "SIN_DATOS",
+            "recuperacion_media_7d_pct": meanI(trail7.compactMap { validRecoveryPct(for: $0) }).map { $0 as Any } ?? "SIN_DATOS",
+            "recuperacion_media_30d_pct": meanI(trail30.compactMap { validRecoveryPct(for: $0) }).map { $0 as Any } ?? "SIN_DATOS",
+            "sueno_medio_7d_min": meanI(trail7.compactMap(\.asleepMinutes).filter { $0 > 0 }).map { $0 as Any } ?? "SIN_DATOS",
+            "deuda_sueno_actual_min": d?.sleepDebtMinutes ?? 0,
+            "consistencia_sueno_pct": sleepConsistencyPct.map { $0 as Any } ?? "SIN_DATOS",
+            "strain_medio_7d_pct": meanI(trail7.compactMap(\.strainPct)).map { $0 as Any } ?? "SIN_DATOS",
+            "pasos_medios_7d": meanI(trail7.compactMap(\.stepsCount)).map { $0 as Any } ?? "SIN_DATOS",
+            "carga_cardio_actual": cardioLoadSnap.currentLoad,
+            "estado_carga_cardio": cardioLoadSnap.currentState.rawValue,
+            "acwr": AppleHealthExportImporter.round1(overtrain.acwr),
+            "alertas_health_monitor": hmAlert.flaggedVitals
+        ]
+
+        let entrenos7d: [[String: Any]] = trailingCalendarSummaries(days: 7).flatMap { item in
+            (item.summary?.workouts ?? []).map { w -> [String: Any] in
+                [
+                    "fecha": item.iso,
+                    "id": w.id,
+                    "titulo": w.title,
+                    "duracion_min": w.durationMin,
+                    "kcal": w.kcal,
+                    "strain_21": w.strainScore
+                ]
+            }
+        }
+
+        // Real user gym strength working weights & estimated 1RM per exercise so `create_strength_routine` never guesses random weights!
+        var seenEx = Set<String>()
+        var marcasFuerza: [[String: Any]] = []
+        for s in strengthLogs.reversed() where s.completed && s.weightKg > 0 {
+            let key = s.exercise.lowercased()
+            if seenEx.insert(key).inserted {
+                let snap = exercisePerformanceSnapshot(for: s.exercise)
+                marcasFuerza.append([
+                    "ejercicio": s.exercise,
+                    "ultimo_peso_kg": s.weightKg,
+                    "ultimas_reps": s.reps,
+                    "1rm_estimado_kg": AppleHealthExportImporter.round1(snap.bestEstimated1RM),
+                    "peso_sugerido_hoy_kg": snap.suggestedWeightKg
+                ])
+                if marcasFuerza.count >= 12 { break }
+            }
+        }
+
+        let rutinasGuardadas: [[String: Any]] = workoutRoutines.prefix(8).map { r in
+            [
+                "id": r.id,
+                "nombre": r.name,
+                "ejercicios": r.exercises.map { "\($0.name) \($0.targetSets)x\($0.targetReps) @\(Int($0.defaultWeightKg))kg" }
+            ]
+        }
+
+        // Habitual user dishes so `propose_macro_meals` prioritizes foods the user actually eats!
+        var mealFreq: [String: (count: Int, sample: NutritionMealItem)] = [:]
+        for (_, mList) in mealsByDate {
+            for m in mList where !Self.isZeroCalorieCaffeineOnlyDrink(m) {
+                let k = m.title.lowercased()
+                let cur = mealFreq[k]
+                mealFreq[k] = ((cur?.count ?? 0) + 1, m)
+            }
+        }
+        let platosHabituales: [[String: Any]] = mealFreq.values
+            .sorted { $0.count > $1.count }
+            .prefix(8)
+            .map { entry in
+                [
+                    "titulo": entry.sample.title,
+                    "veces": entry.count,
+                    "kcal": entry.sample.kcal,
+                    "proteina_g": entry.sample.proteinG,
+                    "carbos_g": entry.sample.carbsG,
+                    "grasas_g": entry.sample.fatG
+                ]
+            }
+
+        let twin = personalSensitivityTwinSnapshot
+        let radar = proactiveImmunityRadarSnapshot
+
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
         var payload: [String: Any] = [
@@ -234,6 +331,28 @@ extension ImprovingStore {
             "origen_datos": hasImportedOrPairedRealData ? "Apple Health / Sensores reales" : "Modo vista previa",
             "perfil": perfil,
             "metricas_hoy": metricas,
+            "lineas_base_7d_30d": lineasBase7d30d,
+            "entrenamientos_ultimos_7d": entrenos7d,
+            "marcas_fuerza_reales": marcasFuerza,
+            "rutinas_guardadas": rutinasGuardadas,
+            "platos_habituales_usuario": platosHabituales,
+            "gemelo_fisiologico_personal": [
+                "calibrado": twin.isCalibrated,
+                "vida_media_cafeina_h": twin.caffeineHalfLifeHours,
+                "sensibilidad_cafeina": twin.caffeineSensitivityLabel,
+                "hora_corte_cafeina": twin.recommendedCaffeineCutoffLabel,
+                "ventana_cena_optima_h": twin.optimalDinnerLeadHours,
+                "sueno_optimo_personal_h": twin.personalOptimalSleepHours,
+                "strain_sweet_spot_21": twin.personalStrainSweetSpot,
+                "resumen": twin.summaryText
+            ],
+            "radar_proactivo_y_sensacion": [
+                "nivel_riesgo_0_a_2": radar.riskLevel,
+                "titular": radar.headline,
+                "senales": radar.signals,
+                "contradiccion_subjetiva": radar.subjectiveMismatchText ?? "NINGUNA",
+                "resumen": radar.summary
+            ],
             "edad_biologica": edadBiologicaDict,
             "diario_hoy": diarioHoy,
             "nutricion_hoy": nutricionHoy,
@@ -244,6 +363,16 @@ extension ImprovingStore {
             ],
             "causalidad_cruzada_local": causalRows
         ]
+        if let micro = adaptiveMicrocycleSnapshot {
+            payload["plan_evento_microciclo"] = [
+                "objetivo": micro.plan.title,
+                "foco": micro.plan.sportFocus,
+                "fecha_meta": micro.plan.targetDateIso,
+                "dias_restantes": micro.daysRemaining,
+                "fase_actual": micro.phaseName,
+                "prescripcion_hoy": micro.todayPrescription
+            ]
+        }
         if !longTermJournalRows.isEmpty {
             payload["correlaciones_diario_30d_6m"] = longTermJournalRows
         }
@@ -389,7 +518,18 @@ extension ImprovingStore {
             isSuggestionChip: false,
             attachedPhotoFilename: attachedPhotoFilename
         )
+        let streamingMsgId = UUID().uuidString
         coachMessages.append(userMsg)
+        coachMessages.append(
+            CoachChatMessage(
+                id: streamingMsgId,
+                isUser: false,
+                text: "",
+                timestampLabel: tsLabel,
+                isSuggestionChip: false,
+                isStreaming: true
+            )
+        )
         syncCurrentChatIntoThreads(updatedAtLabel: tsLabel)
         isCoachThinking = true
         lastCoachErrorMessage = nil
@@ -401,13 +541,23 @@ extension ImprovingStore {
         let allowKeyless = allowKeylessAIFallback
         let tone = coachPersonalityTone
         let detail = coachDetailLevel
+        let autoSpeak = voiceReadoutAutoEnabled
         let userName = redactPIIFromAI ? "Usuario" : userProfile.userName
         let missing = dataAvailability.missingCategoryNames
-        let prevId = activeCoachInteractionId
         let originThreadId = activeCoachThreadId
 
         coachReplyTask?.cancel()
         coachReplyTask = Task { [weak self] in
+            let photoLoader: @Sendable (String) -> Data? = { filename in
+                MealPhotoStorage.loadPhotoData(filename: filename)
+            }
+            let streamHandler: @Sendable (String) async -> Void = { partialText in
+                await MainActor.run {
+                    guard let self, self.activeCoachThreadId == originThreadId,
+                          let idx = self.coachMessages.firstIndex(where: { $0.id == streamingMsgId }) else { return }
+                    self.coachMessages[idx].text = partialText
+                }
+            }
             let executor: @Sendable (String, String) async -> (responseJson: String, appliedAction: CoachAppliedAction?) = { toolName, argsJson in
                 await MainActor.run {
                     guard let self, self.activeCoachThreadId == originThreadId else {
@@ -430,24 +580,21 @@ extension ImprovingStore {
                 availableHighlights: ctx.highlights,
                 missingCategories: missing,
                 history: historySnap,
-                previousInteractionId: prevId,
                 jpegImageData: jpegImageData,
                 allowCloudAI: allowCloud,
                 allowKeylessFallback: allowKeyless,
                 tone: tone,
                 detailLevel: detail,
+                priorPhotoLoader: photoLoader,
+                onStreamingDelta: streamHandler,
                 actionExecutor: executor
             )
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
-                // Prevent cross-thread injection if the user switched threads mid-request!
                 guard self.activeCoachThreadId == originThreadId else { return }
                 self.isCoachThinking = false
                 if !result.usedLiveCloud && allowCloud && !key.isEmpty {
                     self.lastCoachErrorMessage = "No se pudo conectar con Gemini en vivo. Respuesta local mostrada."
-                }
-                if let newId = result.interactionId {
-                    self.activeCoachInteractionId = newId
                 }
                 if !result.appliedActions.isEmpty {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -456,26 +603,36 @@ extension ImprovingStore {
                 let replyFmt = DateFormatter()
                 replyFmt.dateFormat = "HH:mm"
                 let replyTs = replyFmt.string(from: Date())
-                self.coachMessages.append(
-                    CoachChatMessage(
-                        id: UUID().uuidString,
-                        isUser: false,
-                        verdictTitle: result.verdictTitle.isEmpty ? nil : result.verdictTitle,
-                        text: result.text,
-                        bullets: result.bullets,
-                        timestampLabel: replyTs,
-                        isSuggestionChip: false,
-                        modelUsed: result.modelUsed,
-                        appliedActions: result.appliedActions
-                    )
+                let finalMsg = CoachChatMessage(
+                    id: streamingMsgId,
+                    isUser: false,
+                    verdictTitle: result.verdictTitle.isEmpty ? nil : result.verdictTitle,
+                    text: result.text,
+                    bullets: result.bullets,
+                    timestampLabel: replyTs,
+                    isSuggestionChip: false,
+                    modelUsed: result.modelUsed,
+                    appliedActions: result.appliedActions,
+                    followUpChips: result.followUpChips,
+                    isStreaming: false
                 )
-                if result.text.count >= 40 {
+                if let idx = self.coachMessages.firstIndex(where: { $0.id == streamingMsgId }) {
+                    self.coachMessages[idx] = finalMsg
+                } else {
+                    self.coachMessages.append(finalMsg)
+                }
+                if result.usedLiveCloud && result.text.count >= 45 {
                     self.archiveAiInsight(
                         section: .hoy,
-                        emoji: "✨",
+                        emoji: "💬",
                         headline: result.verdictTitle.isEmpty ? String(prompt.prefix(44)) : result.verdictTitle,
-                        body: result.text
+                        body: result.text,
+                        customSectionRaw: "chat",
+                        customSectionTitle: "Chat Coach"
                     )
+                }
+                if autoSpeak {
+                    CoachVoiceSynthesizer.shared.speak(text: result.text, messageId: streamingMsgId)
                 }
                 self.syncCurrentChatIntoThreads(updatedAtLabel: replyTs)
             }
@@ -486,6 +643,10 @@ extension ImprovingStore {
         coachReplyTask?.cancel()
         coachReplyTask = nil
         isCoachThinking = false
+        coachMessages.removeAll { $0.isStreaming && $0.text.isEmpty }
+        for i in coachMessages.indices where coachMessages[i].isStreaming {
+            coachMessages[i].isStreaming = false
+        }
     }
 
     // MARK: - Agentic AI Tool Executor & 1-Tap Undo Engine
@@ -630,6 +791,14 @@ extension ImprovingStore {
                 caffeineMg: dblVal("caffeine_mg"),
                 alcoholDrinks: dblVal("alcohol_drinks"),
                 calciumMg: dblVal("calcium_mg"),
+                fiberG: dblVal("fiber_g"),
+                sugarG: dblVal("sugar_g"),
+                sodiumMg: dblVal("sodium_mg"),
+                potassiumMg: dblVal("potassium_mg"),
+                magnesiumMg: dblVal("magnesium_mg"),
+                ironMg: dblVal("iron_mg"),
+                vitaminDMcg: dblVal("vitamin_d_mcg"),
+                omega3G: dblVal("omega3_g"),
                 aiNotes: str("notes"),
                 photoFilename: attachedPhotoFilename,
                 emoji: emoji,
@@ -781,7 +950,9 @@ extension ImprovingStore {
             guard let nutrient = str("nutrient"), let amount = dblVal("amount"), amount > 0 else {
                 return (encodeToolResponse(["ok": false, "error": "Falta nutriente o cantidad válida."]), nil)
             }
-            let iso = resolveCoachDateIso(str("date_iso"))
+            guard let iso = parseStrictCoachDateIso(str("date_iso")) else {
+                return (encodeToolResponse(["ok": false, "error": "Fecha inválida. Usa yyyy-MM-dd, 'hoy' o 'ayer'."]), nil)
+            }
             let prevGlasses = hydrationGlassesByDate[iso]
             let prevMap = manualNutrientsByDate[iso]
             addNutrientAmount(key: nutrient, amount: amount, dateIso: iso)
@@ -942,9 +1113,213 @@ extension ImprovingStore {
                 badgeColorHex: 0x60A5FA,
                 title: "Memoria actualizada",
                 detail: note,
-                undoPayload: nil
+                undoPayload: .deleteCoachMemory(note: note)
             )
             return (encodeToolResponse(["ok": true, "saved_memory": note, "total_memories": coachMemoryNotes.count]), action)
+
+        case "manage_coach_memory":
+            let actType = (str("action") ?? "delete").lowercased()
+            guard let match = str("match_text"), !match.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Indica el recuerdo a borrar o actualizar."]), nil)
+            }
+            let prevMemories = coachMemoryNotes
+            let matchFold = fold(match)
+            guard let targetIdx = coachMemoryNotes.firstIndex(where: { fold($0).contains(matchFold) || matchFold.contains(fold($0)) }) else {
+                return (encodeToolResponse(["ok": false, "error": "No encontré ningún recuerdo que coincida con «\(match)»."]), nil)
+            }
+            let oldNote = coachMemoryNotes[targetIdx]
+            if actType == "replace", let newNote = str("new_note"), !newNote.isEmpty {
+                coachMemoryNotes[targetIdx] = newNote
+                persistState()
+                let action = CoachAppliedAction(
+                    id: UUID().uuidString,
+                    icon: "brain.head.profile",
+                    badgeColorHex: 0x60A5FA,
+                    title: "Recuerdo actualizado",
+                    detail: "\(oldNote) → \(newNote)",
+                    undoPayload: .restoreCoachMemories(notes: prevMemories)
+                )
+                return (encodeToolResponse(["ok": true, "updated_from": oldNote, "updated_to": newNote]), action)
+            } else {
+                coachMemoryNotes.remove(at: targetIdx)
+                persistState()
+                let action = CoachAppliedAction(
+                    id: UUID().uuidString,
+                    icon: "trash.fill",
+                    badgeColorHex: 0xF97316,
+                    title: "Recuerdo eliminado",
+                    detail: oldNote,
+                    undoPayload: .restoreCoachMemories(notes: prevMemories)
+                )
+                return (encodeToolResponse(["ok": true, "deleted_memory": oldNote]), action)
+            }
+
+        case "update_strength_routine":
+            let rId = str("routine_id")
+            let matchName = str("match_name").map(fold)
+            let targetRoutine: WorkoutRoutineTemplate? = {
+                if let id = rId, !id.isEmpty, let found = workoutRoutines.first(where: { $0.id == id }) { return found }
+                if let mn = matchName, !mn.isEmpty {
+                    return workoutRoutines.first(where: { fold($0.name) == mn })
+                        ?? workoutRoutines.first(where: { fold($0.name).contains(mn) })
+                }
+                return workoutRoutines.first
+            }()
+            guard let original = targetRoutine else {
+                return (encodeToolResponse(["ok": false, "error": "No encontré ninguna rutina guardada para actualizar."]), nil)
+            }
+            func resolveMuscleUpd(_ raw: String?) -> MuscleGroupKind {
+                let low = fold(raw ?? "")
+                if low.contains("pecho") || low.contains("pector") { return .pectorales }
+                if low.contains("dorsal") || low.contains("espalda") { return .dorsales }
+                if low.contains("hombro") || low.contains("deltoid") { return .hombros }
+                if low.contains("cuadr") || low.contains("pierna") { return .cuadriceps }
+                if low.contains("isquio") || low.contains("femoral") { return .isquiotibiales }
+                if low.contains("glute") { return .gluteos }
+                if low.contains("bicep") { return .biceps }
+                if low.contains("tricep") { return .triceps }
+                if low.contains("abdom") || low.contains("core") { return .abdominales }
+                if low.contains("gemelo") || low.contains("pantorr") { return .pantorrillas }
+                return .pectorales
+            }
+            var updated = original
+            if let nn = str("new_name"), !nn.isEmpty { updated.name = nn }
+            if let rawEx = args["exercises"] as? [[String: Any]], !rawEx.isEmpty {
+                let parsedEx: [WorkoutRoutineExercise] = rawEx.prefix(8).compactMap { item in
+                    guard let exName = (item["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !exName.isEmpty else { return nil }
+                    let sets = min(max((item["sets"] as? Int) ?? Int(item["sets"] as? Double ?? 3), 1), 8)
+                    let reps = min(max((item["reps"] as? Int) ?? Int(item["reps"] as? Double ?? 10), 1), 30)
+                    let wRaw = (item["weight_kg"] as? Double) ?? Double(item["weight_kg"] as? Int ?? 0)
+                    let snap = exercisePerformanceSnapshot(for: exName)
+                    let weight = wRaw > 0 ? wRaw : (snap.totalHistoricalSets > 0 ? snap.suggestedWeightKg : 20.0)
+                    let m = resolveMuscleUpd(item["primary_muscle"] as? String)
+                    return WorkoutRoutineExercise(
+                        id: UUID().uuidString,
+                        name: exName,
+                        targetSets: sets,
+                        targetReps: reps,
+                        defaultWeightKg: weight,
+                        primaryMuscles: [m],
+                        secondaryMuscles: []
+                    )
+                }
+                if !parsedEx.isEmpty { updated.exercises = parsedEx }
+            }
+            saveRoutine(updated)
+            let summaryEx = updated.exercises.prefix(4).map { "\($0.name) \($0.targetSets)×\($0.targetReps)" }.joined(separator: " · ")
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "dumbbell.fill",
+                badgeColorHex: 0x6E95F5,
+                title: "Rutina actualizada: \(updated.name)",
+                detail: summaryEx,
+                undoPayload: .restoreRoutine(routine: original),
+                launchedRoutineId: updated.id
+            )
+            return (encodeToolResponse(["ok": true, "routine_id": updated.id, "name": updated.name]), action)
+
+        case "set_goal_and_sleep_mode":
+            let prevMode = globalGoalMode
+            let prevSleep = sleepGoalPct
+            var bits: [String] = []
+            if let gmRaw = str("goal_mode"), !gmRaw.isEmpty {
+                let gmFold = fold(gmRaw)
+                if let matched = GlobalGoalMode.allCases.first(where: { fold($0.rawValue).contains(gmFold) || gmFold.contains(fold($0.rawValue)) }) {
+                    setGlobalGoalMode(matched)
+                    bits.append("Modo \(matched.emoji) \(matched.rawValue)")
+                }
+            }
+            if let sm = intVal("sleep_mode_pct"), [70, 85, 100].contains(sm) {
+                sleepGoalPct = sm
+                bits.append("Sueño \(sm)%")
+            }
+            if let dl = boolVal("auto_deload") {
+                toggleAutoDeloadMode(dl)
+                bits.append(dl ? "Descarga ON" : "Descarga OFF")
+            }
+            guard !bits.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Indica modo global, modo de sueño o estado de descarga."]), nil)
+            }
+            persistState()
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "sparkles",
+                badgeColorHex: 0x38D9B5,
+                title: "Configuración fisiológica ajustada",
+                detail: bits.joined(separator: " · "),
+                undoPayload: .restoreGoalAndSleepMode(goalMode: prevMode, sleepGoalPct: prevSleep)
+            )
+            return (encodeToolResponse(["ok": true, "applied": bits.joined(separator: ", ")]), action)
+
+        case "simulate_what_if_scenario":
+            let twin = personalSensitivityTwinSnapshot
+            let input = WhatIfScenarioInput(
+                sleepHours: min(max(dblVal("sleep_hours") ?? twin.personalOptimalSleepHours, 3.5), 11.0),
+                alcoholDrinks: min(max(dblVal("alcohol_drinks") ?? 0.0, 0.0), 10.0),
+                caffeineMg: min(max(dblVal("caffeine_mg") ?? 0.0, 0.0), 500.0),
+                caffeineHour: min(max(intVal("caffeine_hour") ?? 16, 5), 23),
+                dinnerLeadHours: min(max(dblVal("dinner_lead_hours") ?? twin.optimalDinnerLeadHours, 0.5), 6.0),
+                highStrainSession: boolVal("high_strain_session") ?? false,
+                magnesiumOrSauna: boolVal("magnesium_or_sauna") ?? false
+            )
+            let sim = simulateWhatIf(input)
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "waveform.path.ecg.rectangle",
+                badgeColorHex: sim.predictedRecoveryPct >= 67 ? 0x3BD671 : (sim.predictedRecoveryPct >= 34 ? 0xF5B942 : 0xF97316),
+                title: sim.verdictTitle,
+                detail: sim.explanation,
+                undoPayload: nil,
+                simulationResult: sim
+            )
+            return (encodeToolResponse([
+                "ok": true,
+                "predicted_recovery_pct": sim.predictedRecoveryPct,
+                "recovery_delta_pct": sim.recoveryDeltaPct,
+                "hrv_delta_ms": sim.hrvDeltaMs,
+                "deep_sleep_delta_min": sim.deepSleepDeltaMin,
+                "rhr_delta_bpm": sim.rhrDeltaBpm,
+                "residual_caffeine_mg": sim.residualCaffeineAtBedMg,
+                "mitigations": sim.mitigationSteps
+            ]), action)
+
+        case "generate_weekly_microcycle":
+            guard let title = str("title"), !title.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Indica el nombre del objetivo o evento."]), nil)
+            }
+            let rawTarget = str("target_date_iso")
+            let validTarget: String = {
+                if let r = rawTarget, let parsed = parseStrictCoachDateIso(r), r != "hoy" && r != "ayer" {
+                    return parsed
+                }
+                let fallback = Calendar.current.date(byAdding: .day, value: 42, to: Date()) ?? Date()
+                return isoFormatter.string(from: fallback)
+            }()
+            let prevPlan = activeGoalEventPlan
+            let plan = GoalEventPlan(
+                id: "goal_\(UUID().uuidString.prefix(8))",
+                title: title,
+                sportFocus: str("sport_focus") ?? "Híbrido / Rendimiento",
+                targetDateIso: validTarget,
+                createdAtIso: isoFormatter.string(from: Date()),
+                notes: str("notes") ?? ""
+            )
+            setGoalEventPlan(plan)
+            let micro = adaptiveMicrocycleSnapshot
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "flag.checkered",
+                badgeColorHex: 0xA78BFA,
+                title: "Microciclo activo: \(plan.title)",
+                detail: micro.map { "\($0.phaseName) · Meta \(plan.targetDateIso) (\($0.daysRemaining)d)" } ?? "Meta \(plan.targetDateIso)",
+                undoPayload: .restoreGoalEventPlan(previous: prevPlan)
+            )
+            return (encodeToolResponse([
+                "ok": true,
+                "goal_id": plan.id,
+                "phase": micro?.phaseName ?? "",
+                "today_prescription": micro?.todayPrescription ?? ""
+            ]), action)
 
         case "create_strength_routine":
             guard let name = str("name"), !name.isEmpty,
@@ -1250,6 +1625,24 @@ extension ImprovingStore {
         case .deleteRoutine(let routineId):
             deleteRoutine(routineId)
 
+        case .restoreRoutine(let routine):
+            saveRoutine(routine)
+
+        case .deleteCoachMemory(let note):
+            removeCoachMemoryNote(note)
+
+        case .restoreCoachMemories(let notes):
+            coachMemoryNotes = notes
+            persistState()
+
+        case .restoreGoalAndSleepMode(let gMode, let sleepPct):
+            setGlobalGoalMode(gMode)
+            sleepGoalPct = sleepPct
+            persistState()
+
+        case .restoreGoalEventPlan(let previous):
+            setGoalEventPlan(previous)
+
         case .deleteWorkout(let workoutId, let dateIso):
             deleteWorkout(id: workoutId, dateIso: dateIso)
 
@@ -1286,12 +1679,28 @@ extension ImprovingStore {
     func logSuggestedMealFromCoach(messageId: String, actionId: String, optionId: String) {
         guard let mIdx = coachMessages.firstIndex(where: { $0.id == messageId }),
               let aIdx = coachMessages[mIdx].appliedActions.firstIndex(where: { $0.id == actionId }),
-              let oIdx = coachMessages[mIdx].appliedActions[aIdx].suggestedMeals.firstIndex(where: { $0.id == optionId }),
-              !coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].isLogged else { return }
+              let oIdx = coachMessages[mIdx].appliedActions[aIdx].suggestedMeals.firstIndex(where: { $0.id == optionId }) else { return }
 
         let opt = coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx]
+        // Toggle support: if already logged, 1-tap unlogs/undoes it cleanly!
+        if opt.isLogged {
+            if let mid = opt.loggedMealId {
+                deleteMeal(id: mid, for: opt.loggedDateIso ?? selectedDateIso)
+            }
+            coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].isLogged = false
+            coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].loggedMealId = nil
+            coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].loggedDateIso = nil
+            if let activeId = activeCoachThreadId, let tIdx = coachThreads.firstIndex(where: { $0.id == activeId }) {
+                coachThreads[tIdx].messages = coachMessages
+            }
+            AppHaptics.selection()
+            persistState()
+            return
+        }
+
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
+        let targetIso = selectedDateIso
         let meal = NutritionMealItem(
             id: UUID().uuidString,
             title: opt.title,
@@ -1304,8 +1713,10 @@ extension ImprovingStore {
             fiberG: opt.fiberG,
             emoji: opt.emoji
         )
-        saveMeal(meal, for: selectedDateIso)
+        saveMeal(meal, for: targetIso)
         coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].isLogged = true
+        coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].loggedMealId = meal.id
+        coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].loggedDateIso = targetIso
         if let activeId = activeCoachThreadId, let tIdx = coachThreads.firstIndex(where: { $0.id == activeId }) {
             coachThreads[tIdx].messages = coachMessages
         }

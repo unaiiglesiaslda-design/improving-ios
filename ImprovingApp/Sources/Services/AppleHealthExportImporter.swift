@@ -682,7 +682,9 @@ enum AppleHealthExportImporter {
                 floorSigma: WhoopPhysiologyEngine.baselineFloorRespSigma
             )
 
-            let recPct = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+            // WHOOP rule: Never compute or show a Recovery % until real sleep has been recorded for that day!
+            let hasSleepForRecovery = (asleepOrNil ?? 0) > 0 || sleepPct != nil || sleepSession != nil
+            let recPct: Int? = hasSleepForRecovery ? WhoopPhysiologyEngine.computeBevelRecoveryPercent(
                 hrvMs: hrvMs,
                 rhrBpm: rhrBpm,
                 respRpm: respRate,
@@ -693,7 +695,7 @@ enum AppleHealthExportImporter {
                 respBaseline: respBase,
                 profile: profile,
                 sleepPct: sleepPct
-            )
+            ) : nil
 
             // Update causal history AFTER scoring day i
             if let h = hrvMs, h > 2.0 {

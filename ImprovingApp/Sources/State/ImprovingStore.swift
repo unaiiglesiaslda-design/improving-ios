@@ -81,6 +81,8 @@ final class ImprovingStore: ObservableObject {
         var coachDetailLevel: CoachDetailLevel?
         var archivedAiInsights: [ArchivedAiInsight]?
         var dynamicStrainNutritionEnabled: Bool?
+        var activeGoalEventPlan: GoalEventPlan?
+        var voiceReadoutAutoEnabled: Bool?
     }
 
     static weak var activeSharedStore: ImprovingStore?
@@ -139,6 +141,8 @@ final class ImprovingStore: ObservableObject {
     @Published var coachDetailLevel: CoachDetailLevel = .equilibrado
     @Published var archivedAiInsights: [ArchivedAiInsight] = []
     @Published var dynamicStrainNutritionEnabled: Bool = true
+    @Published var activeGoalEventPlan: GoalEventPlan? = nil
+    @Published var voiceReadoutAutoEnabled: Bool = false
     @Published var pendingLaunchRoutine: WorkoutRoutineTemplate? = nil
     @Published var visibleTabs: Set<MainTab> = Set(MainTab.allCases)
 
@@ -411,10 +415,19 @@ final class ImprovingStore: ObservableObject {
         AppFormatters.shortMonthYearEs.string(from: selectedDate).replacingOccurrences(of: ".", with: "")
     }
 
+    /// Strictly sleep-gated Recovery %: in real-data mode, Recovery NEVER exists until sleep is recorded for that date!
+    func validRecoveryPct(for day: RealBiometricDaySummary?) -> Int? {
+        guard let d = day, let rec = d.recoveryPct else { return nil }
+        if hasImportedOrPairedRealData && !d.hasRecordedSleep {
+            return nil
+        }
+        return rec
+    }
+
     var dataAvailability: DataAvailabilitySnapshot {
         let d = currentDaySummary
         return DataAvailabilitySnapshot(
-            hasRecoveryData: d?.recoveryPct != nil,
+            hasRecoveryData: validRecoveryPct(for: d) != nil,
             hasStrainData: d?.strainPct != nil,
             hasSleepData: (d?.asleepMinutes ?? 0) > 0 || d?.sleepPct != nil,
             hasHrvData: d?.hrvMs != nil,
@@ -432,7 +445,7 @@ final class ImprovingStore: ObservableObject {
 
     var strainPercent: Int { currentDaySummary?.strainPct ?? 0 }
     var strain21: Double { currentDaySummary?.strain21 ?? 0 }
-    var recoveryPercent: Int { currentDaySummary?.recoveryPct ?? 0 }
+    var recoveryPercent: Int { validRecoveryPct(for: currentDaySummary) ?? 0 }
     var sleepPercent: Int { currentDaySummary?.sleepPct ?? 0 }
     var hrvMs: Double { currentDaySummary?.hrvMs ?? 0 }
     var restingHrBpm: Double { currentDaySummary?.restingHrBpm ?? 0 }
@@ -894,12 +907,21 @@ final class ImprovingStore: ObservableObject {
         persistState()
     }
 
-    func archiveAiInsight(section: CoachingSection, emoji: String, headline: String, body: String) {
+    func archiveAiInsight(
+        section: CoachingSection,
+        emoji: String,
+        headline: String,
+        body: String,
+        customSectionRaw: String? = nil,
+        customSectionTitle: String? = nil
+    ) {
         let cleanHeadline = headline.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanHeadline.isEmpty, !cleanBody.isEmpty, !cleanHeadline.hasPrefix("Sin lecturas") else { return }
+        let secRaw = customSectionRaw ?? section.rawValue
+        let secTitle = customSectionTitle ?? section.displayName
         if let first = archivedAiInsights.first,
-           first.sectionRaw == section.rawValue,
+           first.sectionRaw == secRaw,
            first.dateIso == selectedDateIso,
            first.headline == cleanHeadline {
             return
@@ -907,8 +929,8 @@ final class ImprovingStore: ObservableObject {
         let entry = ArchivedAiInsight(
             id: UUID().uuidString,
             dateIso: selectedDateIso,
-            sectionRaw: section.rawValue,
-            sectionTitle: section.displayName,
+            sectionRaw: secRaw,
+            sectionTitle: secTitle,
             emoji: emoji,
             headline: cleanHeadline,
             body: cleanBody,
@@ -1256,13 +1278,13 @@ final class ImprovingStore: ObservableObject {
                 prior28Strains.append(Double(st))
                 if back <= 3 { recent3Strains.append(Double(st)) }
             }
-            if back <= 7, recent7Rec == nil, let r = day.recoveryPct {
+            if back <= 7, recent7Rec == nil, let r = validRecoveryPct(for: day) {
                 recent7Rec = r
             }
         }
 
         let targetDay = activeHistory[targetIso]
-        let recBasis: Int = targetDay?.recoveryPct ?? recent7Rec ?? 65
+        let recBasis: Int = validRecoveryPct(for: targetDay) ?? recent7Rec ?? 65
         let baseMean: Double? = prior28Strains.isEmpty ? nil : (prior28Strains.reduce(0, +) / Double(prior28Strains.count))
         let r3Mean: Double? = recent3Strains.isEmpty ? nil : (recent3Strains.reduce(0, +) / Double(recent3Strains.count))
 
@@ -1292,14 +1314,21 @@ final class ImprovingStore: ObservableObject {
             unhealthyVitalsCount: vitalAlert.count
         )
         let deloadMult = autoDeloadModeActive ? 0.85 : 1.0
+        let subjMismatchMult: Double = {
+            let jMap = journalCheckinsByDate[targetIso] ?? [:]
+            let hasSickOrInjury = jMap["fever"] == .yes || jMap["illness"] == .yes || jMap["injury"] == .yes
+            let lowMood = (journalMoodByDate[targetIso] ?? 3) <= 2
+            return (hasSickOrInjury || lowMood) ? 0.82 : 1.0
+        }()
         let weatherCapMult: Double = {
             guard targetIso == isoFormatter.string(from: Date()),
                   let w = weatherSnapshot, w.strainAdjustmentPct > 0 else { return 1.0 }
             return max(0.82, 1.0 - Double(w.strainAdjustmentPct) / 100.0)
         }()
         let modeDelta = globalGoalMode.strainAdjustmentDelta
-        let adjLow = min(max((baseRange.lowerBound + modeDelta * 0.6) * deloadMult * weatherCapMult, 0.10), 0.78)
-        let adjHigh = min(max((baseRange.upperBound + modeDelta) * deloadMult * weatherCapMult, adjLow + 0.12), 0.96)
+        let combinedMult = deloadMult * subjMismatchMult * weatherCapMult
+        let adjLow = min(max((baseRange.lowerBound + modeDelta * 0.6) * combinedMult, 0.10), 0.78)
+        let adjHigh = min(max((baseRange.upperBound + modeDelta) * combinedMult, adjLow + 0.12), 0.96)
         let range = adjLow...adjHigh
         let res = (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
         cachedEffortTargets[cacheKey] = res
@@ -1401,7 +1430,8 @@ final class ImprovingStore: ObservableObject {
     var effortTargetCalibrationCaption: String {
         let info = personalizedEffortTarget(for: selectedDateIso)
         let alert = healthMonitorAlert(for: selectedDateIso)
-        var parts: [String] = ["Rec. \(info.recBasis)%"]
+        let recLabel = dataAvailability.hasRecoveryData ? "Rec. \(info.recBasis)%" : "Sin sueño registrado (base \(info.recBasis)%)"
+        var parts: [String] = [recLabel]
         parts.append("Modo \(globalGoalMode.rawValue)")
         if autoDeloadModeActive {
             parts.append("Descarga -15%")
@@ -1503,6 +1533,131 @@ final class ImprovingStore: ObservableObject {
             deloadAlertText: deload.riskLevel >= 1 ? "\(deload.statusTitle) (ACWR \(String(format: "%.2f", locale: Locale(identifier: "es_ES"), deload.acwr)))" : nil,
             goalMode: globalGoalMode
         )
+    }
+
+    // MARK: - Hyper-Personalized Twin, Immunity Radar, Evening Check-In, Post-Workout Audit & Adaptive Periodization
+
+    var personalSensitivityTwinSnapshot: PersonalSensitivityTwinSnapshot {
+        let plan = computedSleepPlan
+        return WhoopPhysiologyEngine.computePersonalSensitivityTwin(
+            history: activeHistory,
+            mealsByDate: mealsByDate,
+            profile: userProfile,
+            bedtimeMinuteOfDay: plan.bedtimeHour * 60 + plan.bedtimeMinute
+        )
+    }
+
+    var proactiveImmunityRadarSnapshot: ProactiveImmunityRadarSnapshot {
+        let trailing60 = trailingCalendarSummaries(days: 60).compactMap(\.summary)
+        let jMap = journalCheckinsByDate[selectedDateIso] ?? [:]
+        let mood = journalMoodByDate[selectedDateIso]
+        let note = journalNote(for: selectedDateIso)
+        return WhoopPhysiologyEngine.computeProactiveImmunityRadar(
+            todaySummary: currentDaySummary,
+            trailing60Summaries: trailing60,
+            acwr: overtrainingAssessment.acwr,
+            journalToday: jMap,
+            moodToday: mood,
+            noteToday: note
+        )
+    }
+
+    func applyImmunityProtectiveProtocol() {
+        autoDeloadModeActive = true
+        sleepGoalPct = 100
+        let extraMl = Double(max(proactiveImmunityRadarSnapshot.extraHydrationMl, 400))
+        addNutrientAmount(key: "hidratacion", amount: extraMl, dateIso: selectedDateIso)
+        invalidateSectionCoachingCache(sections: [.hoy, .esfuerzo, .recuperacion, .diario])
+        AppHaptics.success()
+        dataRevision += 1
+        persistState()
+    }
+
+    var eveningCheckInSnapshot: EveningCheckInSnapshot {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let isEvening = dayOffset == 0 && (hour >= 19 || hour < 3)
+        let goals = effectiveNutritionGoals
+        let remProt = max(goals.proteinG - totalProteinToday, 0)
+        let remKcal = max(goals.kcal - totalCaloriesToday, 0)
+        let caffRes = Int(caffeineWindowSnapshot.residualAtBedtimeMg.rounded())
+        let plan = computedSleepPlan
+        let bedMin = plan.bedtimeHour * 60 + plan.bedtimeMinute
+        let twin = personalSensitivityTwinSnapshot
+        let dinnerCutMin = (((bedMin - Int((twin.optimalDinnerLeadHours * 60.0).rounded())) % 1440) + 1440) % 1440
+        let dinnerCutLbl = String(format: "%02d:%02d", dinnerCutMin / 60, dinnerCutMin % 60)
+
+        var bits: [String] = []
+        if remProt > 12 {
+            bits.append("te faltan \(remProt) g de proteína (\(remKcal) kcal)")
+        } else {
+            bits.append("proteína objetivo cubierta")
+        }
+        bits.append(caffRes <= 20 ? "cafeína limpia al dormir (\(caffRes) mg)" : "cafeína residual estimada \(caffRes) mg")
+        bits.append("cena ideal antes de las \(dinnerCutLbl) · dormir \(plan.bedtimeLabel)")
+
+        return EveningCheckInSnapshot(
+            isEveningWindow: isEvening,
+            headline: "Cierre nocturno · Protege tu recuperación de mañana",
+            remainingProteinG: remProt,
+            remainingKcal: remKcal,
+            residualCaffeineMg: caffRes,
+            dinnerCutoffLabel: dinnerCutLbl,
+            recommendedBedtimeLabel: plan.bedtimeLabel,
+            summaryText: bits.joined(separator: " · ").prefix(1).uppercased() + bits.joined(separator: " · ").dropFirst() + "."
+        )
+    }
+
+    func postWorkoutAudit(for workout: EffortEventItem) -> PostWorkoutPhysiologyAudit {
+        let iso = workout.dateIso ?? selectedDateIso
+        let day = activeHistory[iso]
+        let rec = validRecoveryPct(for: day)
+        let samples = workoutIntradaySamples(for: workout)
+        let isToday = iso == isoFormatter.string(from: Date())
+        return WhoopPhysiologyEngine.computePostWorkoutAudit(
+            workout: workout,
+            recoveryPct: rec,
+            profile: userProfile,
+            weather: isToday ? weatherSnapshot : nil,
+            intradayHrSamples: samples
+        )
+    }
+
+    func simulateWhatIf(_ input: WhatIfScenarioInput) -> WhatIfSimulationResult {
+        let twin = personalSensitivityTwinSnapshot
+        let hrvBand = personalVitalNormalBand(for: .hrv)
+        let rhrBand = personalVitalNormalBand(for: .restingHeartRate)
+        let baseHrv = dataAvailability.hasHrvData ? hrvMs : ((hrvBand.low + hrvBand.high) / 2.0)
+        let baseRhr = dataAvailability.hasRestingHrData ? restingHrBpm : ((rhrBand.low + rhrBand.high) / 2.0)
+        let curRec = dataAvailability.hasRecoveryData ? recoveryPercent : 68
+        let plan = computedSleepPlan
+        return WhoopPhysiologyEngine.simulateWhatIfScenario(
+            input: input,
+            currentRecoveryPct: curRec,
+            baseHrvMs: baseHrv,
+            baseRhrBpm: baseRhr,
+            twin: twin,
+            bedtimeMinuteOfDay: plan.bedtimeHour * 60 + plan.bedtimeMinute
+        )
+    }
+
+    var adaptiveMicrocycleSnapshot: AdaptiveMicrocycleSnapshot? {
+        guard let plan = activeGoalEventPlan else { return nil }
+        let rec = validRecoveryPct(for: currentDaySummary)
+        let fresh = muscleGroupSnapshots().filter { $0.state == .recovered || $0.freshnessPct >= 80 }.map(\.muscle.rawValue)
+        return WhoopPhysiologyEngine.computeAdaptiveMicrocycle(
+            plan: plan,
+            anchorDate: selectedDate,
+            recoveryPct: rec,
+            freshMuscles: fresh,
+            autoDeload: autoDeloadModeActive
+        )
+    }
+
+    func setGoalEventPlan(_ plan: GoalEventPlan?) {
+        activeGoalEventPlan = plan
+        invalidateSectionCoachingCache(sections: [.hoy, .fitness, .esfuerzo])
+        dataRevision += 1
+        persistState()
     }
 
 }

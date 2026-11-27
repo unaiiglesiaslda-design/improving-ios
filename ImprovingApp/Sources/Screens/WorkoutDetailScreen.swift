@@ -138,6 +138,9 @@ struct WorkoutDetailScreen: View {
                         }
                     }
 
+                    // 1B. Automatic Post-Workout AI Physiological Audit (Cardiac Drift + Exact Carb/Electrolyte Refill)
+                    PostWorkoutPhysiologyAuditCard(audit: store.postWorkoutAudit(for: w))
+
                     // 2. Heart Rate Zones Breakdown (Z0 - Z5)
                     BevelCard(cornerRadius: 20) {
                         VStack(alignment: .leading, spacing: 12) {

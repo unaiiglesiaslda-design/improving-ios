@@ -33,6 +33,14 @@ extension GeminiCoachService {
           "protein_g": 32,
           "carbs_g": 42,
           "fat_g": 24,
+          "fiber_g": 6.5,
+          "sugar_g": 4.0,
+          "sodium_mg": 420,
+          "potassium_mg": 580,
+          "magnesium_mg": 65,
+          "iron_mg": 2.4,
+          "vitamin_d_mcg": 1.2,
+          "omega3_g": 0.6,
           "caffeine_mg": 0,
           "alcohol_drinks": 0,
           "calcium_mg": 85,
@@ -116,7 +124,7 @@ extension GeminiCoachService {
 
         var genConfig: [String: Any] = [
             "temperature": 0.25,
-            "maxOutputTokens": 650,
+            "maxOutputTokens": 1500,
             "responseMimeType": "application/json"
         ]
         if model.hasPrefix("gemini-2.5-flash") {
@@ -184,6 +192,14 @@ extension GeminiCoachService {
         let caff = max(0, dblVal(["caffeine_mg", "caffeineMg", "cafeina_mg"]))
         let alc = max(0, dblVal(["alcohol_drinks", "alcoholDrinks", "bebidas_alcohol"]))
         let calc = max(0, dblVal(["calcium_mg", "calciumMg", "calcio_mg"]))
+        let fib = max(0, dblVal(["fiber_g", "fiberG", "fibra_g"]))
+        let sug = max(0, dblVal(["sugar_g", "sugarG", "azucar_g"]))
+        let sod = max(0, dblVal(["sodium_mg", "sodiumMg", "sodio_mg"]))
+        let pot = max(0, dblVal(["potassium_mg", "potassiumMg", "potasio_mg"]))
+        let mag = max(0, dblVal(["magnesium_mg", "magnesiumMg", "magnesio_mg"]))
+        let irn = max(0, dblVal(["iron_mg", "ironMg", "hierro_mg"]))
+        let vitD = max(0, dblVal(["vitamin_d_mcg", "vitaminDMcg", "vitamina_d_mcg"]))
+        let om3 = max(0, dblVal(["omega3_g", "omega3G", "omega_3_g"]))
         let q = min(max(intVal(["quality_score", "qualityScore", "calidad"], default: 80), 10), 100)
         let rawEmoji = (obj["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let emoji = rawEmoji.isEmpty ? Self.inferEmoji(forTitle: rawTitle) : String(rawEmoji.prefix(2))
@@ -225,6 +241,14 @@ extension GeminiCoachService {
             caffeineMg: caff,
             alcoholDrinks: alc,
             calciumMg: calc,
+            fiberG: fib,
+            sugarG: sug,
+            sodiumMg: sod,
+            potassiumMg: pot,
+            magnesiumMg: mag,
+            ironMg: irn,
+            vitaminDMcg: vitD,
+            omega3G: om3,
             qualityScore: q,
             qualityFactors: parsedFactors,
             aiSummary: summary,
@@ -446,7 +470,11 @@ extension GeminiCoachService {
         apiKey: String,
         selectedModel: String,
         allowCloudAI: Bool = true,
-        allowKeylessFallback: Bool = false
+        allowKeylessFallback: Bool = false,
+        tone: CoachPersonalityTone = .directo,
+        detailLevel: CoachDetailLevel = .equilibrado,
+        memoryNotes: [String] = [],
+        goalMode: GlobalGoalMode = .longevidad
     ) async -> WeeklyAiReviewInsight {
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
@@ -481,8 +509,13 @@ extension GeminiCoachService {
             return s
         }()
 
+        let memBlock = memoryNotes.isEmpty ? "" : "\nMEMORIA PERMANENTE DEL ATLETA: \(memoryNotes.joined(separator: " | "))"
         let sysPrompt = """
-        Eres el fisiólogo deportivo de \(name) en Improving. Analiza su semana real frente a los 7 días anteriores y devuelve EXCLUSIVAMENTE un JSON válido:
+        Eres el fisiólogo deportivo de \(name) en Improving.
+        PERSONALIDAD CONFIGURADA: \(tone.systemDirective)
+        NIVEL DE DETALLE: \(detailLevel.systemDirective)
+        \(goalMode.coachSystemDirective)\(memBlock)
+        Analiza su semana real frente a los 7 días anteriores y devuelve EXCLUSIVAMENTE un JSON válido:
         {
           "headline": "Titular corto y directo de máximo 9 palabras resumiendo la semana",
           "takeaways": [
@@ -638,7 +671,7 @@ extension GeminiCoachService {
         """
         let userPrompt = trimmedText.isEmpty
             ? "Extrae todos los biomarcadores numéricos reales de estas páginas de analítica de sangre."
-            : "Extrae todos los biomarcadores numéricos reales de esta analítica de sangre:\n\n\(String(trimmedText.prefix(12000)))"
+            : "Extrae todos los biomarcadores numéricos reales de esta analítica de sangre:\n\n\(String(trimmedText.prefix(24000)))"
 
         if allowCloudAI && !cleanKey.isEmpty {
             let candidates = await resolveCandidateModels(apiKey: cleanKey, selectedModel: selectedModel, forceDiscovery: false)
@@ -646,10 +679,10 @@ extension GeminiCoachService {
                 let res = await callGeminiMultiImageJson(
                     prompt: userPrompt,
                     sysPrompt: sysPrompt,
-                    jpegImagesData: Array(pageImagesData.prefix(4)),
+                    jpegImagesData: Array(pageImagesData.prefix(8)),
                     apiKey: cleanKey,
                     model: m,
-                    maxOutputTokens: 2200
+                    maxOutputTokens: 6144
                 )
                 if let raw = res.text, let parsed = Self.parseLabReportJson(raw, sourceLabel: "Gemini \(m)") {
                     return (parsed, nil)
@@ -710,7 +743,7 @@ extension GeminiCoachService {
             "contents": [["role": "user", "parts": userParts]],
             "generationConfig": genConfig
         ]
-        let resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: body, timeout: 36)
+        let resp = await sendSingleGeminiGenerateRequest(url: url, apiKey: apiKey, body: body, timeout: 52)
         guard let parts = resp.parts else { return (nil, resp.statusCode) }
         let joined = parts.compactMap { part -> String? in
             if (part["thought"] as? Bool) == true { return nil }

@@ -1130,6 +1130,14 @@ struct AnalyzedMealEstimate: Equatable {
     var caffeineMg: Double
     var alcoholDrinks: Double
     var calciumMg: Double
+    var fiberG: Double = 0
+    var sugarG: Double = 0
+    var sodiumMg: Double = 0
+    var potassiumMg: Double = 0
+    var magnesiumMg: Double = 0
+    var ironMg: Double = 0
+    var vitaminDMcg: Double = 0
+    var omega3G: Double = 0
     var qualityScore: Int
     var qualityFactors: NutritionQualityFactors = NutritionQualityFactors()
     var aiSummary: String
@@ -1205,6 +1213,11 @@ enum CoachUndoPayload: Codable, Equatable, Hashable {
     case restoreWorkout(workout: EffortEventItem, dateIso: String)
     case restoreBodyMeasurement(dateIso: String, prevWeight: Double?, prevFat: Double?, prevLean: Double?, prevSys: Int?, prevDia: Int?)
     case deleteRoutine(routineId: String)
+    case restoreRoutine(routine: WorkoutRoutineTemplate)
+    case deleteCoachMemory(note: String)
+    case restoreCoachMemories(notes: [String])
+    case restoreGoalAndSleepMode(goalMode: GlobalGoalMode, sleepGoalPct: Int)
+    case restoreGoalEventPlan(previous: GoalEventPlan?)
 }
 
 struct CoachSuggestedMealOption: Identifiable, Codable, Equatable, Hashable {
@@ -1219,6 +1232,59 @@ struct CoachSuggestedMealOption: Identifiable, Codable, Equatable, Hashable {
     let fiberG: Double
     let qualityScore: Int
     var isLogged: Bool = false
+    var loggedMealId: String? = nil
+    var loggedDateIso: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, emoji, description, kcal, proteinG, carbsG, fatG, fiberG, qualityScore, isLogged, loggedMealId, loggedDateIso
+    }
+
+    init(
+        id: String,
+        title: String,
+        emoji: String,
+        description: String,
+        kcal: Int,
+        proteinG: Int,
+        carbsG: Int,
+        fatG: Int,
+        fiberG: Double,
+        qualityScore: Int,
+        isLogged: Bool = false,
+        loggedMealId: String? = nil,
+        loggedDateIso: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.emoji = emoji
+        self.description = description
+        self.kcal = kcal
+        self.proteinG = proteinG
+        self.carbsG = carbsG
+        self.fatG = fatG
+        self.fiberG = fiberG
+        self.qualityScore = qualityScore
+        self.isLogged = isLogged
+        self.loggedMealId = loggedMealId
+        self.loggedDateIso = loggedDateIso
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        emoji = try c.decodeIfPresent(String.self, forKey: .emoji) ?? "🍽️"
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        kcal = try c.decodeIfPresent(Int.self, forKey: .kcal) ?? 0
+        proteinG = try c.decodeIfPresent(Int.self, forKey: .proteinG) ?? 0
+        carbsG = try c.decodeIfPresent(Int.self, forKey: .carbsG) ?? 0
+        fatG = try c.decodeIfPresent(Int.self, forKey: .fatG) ?? 0
+        fiberG = try c.decodeIfPresent(Double.self, forKey: .fiberG) ?? 0
+        qualityScore = try c.decodeIfPresent(Int.self, forKey: .qualityScore) ?? 85
+        isLogged = try c.decodeIfPresent(Bool.self, forKey: .isLogged) ?? false
+        loggedMealId = try c.decodeIfPresent(String.self, forKey: .loggedMealId)
+        loggedDateIso = try c.decodeIfPresent(String.self, forKey: .loggedDateIso)
+    }
 }
 
 struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
@@ -1231,9 +1297,10 @@ struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
     var undoPayload: CoachUndoPayload? = nil
     var launchedRoutineId: String? = nil
     var suggestedMeals: [CoachSuggestedMealOption] = []
+    var simulationResult: WhatIfSimulationResult? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, icon, badgeColorHex, title, detail, isUndone, undoPayload, launchedRoutineId, suggestedMeals
+        case id, icon, badgeColorHex, title, detail, isUndone, undoPayload, launchedRoutineId, suggestedMeals, simulationResult
     }
 
     init(
@@ -1245,7 +1312,8 @@ struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
         isUndone: Bool = false,
         undoPayload: CoachUndoPayload? = nil,
         launchedRoutineId: String? = nil,
-        suggestedMeals: [CoachSuggestedMealOption] = []
+        suggestedMeals: [CoachSuggestedMealOption] = [],
+        simulationResult: WhatIfSimulationResult? = nil
     ) {
         self.id = id
         self.icon = icon
@@ -1256,6 +1324,7 @@ struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
         self.undoPayload = undoPayload
         self.launchedRoutineId = launchedRoutineId
         self.suggestedMeals = suggestedMeals
+        self.simulationResult = simulationResult
     }
 
     init(from decoder: Decoder) throws {
@@ -1269,6 +1338,7 @@ struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
         undoPayload = try c.decodeIfPresent(CoachUndoPayload.self, forKey: .undoPayload)
         launchedRoutineId = try c.decodeIfPresent(String.self, forKey: .launchedRoutineId)
         suggestedMeals = try c.decodeIfPresent([CoachSuggestedMealOption].self, forKey: .suggestedMeals) ?? []
+        simulationResult = try c.decodeIfPresent(WhatIfSimulationResult.self, forKey: .simulationResult)
     }
 }
 
@@ -1276,16 +1346,18 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
     let id: String
     let isUser: Bool
     var verdictTitle: String? = nil
-    let text: String
+    var text: String
     var bullets: [String] = []
     let timestampLabel: String
     let isSuggestionChip: Bool
     var modelUsed: String? = nil
     var attachedPhotoFilename: String? = nil
     var appliedActions: [CoachAppliedAction] = []
+    var followUpChips: [String] = []
+    var isStreaming: Bool = false
 
     enum CodingKeys: String, CodingKey {
-        case id, isUser, verdictTitle, text, bullets, timestampLabel, isSuggestionChip, modelUsed, attachedPhotoFilename, appliedActions
+        case id, isUser, verdictTitle, text, bullets, timestampLabel, isSuggestionChip, modelUsed, attachedPhotoFilename, appliedActions, followUpChips
     }
 
     init(
@@ -1298,7 +1370,9 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
         isSuggestionChip: Bool,
         modelUsed: String? = nil,
         attachedPhotoFilename: String? = nil,
-        appliedActions: [CoachAppliedAction] = []
+        appliedActions: [CoachAppliedAction] = [],
+        followUpChips: [String] = [],
+        isStreaming: Bool = false
     ) {
         self.id = id
         self.isUser = isUser
@@ -1310,6 +1384,8 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
         self.modelUsed = modelUsed
         self.attachedPhotoFilename = attachedPhotoFilename
         self.appliedActions = appliedActions
+        self.followUpChips = followUpChips
+        self.isStreaming = isStreaming
     }
 
     init(from decoder: Decoder) throws {
@@ -1324,6 +1400,8 @@ struct CoachChatMessage: Identifiable, Codable, Hashable {
         modelUsed = try c.decodeIfPresent(String.self, forKey: .modelUsed)
         attachedPhotoFilename = try c.decodeIfPresent(String.self, forKey: .attachedPhotoFilename)
         appliedActions = try c.decodeIfPresent([CoachAppliedAction].self, forKey: .appliedActions) ?? []
+        followUpChips = try c.decodeIfPresent([String].self, forKey: .followUpChips) ?? []
+        isStreaming = false
     }
 }
 
@@ -1558,6 +1636,11 @@ struct RealBiometricDaySummary: Codable, Equatable, Identifiable {
     var energySamples5m: [TimedBiometricPoint]
     var strengthMinutes: Int
     var workouts: [EffortEventItem]
+
+    /// True only when at least one real sleep record (minutes asleep, sleep score, or staged session) exists for this date.
+    var hasRecordedSleep: Bool {
+        (asleepMinutes ?? 0) > 0 || sleepPct != nil || sleepSession != nil
+    }
 
     enum CodingKeys: String, CodingKey {
         case dateIso, liveHrBpm, restingHrBpm, hrvMs, hrvMethodLabel, syncDiagnosticLine
@@ -2547,4 +2630,108 @@ struct CaffeineWindowTimelineSnapshot: Equatable {
             Self.formatMinuteOfDay(wakeMinute + idx * step)
         }
     }
+}
+
+// MARK: - Hyper-Personalization, Proactive Immunity Radar, What-If Simulator, Post-Workout Audit & Adaptive Periodization
+
+struct ProactiveImmunityRadarSnapshot: Equatable {
+    let riskLevel: Int // 0 = Óptimo, 1 = Vigilancia Autonómica, 2 = Alerta Temprana Inmunitaria / Sobrecarga
+    let headline: String
+    let summary: String
+    let confidencePct: Int
+    let signals: [String]
+    let strainReductionPct: Int
+    let extraHydrationMl: Int
+    let earlierBedtimeMin: Int
+    let subjectiveMismatchText: String?
+
+    var hasActiveWarning: Bool {
+        riskLevel >= 1 || subjectiveMismatchText != nil
+    }
+}
+
+struct PersonalSensitivityTwinSnapshot: Equatable {
+    let isCalibrated: Bool
+    let pairedDaysCount: Int
+    let caffeineHalfLifeHours: Double
+    let caffeineSensitivityLabel: String
+    let recommendedCaffeineCutoffLabel: String
+    let optimalDinnerLeadHours: Double
+    let personalOptimalSleepHours: Double
+    let personalStrainSweetSpot: Double
+    let summaryText: String
+}
+
+struct WhatIfScenarioInput: Codable, Equatable, Hashable {
+    var sleepHours: Double = 7.8
+    var alcoholDrinks: Double = 0.0
+    var caffeineMg: Double = 95.0
+    var caffeineHour: Int = 15
+    var dinnerLeadHours: Double = 3.0
+    var highStrainSession: Bool = false
+    var magnesiumOrSauna: Bool = false
+}
+
+struct WhatIfSimulationResult: Codable, Equatable, Hashable {
+    let predictedRecoveryPct: Int
+    let recoveryDeltaPct: Int
+    let hrvDeltaMs: Double
+    let deepSleepDeltaMin: Int
+    let rhrDeltaBpm: Double
+    let residualCaffeineAtBedMg: Double
+    let verdictTitle: String
+    let explanation: String
+    let mitigationSteps: [String]
+}
+
+struct PostWorkoutPhysiologyAudit: Equatable {
+    let efficiencyLabel: String
+    let efficiencyColorHex: UInt64
+    let cardiacDriftBpm: Int
+    let thermalContributionBpm: Int
+    let intensityMatchLabel: String
+    let glycogenRefillCarbsG: Int
+    let proteinRefillG: Int
+    let rehydrationMl: Int
+    let sodiumMg: Int
+    let summaryText: String
+}
+
+struct GoalEventPlan: Codable, Equatable, Hashable, Identifiable {
+    let id: String
+    var title: String
+    var sportFocus: String // Carrera / Resistencia, Fuerza / Hipertrofia, Híbrido / Cross, Definición / Salud
+    var targetDateIso: String // yyyy-MM-dd
+    var createdAtIso: String
+    var notes: String
+}
+
+struct AdaptiveMicrocycleDayPlan: Identifiable, Equatable {
+    let id: String // dateIso
+    let dayShortLabel: String
+    let isToday: Bool
+    let sessionTitle: String
+    let intensityTag: String
+    let targetStrainRange: String
+    let accentHex: UInt64
+}
+
+struct AdaptiveMicrocycleSnapshot: Equatable {
+    let plan: GoalEventPlan
+    let daysRemaining: Int
+    let phaseName: String
+    let phaseBadgeColorHex: UInt64
+    let todayPrescription: String
+    let days: [AdaptiveMicrocycleDayPlan]
+}
+
+struct EveningCheckInSnapshot: Equatable {
+    let isEveningWindow: Bool
+    let headline: String
+    let remainingProteinG: Int
+    let remainingKcal: Int
+    let residualCaffeineMg: Int
+    let dinnerCutoffLabel: String
+    let recommendedBedtimeLabel: String
+    let summaryText: String
 }

@@ -895,8 +895,9 @@ extension ImprovingStore {
                 hasReal = true
             }
 
-            // 7. Bevel Adaptive Recovery % (strictly from real measured sensors + Low Power Mode sleep resilience)
-            d.recoveryPct = WhoopPhysiologyEngine.computeBevelRecoveryPercent(
+            // 7. Bevel Adaptive Recovery % (strictly requires recorded sleep for the day — never show recovery without sleep!)
+            let hasSleepForRecovery = d.hasRecordedSleep
+            d.recoveryPct = hasSleepForRecovery ? WhoopPhysiologyEngine.computeBevelRecoveryPercent(
                 hrvMs: d.hrvMs,
                 rhrBpm: d.restingHrBpm,
                 respRpm: d.respRateRpm,
@@ -907,7 +908,7 @@ extension ImprovingStore {
                 respBaseline: respBaseline,
                 profile: userProfile,
                 sleepPct: d.sleepPct
-            )
+            ) : nil
 
             // 8. Bevel Calibrated Strain
             if let strainPair = WhoopPhysiologyEngine.computeBevelStrain(

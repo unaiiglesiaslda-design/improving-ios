@@ -887,4 +887,150 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         XCTAssertEqual(reloaded.archivedAiInsights.count, 1)
         XCTAssertTrue(reloaded.dynamicStrainNutritionEnabled)
     }
+
+    @MainActor
+    func testPerfectAISupremacySleepGatedRecoveryTwinRadarSimulatorAnd19Tools() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("improving_aiv2_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let storeUrl = tmpDir.appendingPathComponent("store.json")
+        let store = ImprovingStore(persistenceURL: storeUrl)
+        store.hasImportedOrPairedRealData = true
+        let todayIso = store.selectedDateIso
+
+        // 1. Strict Sleep-Gated Recovery Rule: NO sleep record -> recoveryPct MUST be nil in importer AND hidden in Store!
+        let noSleepRaw = AppleHealthExportImporter.MutableAppleDay(dateIso: "2026-11-25")
+        noSleepRaw.rhrValues.append(51.0)
+        noSleepRaw.hrvRmssdSamples.append((1_764_060_000, 74.0))
+        let builtNoSleep = AppleHealthExportImporter.buildSummaries(
+            from: ["2026-11-25": noSleepRaw],
+            sourceName: "Apple Watch",
+            profile: store.userProfile
+        )
+        XCTAssertNil(builtNoSleep.days["2026-11-25"]?.recoveryPct)
+
+        store.realHistory[todayIso] = RealBiometricDaySummary(
+            dateIso: todayIso,
+            restingHrBpm: 51.0,
+            hrvMs: 74.0,
+            recoveryPct: 82
+        )
+        store.dataRevision += 1
+        XCTAssertFalse(store.dataAvailability.hasRecoveryData)
+        XCTAssertEqual(store.recoveryPercent, 0)
+        XCTAssertTrue(store.buildBiometricContextJson().json.contains("PENDIENTE_REGISTRO_SUENO"))
+
+        // Once real sleep is recorded -> Recovery unlocks immediately!
+        store.realHistory[todayIso] = RealBiometricDaySummary(
+            dateIso: todayIso,
+            restingHrBpm: 51.0,
+            hrvMs: 74.0,
+            asleepMinutes: 465,
+            deepMinutes: 92,
+            sleepPct: 88,
+            strain21: 12.0,
+            strainPct: 54,
+            recoveryPct: 84,
+            workouts: [
+                EffortEventItem(
+                    id: "wk_audit_1",
+                    title: "Carrera Tempo",
+                    timeRange: "08:00 - 08:50",
+                    durationMin: 50,
+                    avgHrBpm: 162,
+                    strainScore: 14.2,
+                    strainPct: 68,
+                    categoryLabel: "Carrera",
+                    kcal: 540,
+                    dateIso: todayIso
+                )
+            ]
+        )
+        store.dataRevision += 1
+        XCTAssertTrue(store.dataAvailability.hasRecoveryData)
+        XCTAssertEqual(store.recoveryPercent, 84)
+
+        // 2. Domain-Scoped Section Coaching Cache (adding water does NOT invalidate Sueño or Fitness!)
+        let sleepKeyBefore = store.coachingSlotKey(for: .sueno)
+        let fitKeyBefore = store.coachingSlotKey(for: .fitness)
+        let diarioKeyBefore = store.coachingSlotKey(for: .diario)
+        store.addNutrientAmount(key: "hidratacion", amount: 300, dateIso: todayIso)
+        XCTAssertEqual(store.coachingSlotKey(for: .sueno), sleepKeyBefore)
+        XCTAssertEqual(store.coachingSlotKey(for: .fitness), fitKeyBefore)
+        XCTAssertNotEqual(store.coachingSlotKey(for: .diario), diarioKeyBefore)
+
+        // 3. Subjective Contradiction Override & Proactive Immunity Radar
+        let rangeBeforeSick = store.optimalEffortRange.upperBound
+        store.setJournalCheck(habitId: "fever", state: .yes, for: todayIso)
+        store.setJournalMood(1, for: todayIso)
+        let radar = store.proactiveImmunityRadarSnapshot
+        XCTAssertTrue(radar.hasActiveWarning)
+        XCTAssertNotNil(radar.subjectiveMismatchText)
+        XCTAssertLessThan(store.optimalEffortRange.upperBound, rangeBeforeSick)
+
+        // 4. Full 8 Micronutrients in Meal JSON Parser & Coach `log_meal`
+        let mealJson = #"{"title":"Salmón con espinacas","emoji":"🐟","kcal":610,"protein_g":44,"carbs_g":32,"fat_g":28,"fiber_g":8.5,"sugar_g":3.2,"sodium_mg":480,"potassium_mg":920,"magnesium_mg":110,"iron_mg":3.4,"vitamin_d_mcg":11.5,"omega3_g":2.4,"quality_score":94}"#
+        let parsedEst = try XCTUnwrap(GeminiCoachService.parseMealEstimateJson(mealJson))
+        XCTAssertEqual(parsedEst.fiberG, 8.5, accuracy: 0.05)
+        XCTAssertEqual(parsedEst.omega3G, 2.4, accuracy: 0.05)
+        XCTAssertEqual(parsedEst.magnesiumMg, 110, accuracy: 0.1)
+
+        _ = store.executeCoachToolCall(name: "log_meal", argsJson: mealJson)
+        let micros = store.dailyMicronutrientsSnapshot
+        XCTAssertGreaterThanOrEqual(micros.first(where: { $0.id == "micro_omega3" })?.currentValue ?? 0, 2.3)
+
+        // 5. Sanitizer preserves biomarker codes ("Vitamina D 25-OH") & strips follow-up marker cleanly
+        let cleanBio = GeminiCoachService.sanitizeDirectHumanText("Tu Vitamina D (25-OH) subió bien.")
+        XCTAssertTrue(cleanBio.contains("Vitamina D 25-OH"))
+        XCTAssertFalse(cleanBio.contains("("))
+        let stripped = GeminiCoachService.stripFollowUpMarker(from: "Buen descanso hoy.\n[[SUGERENCIAS: Crear rutina | Clavar macros | Simular noche]]")
+        XCTAssertEqual(stripped.cleanText, "Buen descanso hoy.")
+        XCTAssertEqual(stripped.chips.count, 3)
+
+        // 6. Tools #15-#19 + Undo + Post-Workout Audit
+        let memSave = store.executeCoachToolCall(name: "save_coach_memory", argsJson: #"{"note":"Molestia leve en gemelo derecho"}"#)
+        XCTAssertTrue(store.coachMemoryNotes.contains("Molestia leve en gemelo derecho"))
+        let memUpd = store.executeCoachToolCall(name: "manage_coach_memory", argsJson: #"{"action":"replace","match_text":"gemelo","new_note":"Gemelo derecho 100% recuperado"}"#)
+        XCTAssertTrue(store.coachMemoryNotes.contains("Gemelo derecho 100% recuperado"))
+
+        let simTool = store.executeCoachToolCall(name: "simulate_what_if_scenario", argsJson: #"{"sleep_hours":5.5,"alcohol_drinks":3,"caffeine_mg":160,"caffeine_hour":19,"dinner_lead_hours":1.0}"#)
+        let simAct = try XCTUnwrap(simTool.appliedAction)
+        let simRes = try XCTUnwrap(simAct.simulationResult)
+        XCTAssertLessThan(simRes.recoveryDeltaPct, 0)
+        XCTAssertFalse(simRes.mitigationSteps.isEmpty)
+
+        let microTool = store.executeCoachToolCall(name: "generate_weekly_microcycle", argsJson: #"{"title":"Media Maratón Donosti","sport_focus":"Carrera / Resistencia","target_date_iso":"2026-12-20"}"#)
+        let microAct = try XCTUnwrap(microTool.appliedAction)
+        XCTAssertNotNil(store.adaptiveMicrocycleSnapshot)
+        XCTAssertEqual(store.adaptiveMicrocycleSnapshot?.days.count, 7)
+
+        let modeTool = store.executeCoachToolCall(name: "set_goal_and_sleep_mode", argsJson: #"{"goal_mode":"Rendimiento","sleep_mode_pct":100}"#)
+        XCTAssertEqual(store.globalGoalMode, .rendimiento)
+
+        // Undo memory & microcycle
+        let mTest = CoachChatMessage(id: "m_v2", isUser: false, text: "Listo", timestampLabel: "12:00", isSuggestionChip: false, appliedActions: [
+            try XCTUnwrap(memSave.appliedAction),
+            try XCTUnwrap(memUpd.appliedAction),
+            microAct,
+            try XCTUnwrap(modeTool.appliedAction)
+        ])
+        store.coachMessages = [mTest]
+        store.undoCoachAction(messageId: "m_v2", actionId: microAct.id)
+        XCTAssertNil(store.activeGoalEventPlan)
+
+        // Post-workout audit check
+        let wk = try XCTUnwrap(store.workoutsToday.first)
+        let audit = store.postWorkoutAudit(for: wk)
+        XCTAssertGreaterThan(audit.glycogenRefillCarbsG, 20)
+        XCTAssertGreaterThan(audit.rehydrationMl, 350)
+
+        // Multi-turn history preserves appliedActions recap!
+        let normContents = await GeminiCoachService.shared.buildNormalizedGeminiContents(
+            history: [CoachChatMessage(id: "h1", isUser: true, text: "Simula", timestampLabel: "11:59", isSuggestionChip: false), mTest],
+            currentPrompt: "¿Qué opinas?"
+        )
+        let serializedHistory = String(data: try JSONSerialization.data(withJSONObject: normContents), encoding: .utf8) ?? ""
+        XCTAssertTrue(serializedHistory.contains("Acciones aplicadas en la app"))
+    }
 }

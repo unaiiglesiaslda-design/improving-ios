@@ -405,12 +405,15 @@ struct RecuperacionScreen: View {
                         kind: .recovery,
                         size: 170,
                         strokeWidth: 16,
-                        centerSubtitle: avail.hasRecoveryData ? store.recoveryStatusText : "Sin datos",
+                        centerSubtitle: avail.hasRecoveryData ? store.recoveryStatusText : (avail.hasSleepData ? "Sin datos" : "Pendiente sueño"),
                         hasData: avail.hasRecoveryData
                     )
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
+                    if store.proactiveImmunityRadarSnapshot.hasActiveWarning {
+                        ProactiveImmunityRadarCard(store: store)
+                    }
                     HStack(spacing: 12) {
                         HeaderedMetricCard(
                             icon: "waveform.path.ecg",

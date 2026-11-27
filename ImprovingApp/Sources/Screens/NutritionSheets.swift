@@ -573,6 +573,14 @@ struct MealComposerSheet: View {
     @State private var calciumDraft: String = "0"
     @State private var isFavoriteDraft: Bool = false
     @State private var computedFactors: NutritionQualityFactors? = nil
+    @State private var fiberDraft: Double? = nil
+    @State private var sugarDraft: Double? = nil
+    @State private var sodiumDraft: Double? = nil
+    @State private var potassiumDraft: Double? = nil
+    @State private var magnesiumDraft: Double? = nil
+    @State private var ironDraft: Double? = nil
+    @State private var vitaminDDraft: Double? = nil
+    @State private var omega3Draft: Double? = nil
 
     var body: some View {
         NavigationStack {
@@ -878,6 +886,14 @@ struct MealComposerSheet: View {
         caffeineDraft = "\(Int(est.caffeineMg.rounded()))"
         alcoholDraft = est.alcoholDrinks > 0 ? String(format: "%.1f", est.alcoholDrinks) : "0"
         calciumDraft = "\(Int(est.calciumMg.rounded()))"
+        fiberDraft = est.fiberG > 0 ? est.fiberG : nil
+        sugarDraft = est.sugarG > 0 ? est.sugarG : nil
+        sodiumDraft = est.sodiumMg > 0 ? est.sodiumMg : nil
+        potassiumDraft = est.potassiumMg > 0 ? est.potassiumMg : nil
+        magnesiumDraft = est.magnesiumMg > 0 ? est.magnesiumMg : nil
+        ironDraft = est.ironMg > 0 ? est.ironMg : nil
+        vitaminDDraft = est.vitaminDMcg > 0 ? est.vitaminDMcg : nil
+        omega3Draft = est.omega3G > 0 ? est.omega3G : nil
         computedFactors = est.qualityFactors
         aiFeedbackText = est.aiSummary
         aiModelBadge = est.usedLiveAI ? "✓ \(est.modelUsed)" : "Modo local"
@@ -912,6 +928,14 @@ struct MealComposerSheet: View {
             caffeineDraft = m.caffeineMg.map { "\(Int($0.rounded()))" } ?? "0"
             alcoholDraft = m.alcoholDrinks.map { String(format: "%.1f", $0) } ?? "0"
             calciumDraft = m.calciumMg.map { "\(Int($0.rounded()))" } ?? "0"
+            fiberDraft = m.fiberG
+            sugarDraft = m.sugarG
+            sodiumDraft = m.sodiumMg
+            potassiumDraft = m.potassiumMg
+            magnesiumDraft = m.magnesiumMg
+            ironDraft = m.ironMg
+            vitaminDDraft = m.vitaminDMcg
+            omega3Draft = m.omega3G
             aiFeedbackText = m.aiNotes
             isFavoriteDraft = m.isFavorite
             computedFactors = m.qualityFactors
@@ -944,19 +968,7 @@ struct MealComposerSheet: View {
             )
             await MainActor.run {
                 isAnalyzingAI = false
-                titleDraft = est.title
-                emojiDraft = est.emoji
-                kcalDraft = "\(est.kcal)"
-                proteinDraft = "\(est.proteinG)"
-                carbsDraft = "\(est.carbsG)"
-                fatDraft = "\(est.fatG)"
-                qualityDraft = Double(est.qualityScore)
-                caffeineDraft = "\(Int(est.caffeineMg.rounded()))"
-                alcoholDraft = est.alcoholDrinks > 0 ? String(format: "%.1f", est.alcoholDrinks) : "0"
-                calciumDraft = "\(Int(est.calciumMg.rounded()))"
-                computedFactors = est.qualityFactors
-                aiFeedbackText = est.aiSummary
-                aiModelBadge = est.usedLiveAI ? "✓ \(est.modelUsed)" : "Modo local"
+                applyAnalyzedEstimate(est)
             }
         }
     }
@@ -1011,6 +1023,14 @@ struct MealComposerSheet: View {
             caffeineMg: caff > 0 ? caff : nil,
             alcoholDrinks: alc > 0 ? alc : nil,
             calciumMg: calc > 0 ? calc : nil,
+            fiberG: fiberDraft,
+            sugarG: sugarDraft,
+            sodiumMg: sodiumDraft,
+            potassiumMg: potassiumDraft,
+            magnesiumMg: magnesiumDraft,
+            ironMg: ironDraft,
+            vitaminDMcg: vitaminDDraft,
+            omega3G: omega3Draft,
             aiNotes: aiFeedbackText,
             photoFilename: savedFilename,
             emoji: finalEmoji,

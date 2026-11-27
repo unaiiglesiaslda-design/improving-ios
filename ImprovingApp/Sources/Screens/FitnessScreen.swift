@@ -248,6 +248,9 @@ struct FitnessScreen: View {
                     // 2B. Predictive Overtraining & 1-Tap Auto-Deload Card (Apartado 2.2)
                     OvertrainingAutoDeloadCard(store: store)
 
+                    // 2C. Adaptive Event Periodization Microcycle (Recalibrated daily to Recovery & Muscle Freshness)
+                    AdaptiveMicrocycleCard(store: store)
+
                     // 3. Actividad de hoy (Exact match to Screenshot 1!)
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 8) {

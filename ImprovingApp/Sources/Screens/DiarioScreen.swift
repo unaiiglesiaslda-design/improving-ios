@@ -295,6 +295,9 @@ struct DiarioScreen: View {
                     // Valoración IA del Diario con contexto total (Diario + Nutrición + Analíticas + Biometría + Clima)
                     LiveAiCoachingCard(section: .diario, store: store)
 
+                    // Gemelo Fisiológico Personal + Simulador interactivo «¿Qué pasa mañana si…?»
+                    PersonalTwinAndSimulatorCard(store: store)
+
                     // Nota del día (Leída por tu Coach IA para explicar VFC, sueño y recuperación!)
                     BevelCard(cornerRadius: 18) {
                         VStack(alignment: .leading, spacing: 9) {

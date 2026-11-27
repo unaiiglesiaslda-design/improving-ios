@@ -3042,4 +3042,565 @@ enum WhoopPhysiologyEngine {
         let addedResidualAtBed = drinkMg * pow(0.5, minutesUntilBed / halfLifeMin)
         return (snapshot.residualAtBedtimeMg + addedResidualAtBed) <= snapshot.sleepThresholdMg
     }
+
+    // MARK: - Hyper-Personalized Physiological Twin, Proactive Immunity Radar, Simulator, Post-Workout Audit & Periodization
+
+    static func computePersonalSensitivityTwin(
+        history: [String: RealBiometricDaySummary],
+        mealsByDate: [String: [NutritionMealItem]],
+        profile: UserPhysiologyProfile,
+        bedtimeMinuteOfDay: Int = 23 * 60 + 15
+    ) -> PersonalSensitivityTwinSnapshot {
+        let norms = computePersonalizedNorms(profile: profile)
+        let sortedIsos = history.keys.sorted()
+        let cal = Calendar(identifier: .gregorian)
+        func nextIso(_ iso: String) -> String? {
+            guard let dt = AppFormatters.parseIsoDay(iso),
+                  let nx = cal.date(byAdding: .day, value: 1, to: dt) else { return nil }
+            return AppFormatters.isoDayString(from: nx)
+        }
+
+        var cleanCaffHrv: [Double] = []
+        var modCaffHrv: [Double] = []
+        var cleanCaffDeep: [Double] = []
+        var modCaffDeep: [Double] = []
+        var dinnerShortRec: [Double] = []
+        var dinnerMedRec: [Double] = []
+        var dinnerLongRec: [Double] = []
+        var sleepBuckets: [Int: [Double]] = [:]
+        var strainPairs: [(strain: Double, nextHrv: Double)] = []
+        var pairedDays = 0
+
+        for iso in sortedIsos {
+            if let cur = history[iso], let asleep = cur.asleepMinutes, asleep >= 240, let rec = cur.recoveryPct {
+                let halfHourBucket = min(max(Int((Double(asleep) / 30.0).rounded()), 10), 20)
+                sleepBuckets[halfHourBucket, default: []].append(Double(rec))
+            }
+            guard let nxIso = nextIso(iso), let nextDay = history[nxIso] else { continue }
+            if let cur = history[iso], let st = cur.strain21, st > 1.0, let nh = nextDay.hrvMs, nh > 5 {
+                strainPairs.append((st, nh))
+            }
+            let meals = mealsByDate[iso] ?? []
+            guard !meals.isEmpty else { continue }
+            pairedDays += 1
+
+            let timing = computeCaffeineAndMealTiming(meals: meals, bedtimeMinutesOfDay: bedtimeMinuteOfDay)
+            if timing.totalCaffeineTodayMg >= 40 {
+                let hasAfternoonLoad = timing.estimatedCaffeineAtBedtimeMg >= 18.0
+                if let nh = nextDay.hrvMs, nh > 5 {
+                    if hasAfternoonLoad { modCaffHrv.append(nh) } else { cleanCaffHrv.append(nh) }
+                }
+                if let dp = nextDay.deepMinutes, dp > 5 {
+                    if hasAfternoonLoad { modCaffDeep.append(Double(dp)) } else { cleanCaffDeep.append(Double(dp)) }
+                }
+            }
+            if let gap = timing.hoursFromLastMealToBedtime, let nRec = nextDay.recoveryPct {
+                if gap < 2.3 { dinnerShortRec.append(Double(nRec)) }
+                else if gap < 3.3 { dinnerMedRec.append(Double(nRec)) }
+                else { dinnerLongRec.append(Double(nRec)) }
+            }
+        }
+
+        var halfLife = 5.5
+        var caffLabel = "Metabolismo medio (~5,5 h)"
+        if cleanCaffHrv.count >= 3 && modCaffHrv.count >= 3 {
+            let cMean = cleanCaffHrv.reduce(0, +) / Double(cleanCaffHrv.count)
+            let mMean = modCaffHrv.reduce(0, +) / Double(modCaffHrv.count)
+            let dropPct = cMean > 1 ? ((cMean - mMean) / cMean) * 100.0 : 0
+            var deepDrop = 0.0
+            if cleanCaffDeep.count >= 2 && modCaffDeep.count >= 2 {
+                let cd = cleanCaffDeep.reduce(0, +) / Double(cleanCaffDeep.count)
+                let md = modCaffDeep.reduce(0, +) / Double(modCaffDeep.count)
+                deepDrop = cd - md
+            }
+            if dropPct >= 9.0 || deepDrop >= 14.0 {
+                halfLife = 7.0
+                caffLabel = "Sensible / lento (~7,0 h)"
+            } else if dropPct <= 2.5 && deepDrop <= 4.0 {
+                halfLife = 4.3
+                caffLabel = "Metabolizador rápido (~4,3 h)"
+            }
+        }
+
+        let clearanceMin95 = caffeineClearanceMinutes(totalMg: 95.0, halfLifeHours: halfLife, thresholdMg: 20.0)
+        let normBed = ((bedtimeMinuteOfDay % 1440) + 1440) % 1440
+        let cutoffMin = (((normBed - clearanceMin95) % 1440) + 1440) % 1440
+        let cutoffLabel = String(format: "%02d:%02d", cutoffMin / 60, cutoffMin % 60)
+
+        var optDinnerH = 3.0
+        let shortAvg = dinnerShortRec.count >= 2 ? (dinnerShortRec.reduce(0, +) / Double(dinnerShortRec.count)) : nil
+        let medAvg = dinnerMedRec.count >= 2 ? (dinnerMedRec.reduce(0, +) / Double(dinnerMedRec.count)) : nil
+        let longAvg = dinnerLongRec.count >= 2 ? (dinnerLongRec.reduce(0, +) / Double(dinnerLongRec.count)) : nil
+        if let l = longAvg, let m = medAvg, l >= m + 4.0 {
+            optDinnerH = 3.5
+        } else if let s = shortAvg, let m = medAvg, s >= m - 1.5 && (longAvg == nil || s >= longAvg! - 1.5) {
+            optDinnerH = 2.3
+        }
+
+        var optSleepH = norms.sleepTargetHours
+        let validSleepBuckets = sleepBuckets.filter { $0.value.count >= 3 }
+        if let best = validSleepBuckets.max(by: {
+            ($0.value.reduce(0, +) / Double($0.value.count)) < ($1.value.reduce(0, +) / Double($1.value.count))
+        }) {
+            optSleepH = min(max(Double(best.key) * 0.5, 6.5), 9.5)
+        }
+
+        var strainSweet = 14.5
+        if strainPairs.count >= 8 {
+            let allHrvMean = strainPairs.map(\.nextHrv).reduce(0, +) / Double(strainPairs.count)
+            let safeHigh = strainPairs.filter { $0.strain >= 12.0 && $0.nextHrv >= allHrvMean * 0.92 }.map(\.strain)
+            if safeHigh.count >= 2 {
+                let topSlice = safeHigh.sorted().suffix(4)
+                let topMean = topSlice.reduce(0, +) / Double(topSlice.count)
+                strainSweet = min(max(AppleHealthExportImporter.round1(topMean), 11.5), 18.5)
+            }
+        }
+
+        let calibrated = pairedDays >= 6 || validSleepBuckets.count >= 2
+        let optSleepStr = String(format: "%.1f h", locale: Locale(identifier: "es_ES"), optSleepH)
+        let optDinStr = String(format: "%.1f h", locale: Locale(identifier: "es_ES"), optDinnerH)
+        let sweetStr = String(format: "%.1f", locale: Locale(identifier: "es_ES"), strainSweet)
+        let summary = calibrated
+            ? "Tu gemelo fisiológico rinde mejor durmiendo \(optSleepStr), cenando ≥\(optDinStr) antes, cortando café a las \(cutoffLabel) (\(caffLabel.lowercased())) y con techo dulce de Strain \(sweetStr)."
+            : "Calibrando tu gemelo personal (\(pairedDays)/6 días cruzados): referencia actual \(optSleepStr) de sueño, corte de café \(cutoffLabel) y cena \(optDinStr) antes de dormir."
+
+        return PersonalSensitivityTwinSnapshot(
+            isCalibrated: calibrated,
+            pairedDaysCount: pairedDays,
+            caffeineHalfLifeHours: halfLife,
+            caffeineSensitivityLabel: caffLabel,
+            recommendedCaffeineCutoffLabel: cutoffLabel,
+            optimalDinnerLeadHours: optDinnerH,
+            personalOptimalSleepHours: optSleepH,
+            personalStrainSweetSpot: strainSweet,
+            summaryText: summary
+        )
+    }
+
+    static func computeProactiveImmunityRadar(
+        todaySummary: RealBiometricDaySummary?,
+        trailing60Summaries: [RealBiometricDaySummary],
+        acwr: Double,
+        journalToday: [String: JournalCheckState],
+        moodToday: Int?,
+        noteToday: String
+    ) -> ProactiveImmunityRadarSnapshot {
+        let prior = trailing60Summaries.dropLast()
+        func mean(_ vals: [Double]) -> Double? {
+            guard vals.count >= 4 else { return nil }
+            return vals.reduce(0, +) / Double(vals.count)
+        }
+        let baseHrv = mean(prior.compactMap(\.hrvMs))
+        let baseRhr = mean(prior.compactMap(\.restingHrBpm))
+        let baseResp = mean(prior.compactMap(\.respRateRpm))
+        let tempPriorVals: [Double] = prior.compactMap { s in
+            if let a = s.wristTempAbsoluteC { return a }
+            if let d = s.wristTempDeltaC { return 35.8 + d }
+            return nil
+        }
+        let baseTemp = mean(tempPriorVals)
+
+        var signals: [String] = []
+        var score = 0
+
+        if let curHrv = todaySummary?.hrvMs, let bHrv = baseHrv, bHrv > 5 {
+            let pct = ((curHrv - bHrv) / bHrv) * 100.0
+            if pct <= -18.0 {
+                score += 2
+                signals.append(String(format: "VFC %.0f%% bajo tu base", pct))
+            } else if pct <= -11.0 {
+                score += 1
+                signals.append(String(format: "VFC %.0f%% vs base", pct))
+            }
+        }
+        if let curRhr = todaySummary?.restingHrBpm, let bRhr = baseRhr {
+            let delta = curRhr - bRhr
+            if delta >= 4.5 {
+                score += 2
+                signals.append(String(format: "FCR +%.1f ppm", locale: Locale(identifier: "es_ES"), delta))
+            } else if delta >= 2.8 {
+                score += 1
+                signals.append(String(format: "FCR +%.1f ppm", locale: Locale(identifier: "es_ES"), delta))
+            }
+        }
+        let curTempVal: Double? = todaySummary?.wristTempAbsoluteC ?? todaySummary?.wristTempDeltaC.map { 35.8 + $0 }
+        if let curTemp = curTempVal, let bTemp = baseTemp {
+            let tDelta = curTemp - bTemp
+            if tDelta >= 0.40 {
+                score += 2
+                signals.append(String(format: "Temp. muñeca +%.2f °C", locale: Locale(identifier: "es_ES"), tDelta))
+            } else if tDelta >= 0.25 {
+                score += 1
+                signals.append(String(format: "Temp. muñeca +%.2f °C", locale: Locale(identifier: "es_ES"), tDelta))
+            }
+        } else if let relDelta = todaySummary?.wristTempDeltaC, relDelta >= 0.40 {
+            score += 2
+            signals.append(String(format: "Temp. muñeca +%.2f °C", locale: Locale(identifier: "es_ES"), relDelta))
+        }
+        if let curResp = todaySummary?.respRateRpm, let bResp = baseResp {
+            let rDelta = curResp - bResp
+            if rDelta >= 1.3 {
+                score += 2
+                signals.append(String(format: "FR +%.1f rpm", locale: Locale(identifier: "es_ES"), rDelta))
+            }
+        }
+        if acwr >= 1.42 {
+            score += 1
+            signals.append(String(format: "Carga aguda ACWR %.2f", locale: Locale(identifier: "es_ES"), acwr))
+        }
+        if let debt = todaySummary?.sleepDebtMinutes, debt >= 95 {
+            score += 1
+            signals.append("Deuda de sueño \(debt) min")
+        }
+
+        let lowNote = noteToday.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+        let negativeNoteHit = ["enferm", "fiebre", "garganta", "escalofrio", "roto", "agotad", "mareo", "lesion", "dolor fuerte", "destrozad"]
+            .contains(where: { lowNote.contains($0) })
+        let hasFeverOrIllness = journalToday["fever"] == .yes || journalToday["illness"] == .yes
+        let hasInjury = journalToday["injury"] == .yes
+        let lowMood = (moodToday ?? 3) <= 2
+
+        if hasFeverOrIllness {
+            score += 3
+            signals.append("Síntomas marcados en Diario")
+        } else if negativeNoteHit || lowMood {
+            score += 1
+            signals.append(lowMood ? "Ánimo/energía baja (\(moodToday ?? 2)/5)" : "Fatiga descrita en nota")
+        }
+
+        var mismatch: String? = nil
+        if let rec = todaySummary?.recoveryPct, todaySummary?.hasRecordedSleep == true,
+           rec >= 65 && (hasFeverOrIllness || hasInjury || lowMood || negativeNoteHit) {
+            let reason = hasFeverOrIllness ? "síntomas de enfermedad" : (hasInjury ? "molestia/lesión activa" : "fatiga subjetiva alta en tu Diario")
+            mismatch = "Tu biometría marca \(rec)% en verde, pero reportas \(reason): priorizamos cómo te sientes y recortamos el esfuerzo objetivo un 20%."
+        }
+
+        let riskLevel: Int = score >= 4 ? 2 : (score >= 2 ? 1 : 0)
+        let confidence = min(94, 55 + signals.count * 10)
+        let strainCut = riskLevel == 2 ? 32 : (riskLevel == 1 || mismatch != nil ? 18 : 0)
+        let extraWater = riskLevel == 2 ? 750 : (riskLevel == 1 ? 400 : 0)
+        let earlyBed = riskLevel == 2 ? 45 : (riskLevel == 1 ? 25 : 0)
+
+        let headline: String
+        let summary: String
+        if riskLevel == 2 {
+            headline = "Alerta temprana: posible sobrecarga o estrés inmunitario"
+            summary = "Se han desviado a la vez \(signals.joined(separator: ", ")). Recorta hoy el esfuerzo un \(strainCut)%, añade +\(extraWater) ml con electrolitos y adelanta el sueño \(earlyBed) min."
+        } else if riskLevel == 1 {
+            headline = "Vigilancia autonómica preventiva"
+            summary = "Señales leves acumuladas (\(signals.joined(separator: ", "))). Prioriza Zona 2 o técnica limpia, +\(extraWater) ml de agua y adelanta tu descanso \(earlyBed) min."
+        } else if let m = mismatch {
+            headline = "Ajuste inteligente por sensación subjetiva"
+            summary = m
+        } else {
+            headline = "Sistema inmune y autónomo estables"
+            summary = "Tus constantes nocturnas y sensaciones del Diario están alineadas con tu base personal."
+        }
+
+        return ProactiveImmunityRadarSnapshot(
+            riskLevel: riskLevel,
+            headline: headline,
+            summary: summary,
+            confidencePct: confidence,
+            signals: signals,
+            strainReductionPct: strainCut,
+            extraHydrationMl: extraWater,
+            earlierBedtimeMin: earlyBed,
+            subjectiveMismatchText: mismatch
+        )
+    }
+
+    static func simulateWhatIfScenario(
+        input: WhatIfScenarioInput,
+        currentRecoveryPct: Int,
+        baseHrvMs: Double,
+        baseRhrBpm: Double,
+        twin: PersonalSensitivityTwinSnapshot,
+        bedtimeMinuteOfDay: Int = 23 * 60 + 15
+    ) -> WhatIfSimulationResult {
+        var recDelta = 0.0
+        var hrvDelta = 0.0
+        var deepDelta = 0.0
+        var rhrDelta = 0.0
+
+        let sleepDiff = input.sleepHours - twin.personalOptimalSleepHours
+        if sleepDiff < 0 {
+            recDelta += sleepDiff * 9.5
+            hrvDelta += sleepDiff * 4.2
+            deepDelta += sleepDiff * 14.0
+            rhrDelta += abs(sleepDiff) * 1.4
+        } else {
+            recDelta += min(sleepDiff * 5.0, 9.0)
+            hrvDelta += min(sleepDiff * 2.4, 5.0)
+            deepDelta += min(sleepDiff * 9.0, 16.0)
+            rhrDelta -= min(sleepDiff * 0.8, 1.8)
+        }
+
+        if input.alcoholDrinks > 0 {
+            let d = input.alcoholDrinks
+            recDelta -= (d * 7.5 + max(0, d - 2.0) * 3.5)
+            hrvDelta -= (d * 4.8 + max(0, d - 2.0) * 2.2)
+            deepDelta -= d * 6.5
+            rhrDelta += d * 2.1
+        }
+
+        let normBed = ((bedtimeMinuteOfDay % 1440) + 1440) % 1440
+        let caffMin = min(max(input.caffeineHour, 5), 23) * 60
+        let elapsedMin = Double(normBed >= caffMin ? (normBed - caffMin) : (normBed + 1440 - caffMin))
+        let residualCaff = input.caffeineMg > 0
+            ? AppleHealthExportImporter.round1(input.caffeineMg * pow(0.5, elapsedMin / (twin.caffeineHalfLifeHours * 60.0)))
+            : 0.0
+        if residualCaff > 20.0 {
+            let excess = residualCaff - 20.0
+            recDelta -= min(excess * 0.22, 16.0)
+            hrvDelta -= min(excess * 0.12, 9.0)
+            deepDelta -= min(excess * 0.45, 28.0)
+            rhrDelta += min(excess * 0.05, 3.0)
+        }
+
+        let dinnerGapDiff = input.dinnerLeadHours - twin.optimalDinnerLeadHours
+        if dinnerGapDiff < -0.4 {
+            let lateHours = abs(dinnerGapDiff)
+            recDelta -= lateHours * 4.2
+            hrvDelta -= lateHours * 2.3
+            deepDelta -= lateHours * 8.5
+            rhrDelta += lateHours * 1.3
+        } else if dinnerGapDiff >= 0.3 {
+            recDelta += 3.0
+            hrvDelta += 1.6
+            deepDelta += 6.0
+            rhrDelta -= 0.7
+        }
+
+        if input.highStrainSession {
+            recDelta -= 5.5
+            hrvDelta -= 2.8
+            deepDelta += 5.0
+            rhrDelta += 1.5
+        }
+        if input.magnesiumOrSauna {
+            recDelta += 4.5
+            hrvDelta += 2.8
+            deepDelta += 9.0
+            rhrDelta -= 0.9
+        }
+
+        let baseRec = min(max(currentRecoveryPct, 35), 92)
+        let predRec = min(max(Int((Double(baseRec) + recDelta).rounded()), 12), 99)
+        let cleanRecDelta = predRec - baseRec
+        let cleanHrvDelta = AppleHealthExportImporter.round1(hrvDelta)
+        let cleanDeepDelta = Int(deepDelta.rounded())
+        let cleanRhrDelta = AppleHealthExportImporter.round1(rhrDelta)
+
+        var mitigations: [String] = []
+        if input.alcoholDrinks >= 1 {
+            mitigations.append("Añade 600–800 ml de agua con electrolitos antes de dormir y termina la última copa ≥3 h antes de acostarte.")
+        }
+        if residualCaff > 20 {
+            mitigations.append("Con tu metabolismo (\(twin.caffeineSensitivityLabel.lowercased())), llegarías a la cama con \(Int(residualCaff)) mg de cafeína: adelanta el café antes de las \(twin.recommendedCaffeineCutoffLabel) o pasa a descafeinado.")
+        }
+        if input.dinnerLeadHours < twin.optimalDinnerLeadHours - 0.3 {
+            mitigations.append(String(format: "Adelanta la cena para dejar ≥%.1f h de digestión y dar un paseo suave de 10 min post-cena.", locale: Locale(identifier: "es_ES"), twin.optimalDinnerLeadHours))
+        }
+        if input.sleepHours < twin.personalOptimalSleepHours - 0.4 {
+            mitigations.append("Programa 20 min de siesta o NSDR mañana antes de las 15:30 para compensar el recorte de sueño.")
+        }
+        if mitigations.isEmpty {
+            mitigations.append("Protocolo excelente: mantén habitación fresca (18 °C) y sin pantallas los últimos 30 min para consolidar esa recarga.")
+        }
+
+        let verdict: String = predRec >= 67
+            ? "Mañana en verde estimado (\(predRec)%)"
+            : (predRec >= 34 ? "Recuperación moderada estimada (\(predRec)%)" : "Riesgo alto de día en rojo (\(predRec)%)")
+        let hrvSign = String(format: "%+.1f ms VFC", locale: Locale(identifier: "es_ES"), cleanHrvDelta)
+        let deepSign = String(format: "%+d min sueño profundo", cleanDeepDelta)
+        let rhrSign = String(format: "%+.1f ppm FCR", locale: Locale(identifier: "es_ES"), cleanRhrDelta)
+        let recSign = cleanRecDelta >= 0 ? "+\(cleanRecDelta)" : "\(cleanRecDelta)"
+        let explanation = "Partiendo de tu base personal (\(Int(baseHrvMs.rounded())) ms VFC · \(Int(baseRhrBpm.rounded())) ppm FCR), este escenario mueve tu recuperación \(recSign)% (\(hrvSign), \(deepSign), \(rhrSign))."
+
+        return WhatIfSimulationResult(
+            predictedRecoveryPct: predRec,
+            recoveryDeltaPct: cleanRecDelta,
+            hrvDeltaMs: cleanHrvDelta,
+            deepSleepDeltaMin: cleanDeepDelta,
+            rhrDeltaBpm: cleanRhrDelta,
+            residualCaffeineAtBedMg: residualCaff,
+            verdictTitle: verdict,
+            explanation: explanation,
+            mitigationSteps: mitigations
+        )
+    }
+
+    static func computePostWorkoutAudit(
+        workout: EffortEventItem,
+        recoveryPct: Int?,
+        profile: UserPhysiologyProfile,
+        weather: WeatherPhysiologySnapshot?,
+        intradayHrSamples: [TimedBiometricPoint] = []
+    ) -> PostWorkoutPhysiologyAudit {
+        let norms = computePersonalizedNorms(profile: profile)
+        let maxHr = Double(max(norms.maxHrBpm, 150))
+        let hrPct = workout.avgHrBpm > 0 ? (Double(workout.avgHrBpm) / maxHr) * 100.0 : 0
+
+        var measuredDrift = 0
+        if intradayHrSamples.count >= 6 {
+            let mid = intradayHrSamples.count / 2
+            let firstHalf = intradayHrSamples.prefix(mid).map(\.value)
+            let secondHalf = intradayHrSamples.suffix(intradayHrSamples.count - mid).map(\.value)
+            let m1 = firstHalf.reduce(0, +) / Double(firstHalf.count)
+            let m2 = secondHalf.reduce(0, +) / Double(secondHalf.count)
+            measuredDrift = max(0, Int((m2 - m1).rounded()))
+        }
+        let thermalBpm = weather?.estimatedHrDriftBpm ?? 0
+        let totalDrift = max(measuredDrift, workout.durationMin >= 35 ? thermalBpm : thermalBpm / 2)
+
+        let durHours = Double(max(workout.durationMin, 10)) / 60.0
+        let highIntensity = hrPct >= 76.0 || workout.strainScore >= 13.0 || (workout.rpe ?? 0) >= 8
+        let carbsPerKgHour = highIntensity ? 0.95 : 0.55
+        let refillCarbs = max(20, Int((profile.weightKg * carbsPerKgHour * min(durHours, 2.5)).rounded()))
+        let refillProt = max(25, Int((profile.weightKg * 0.38).rounded()))
+        let baseSweatMl = Int((durHours * (highIntensity ? 720.0 : 480.0)).rounded())
+        let weatherSweatExtra = Int((Double(weather?.extraHydrationMl ?? 0) * min(durHours, 1.5) * 0.65).rounded())
+        let rehydMl = max(350, baseSweatMl + weatherSweatExtra)
+        let sodiumMg = Int((Double(rehydMl) * (thermalBpm >= 5 ? 0.85 : 0.55)).rounded())
+
+        let rec = recoveryPct ?? 65
+        let effLabel: String
+        let effHex: UInt64
+        let matchLabel: String
+        if rec < 40 && highIntensity {
+            effLabel = "Sobrecarga sobre fatiga"
+            effHex = 0xF97316
+            matchLabel = "Exigente con recuperación baja (\(rec)%)"
+        } else if totalDrift >= 8 {
+            effLabel = "Deriva cardíaca elevada (+\(totalDrift) ppm)"
+            effHex = 0xF5B942
+            matchLabel = thermalBpm >= 4 ? "Impacto térmico por clima (\(thermalBpm) ppm)" : "Desacoplamiento aeróbico en 2ª mitad"
+        } else {
+            effLabel = "Asimilación fisiológica óptima"
+            effHex = 0x3BD671
+            matchLabel = recoveryPct != nil ? "Alineado con tu recuperación (\(rec)%)" : "Estímulo bien tolerado"
+        }
+
+        var summary = "Estímulo \(matchLabel.lowercased())."
+        if totalDrift >= 4 {
+            let thermNote = thermalBpm >= 4 ? " (incluye +\(thermalBpm) ppm por calor/humedad)" : ""
+            summary += " Deriva estimada de +\(totalDrift) ppm\(thermNote)."
+        }
+        summary += " Ventana post-entreno ideal: \(refillCarbs) g de carbohidratos + \(refillProt) g de proteína y \(rehydMl) ml de agua con ~\(sodiumMg) mg de sodio."
+
+        return PostWorkoutPhysiologyAudit(
+            efficiencyLabel: effLabel,
+            efficiencyColorHex: effHex,
+            cardiacDriftBpm: totalDrift,
+            thermalContributionBpm: thermalBpm,
+            intensityMatchLabel: matchLabel,
+            glycogenRefillCarbsG: refillCarbs,
+            proteinRefillG: refillProt,
+            rehydrationMl: rehydMl,
+            sodiumMg: sodiumMg,
+            summaryText: summary
+        )
+    }
+
+    static func computeAdaptiveMicrocycle(
+        plan: GoalEventPlan,
+        anchorDate: Date,
+        recoveryPct: Int?,
+        freshMuscles: [String],
+        autoDeload: Bool
+    ) -> AdaptiveMicrocycleSnapshot {
+        let cal = Calendar(identifier: .gregorian)
+        let startToday = cal.startOfDay(for: anchorDate)
+        let targetDt = AppFormatters.parseIsoDay(plan.targetDateIso).map { cal.startOfDay(for: $0) } ?? cal.date(byAdding: .day, value: 42, to: startToday)!
+        let daysRem = max(0, cal.dateComponents([.day], from: startToday, to: targetDt).day ?? 0)
+        let rec = recoveryPct ?? 65
+
+        let (phaseName, badgeHex): (String, UInt64) = {
+            if autoDeload || (recoveryPct != nil && rec < 36) { return ("Descarga Adaptativa", 0xF97316) }
+            if daysRem <= 10 { return ("Taper Pre-Evento (\(daysRem)d)", 0x38BDF8) }
+            if daysRem <= 24 { return ("Pico Específico", 0xA78BFA) }
+            if daysRem <= 49 { return ("Construcción Progresiva", 0x3BD671) }
+            return ("Base Aeróbica y Fuerza", 0x60A5FA)
+        }()
+
+        let wdShort = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
+        let focusLow = plan.sportFocus.lowercased()
+        let isEndurance = focusLow.contains("carrer") || focusLow.contains("marat") || focusLow.contains("resist") || focusLow.contains("cicl") || focusLow.contains("triat")
+        let isStrength = focusLow.contains("fuerza") || focusLow.contains("hipertrof") || focusLow.contains("muscul") || focusLow.contains("volumen")
+        let topMuscle = freshMuscles.first ?? "tren superior"
+
+        var dayPlans: [AdaptiveMicrocycleDayPlan] = []
+        var todayRx = ""
+
+        for offset in 0..<7 {
+            guard let dt = cal.date(byAdding: .day, value: offset, to: startToday) else { continue }
+            let iso = AppFormatters.isoDayString(from: dt)
+            let wdIdx = max(0, min(6, cal.component(.weekday, from: dt) - 1))
+            let isToday = (offset == 0)
+
+            var title: String
+            var tag: String
+            var strainRng: String
+            var hex: UInt64
+
+            switch wdIdx {
+            case 1:
+                title = isEndurance ? "Rodaje Zona 2 + Core" : "Fuerza Principal (\(topMuscle))"
+                tag = "Moderado"; strainRng = "11–14"; hex = 0x38BDF8
+            case 2:
+                title = isStrength ? "Hipertrofia Tracción / Pierna" : "Series Umbral / Calidad"
+                tag = "Clave"; strainRng = "14–17"; hex = 0xF59E0B
+            case 3:
+                title = "Zona 2 suave o Movilidad activa"
+                tag = "Recuperación"; strainRng = "6–9"; hex = 0x34D399
+            case 4:
+                title = isEndurance ? "Tempo específico + Fuerza preventiva" : "Fuerza Empuje / Sobrecarga"
+                tag = "Moderado-Alto"; strainRng = "13–16"; hex = 0x60A5FA
+            case 5:
+                title = "Descanso activo · Paseo + Estiramientos"
+                tag = "Ligero"; strainRng = "4–7"; hex = 0x34D399
+            case 6:
+                title = isEndurance ? "Tirada larga aeróbica" : "Sesión completa / Metabólico"
+                tag = "Sesión Reina"; strainRng = "15–18"; hex = 0xA78BFA
+            default:
+                title = "Descanso total y recarga de sueño"
+                tag = "Descanso"; strainRng = "3–6"; hex = 0x64748B
+            }
+
+            if daysRem <= 10 && tag == "Sesión Reina" {
+                title = "Activación corta al ritmo objetivo (-40% vol.)"
+                tag = "Taper"; strainRng = "9–12"; hex = 0x38BDF8
+            }
+
+            if isToday {
+                if autoDeload || (recoveryPct != nil && rec < 38) {
+                    title = "Movilidad + 25 min Zona 1 (adaptado a tu recuperación)"
+                    tag = "Adaptado"; strainRng = "5–8"; hex = 0xF97316
+                } else if recoveryPct != nil && rec >= 75 && tag == "Moderado" {
+                    tag = "Verde Óptimo"; strainRng = "14–17"; hex = 0x3BD671
+                }
+                todayRx = "Hoy (\(phaseName)): \(title) · Strain objetivo \(strainRng)."
+            }
+
+            dayPlans.append(AdaptiveMicrocycleDayPlan(
+                id: iso,
+                dayShortLabel: wdShort[wdIdx],
+                isToday: isToday,
+                sessionTitle: title,
+                intensityTag: tag,
+                targetStrainRange: strainRng,
+                accentHex: hex
+            ))
+        }
+
+        return AdaptiveMicrocycleSnapshot(
+            plan: plan,
+            daysRemaining: daysRem,
+            phaseName: phaseName,
+            phaseBadgeColorHex: badgeHex,
+            todayPrescription: todayRx,
+            days: dayPlans
+        )
+    }
 }

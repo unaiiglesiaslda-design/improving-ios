@@ -380,7 +380,7 @@ extension ImprovingStore {
 
         let startLbl = curDates.first.map { AppFormatters.dMMM.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
         let endLbl = curDates.last.map { AppFormatters.dMMM.string(from: $0).replacingOccurrences(of: ".", with: "") } ?? ""
-        let weekKey = "\(curIsos.first ?? "")_\(curIsos.last ?? "")_r\(dataRevision)"
+        let weekKey = "\(curIsos.first ?? "")_\(curIsos.last ?? "")_r\(dataRevision)_\(coachPersonalityTone.rawValue)_\(coachDetailLevel.rawValue)"
 
         let report = WeeklyReviewReport(
             weekKey: weekKey,
@@ -422,6 +422,10 @@ extension ImprovingStore {
         let allowCloud = cloudAIEnabled
         let allowKeyless = allowKeylessAIFallback
         let uName = redactPIIFromAI ? "Usuario" : userProfile.displayFirstName
+        let tone = coachPersonalityTone
+        let detail = coachDetailLevel
+        let memories = redactPIIFromAI ? [] : coachMemoryNotes
+        let gMode = globalGoalMode
 
         Task { [weak self] in
             let insight = await GeminiCoachService.shared.generateWeeklyReviewInsight(
@@ -430,7 +434,11 @@ extension ImprovingStore {
                 apiKey: key,
                 selectedModel: model,
                 allowCloudAI: allowCloud,
-                allowKeylessFallback: allowKeyless
+                allowKeylessFallback: allowKeyless,
+                tone: tone,
+                detailLevel: detail,
+                memoryNotes: memories,
+                goalMode: gMode
             )
             await MainActor.run {
                 guard let self else { return }
@@ -482,7 +490,7 @@ extension ImprovingStore {
             dateIso: targetIso,
             dateLabel: dateLbl,
             strainPct: targetDay?.strainPct ?? 0,
-            recoveryPct: targetDay?.recoveryPct,
+            recoveryPct: validRecoveryPct(for: targetDay),
             sleepPct: targetDay?.sleepPct,
             energyPct: targetDay?.energyBankPercent,
             stressScore: targetDay?.stressSamples5m.last.map { Int($0.value.rounded()) } ?? targetDay?.stressScore,
@@ -605,7 +613,9 @@ extension ImprovingStore {
             coachPersonalityTone: coachPersonalityTone,
             coachDetailLevel: coachDetailLevel,
             archivedAiInsights: Array(archivedAiInsights.prefix(120)),
-            dynamicStrainNutritionEnabled: dynamicStrainNutritionEnabled
+            dynamicStrainNutritionEnabled: dynamicStrainNutritionEnabled,
+            activeGoalEventPlan: activeGoalEventPlan,
+            voiceReadoutAutoEnabled: voiceReadoutAutoEnabled
         )
     }
 
@@ -771,6 +781,8 @@ extension ImprovingStore {
         if let cDet = snap.coachDetailLevel { coachDetailLevel = cDet }
         if let arch = snap.archivedAiInsights { archivedAiInsights = arch }
         if let dynNut = snap.dynamicStrainNutritionEnabled { dynamicStrainNutritionEnabled = dynNut }
+        if let gPlan = snap.activeGoalEventPlan { activeGoalEventPlan = gPlan }
+        if let vAuto = snap.voiceReadoutAutoEnabled { voiceReadoutAutoEnabled = vAuto }
 
         // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
         if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {
@@ -827,13 +839,24 @@ extension ImprovingStore {
         // One-time self-healing migration for days corrupted by the v1 3-decimal kcal multiplier (>6,000 kcal -> 100% strain)
         var sanitizedCorruptStrain = false
         for (iso, day) in realHistory {
-            if let k = day.activeKcal, k > 6_000 {
-                var clean = day
+            var clean = day
+            var mutated = false
+            if let k = clean.activeKcal, k > 6_000 {
                 clean.activeKcal = nil
                 clean.strainPct = nil
                 clean.strain21 = nil
-                realHistory[iso] = clean
+                mutated = true
                 sanitizedCorruptStrain = true
+            }
+            // Enforce WHOOP sleep-gated recovery rule on previously synced real days without sleep
+            if !clean.hasRecordedSleep,
+               clean.recoveryPct != nil,
+               (clean.hrvMethodLabel != nil || clean.syncDiagnosticLine != nil) {
+                clean.recoveryPct = nil
+                mutated = true
+            }
+            if mutated {
+                realHistory[iso] = clean
             }
         }
         if sanitizedCorruptStrain {

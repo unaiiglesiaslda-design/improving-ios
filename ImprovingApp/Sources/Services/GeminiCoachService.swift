@@ -15,6 +15,7 @@ struct GeminiCoachResult {
     let usedLiveCloud: Bool
     let modelUsed: String
     let appliedActions: [CoachAppliedAction]
+    let followUpChips: [String]
 
     init(
         verdictTitle: String,
@@ -24,7 +25,8 @@ struct GeminiCoachResult {
         interactionId: String?,
         usedLiveCloud: Bool,
         modelUsed: String,
-        appliedActions: [CoachAppliedAction] = []
+        appliedActions: [CoachAppliedAction] = [],
+        followUpChips: [String] = []
     ) {
         self.verdictTitle = verdictTitle
         self.text = text
@@ -34,6 +36,7 @@ struct GeminiCoachResult {
         self.usedLiveCloud = usedLiveCloud
         self.modelUsed = modelUsed
         self.appliedActions = appliedActions
+        self.followUpChips = followUpChips
     }
 }
 
@@ -264,8 +267,16 @@ actor GeminiCoachService {
             .replacingOccurrences(of: "__", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let regex = try? NSRegularExpression(pattern: "^(Opini[oó]n\\s*(de\\s*)?(IA)?\\s*(\\([^)]*\\))?\\s*:\\s*)", options: [.caseInsensitive]) {
+        if let regex = try? NSRegularExpression(pattern: "^(Opini[oó]n\\s*(de\\s*)?(IA)?\\s*(\\([^)]*\\))?\\s*:\\s*|Veredicto\\s*:\\s*|An[aá]lisis\\s*:\\s*)", options: [.caseInsensitive]) {
             cleaned = regex.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: "")
+        }
+        // Preserve numbered lists like "1) Haz esto" -> "1. Haz esto" before parenthetical cleanup
+        if let listRegex = try? NSRegularExpression(pattern: "(^|\\n)(\\s*\\d+)\\)\\s+") {
+            cleaned = listRegex.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: "$1$2. ")
+        }
+        // Keep short clinical/biomarker codes like "Vitamina D (25-OH)" clean without ugly double commas
+        if let codeParenRegex = try? NSRegularExpression(pattern: "\\s*\\(([A-Za-z0-9/\\-\\+%]{1,10})\\)") {
+            cleaned = codeParenRegex.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: " $1")
         }
         if let parenRegex = try? NSRegularExpression(pattern: "\\s*\\(([^)]*)\\)") {
             cleaned = parenRegex.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: ", $1,")
@@ -276,6 +287,7 @@ actor GeminiCoachService {
             .replacingOccurrences(of: " ,", with: ",")
             .replacingOccurrences(of: ",,", with: ",")
             .replacingOccurrences(of: ",.", with: ".")
+            .replacingOccurrences(of: ",;", with: ";")
             .replacingOccurrences(of: ",:", with: ":")
             .replacingOccurrences(of: "  ", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)

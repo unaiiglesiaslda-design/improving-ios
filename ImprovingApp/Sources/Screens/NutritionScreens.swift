@@ -63,6 +63,12 @@ enum MealPhotoStorage {
         }
     }
 
+    static func loadPhotoData(filename: String?) -> Data? {
+        guard let filename, !filename.isEmpty else { return nil }
+        let url = folderURL.appendingPathComponent(filename)
+        return try? Data(contentsOf: url)
+    }
+
     static func loadImage(filename: String?) -> UIImage? {
         guard let filename, !filename.isEmpty else { return nil }
         let key = filename as NSString
