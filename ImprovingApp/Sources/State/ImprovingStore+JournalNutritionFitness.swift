@@ -237,8 +237,7 @@ extension ImprovingStore {
 
             let yCount = yesVals.count
             let nCount = noVals.count
-            // In 30-day & 6-month trend views, unlock insights cleanly once user has 30d history OR >= 4 yes & >= 4 no paired observations!
-            let reachedThreshold = hasUserFilledForm && (spanDays >= Self.diarioRequiredTrackingDays || totalExplicitDays >= Self.diarioRequiredTrackingDays || (yCount >= 4 && nCount >= 4))
+            let reachedThreshold = hasUserFilledForm && (spanDays >= Self.diarioRequiredTrackingDays || totalExplicitDays >= Self.diarioRequiredTrackingDays)
 
             let tier: JournalReliabilityTier
             let impact: Int

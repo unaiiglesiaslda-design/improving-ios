@@ -2077,9 +2077,11 @@ final class AppleHealthExportImporterTests: XCTestCase {
         // 6. Coach tool safety: delete workout without ID/title refused; invalid date rejected; PII redaction works
         let wk = EffortEventItem(id: "w1", title: "Carrera 8K", timeRange: "08:00 - 08:40", durationMin: 40, avgHrBpm: 155, strainScore: 12, strainPct: 58, categoryLabel: "Cardio", kcal: 420, dateIso: store.selectedDateIso)
         store.updateWorkout(wk, originalDateIso: store.selectedDateIso)
+        let workoutsCountBeforeBadDel = store.workoutsToday.count
         let badDel = store.executeCoachToolCall(name: "edit_or_delete_workout", argsJson: #"{"delete":true}"#)
         XCTAssertTrue(badDel.responseJson.contains("\"ok\":false"))
-        XCTAssertEqual(store.workoutsToday.count, 1)
+        XCTAssertEqual(store.workoutsToday.count, workoutsCountBeforeBadDel)
+        XCTAssertTrue(store.workoutsToday.contains(where: { $0.id == "w1" }))
 
         let badDate = store.executeCoachToolCall(name: "log_meal", argsJson: #"{"title":"Test","kcal":200,"date_iso":"2026-13-45"}"#)
         XCTAssertTrue(badDate.responseJson.contains("\"ok\":false"))
