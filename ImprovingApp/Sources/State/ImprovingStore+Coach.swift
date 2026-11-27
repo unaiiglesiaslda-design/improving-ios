@@ -280,7 +280,7 @@ extension ImprovingStore {
                     "ejercicio": s.exercise,
                     "ultimo_peso_kg": s.weightKg,
                     "ultimas_reps": s.reps,
-                    "1rm_estimado_kg": AppleHealthExportImporter.round1(snap.bestEstimated1RM),
+                    "1rm_estimado_kg": AppleHealthExportImporter.round1(snap.bestOneRepMaxKg),
                     "peso_sugerido_hoy_kg": snap.suggestedWeightKg
                 ])
                 if marcasFuerza.count >= 12 { break }
