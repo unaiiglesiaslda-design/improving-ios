@@ -246,6 +246,23 @@ struct NutritionGoalsSheet: View {
                             goalField("Grasas (g)", text: $fatText, color: NutritionPalette.fatBlue)
                             goalField("Carbohidratos (g)", text: $carbsText, color: NutritionPalette.carbsAmber)
                             goalField("Proteína (g)", text: $protText, color: NutritionPalette.proteinPink)
+
+                            Divider().background(BevelColors.divider)
+
+                            Toggle(isOn: Binding(
+                                get: { store.dynamicStrainNutritionEnabled },
+                                set: { store.setDynamicStrainNutrition(enabled: $0) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Carb Cycling dinámico por Strain")
+                                        .font(ImprovingFont.cardTitle(13.5))
+                                        .foregroundColor(BevelColors.textPrimary)
+                                    Text("Sube carbohidratos y electrolitos en días duros (Strain ≥ 14) y recorta suave en descanso (< 7) protegiendo la proteína.")
+                                        .font(ImprovingFont.caption(11))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                }
+                            }
+                            .tint(BevelColors.emeraldEnd)
                         }
                         .padding(16)
                     }

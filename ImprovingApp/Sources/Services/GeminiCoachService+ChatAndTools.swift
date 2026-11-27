@@ -9,7 +9,9 @@ extension GeminiCoachService {
         biometricContextJson: String,
         availableHighlights: [String],
         missingCategories: [String],
-        isFollowUp: Bool
+        isFollowUp: Bool,
+        tone: CoachPersonalityTone = .directo,
+        detailLevel: CoachDetailLevel = .equilibrado
     ) -> String {
         let name = userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "el usuario" : userName.trimmingCharacters(in: .whitespacesAndNewlines)
         let moment = describeLocalMoment(currentDate)
@@ -29,19 +31,23 @@ extension GeminiCoachService {
         return """
         Eres el entrenador personal, fisiólogo y nutricionista humano de \(name) dentro de Improving.
         HORA LOCAL ACTUAL: \(moment.hhmm), franja de \(moment.periodName). \(moment.guidance)
+        PERSONALIDAD CONFIGURADA: \(tone.systemDirective)
+        NIVEL DE DETALLE CONFIGURADO: \(detailLevel.systemDirective)
 
         CÓMO CONVERSAR Y ACTUAR DENTRO DE LA APP:
         - \(continuityRule)
         - Si te pregunta sobre entrenamiento, sueño, comida, salir de fiesta, suplementos, molestias, horarios o cualquier tema cotidiano o deportivo, responde con naturalidad, criterio real y cercanía.
-        - TIENES CAPACIDAD REAL PARA REGISTRAR, EDITAR Y BORRAR DATOS EN IMPROVING mediante tus herramientas (`log_meal`, `edit_meal`, `delete_meal`, `add_quick_nutrient`, `update_nutrition_goals`, `set_journal_habit`, `set_journal_note_and_mood`, `create_custom_habit`, `log_workout`, `edit_or_delete_workout`, `log_body_measurement`, `save_coach_memory`).
+        - TIENES CAPACIDAD REAL PARA PLANIFICAR, REGISTRAR, EDITAR Y BORRAR DATOS EN IMPROVING mediante tus 14 herramientas (`log_meal`, `edit_meal`, `delete_meal`, `add_quick_nutrient`, `update_nutrition_goals`, `set_journal_habit`, `set_journal_note_and_mood`, `create_custom_habit`, `log_workout`, `edit_or_delete_workout`, `log_body_measurement`, `save_coach_memory`, `create_strength_routine`, `propose_macro_meals`).
+        - PLANIFICACIÓN EJECUTABLE DE ENTRENOS: Cuando \(name) te pida que le crees o prepares una rutina de fuerza para hoy ("créame la rutina de hoy según mi recuperación y músculos frescos", "diseña mi sesión de hoy"), revisa `metricas_hoy.recuperacion_pct`, `frescura_muscular` y `diario_hoy.modo_objetivo_global`, y LLAMA DIRECTAMENTE a `create_strength_routine` con 4 a 6 ejercicios reales (series, repeticiones, kg aproximados y grupo muscular) para guardarla y abrirla en 1 toque en Strength Builder.
+        - PLANIFICACIÓN EJECUTABLE DE COMIDAS PARA CLAVAR MACROS: Cuando \(name) te pregunte qué cenar, comer o merendar para cuadrar los macros que le faltan hoy ("dime qué cenar para clavar mis macros", "qué puedo comer ahora"), consulta `nutricion_hoy.macros_restantes_hoy` y `nutricion_dinamica_strain`, y LLAMA DIRECTAMENTE a `propose_macro_meals` proponiendo exactamente 2 opciones realistas en español con gramos aproximados que claven esos macros restantes para que pueda guardarlas en 1 toque desde el chat.
         - MEMORIA A LARGO PLAZO Y MODO ACTIVO: Respeta siempre los recuerdos permanentes en `diario_hoy.memoria_largo_plazo_usuario` (lesiones, objetivos deportivos, intolerancias, horarios) y la directriz del modo elegido en `diario_hoy.modo_objetivo_global`. Si \(name) te pide que recuerdes algo para el futuro ("recuerda que tengo tendinitis", "apunta que preparo media maratón"), llama directamente a `save_coach_memory`.
+        - CONTEXTO INTEGRAL: Aprovecha `contexto_meteorologico_hoy` (si hay calor/humedad explica la deriva de FC y sube hidratación), `nutricion_dinamica_strain` (Carb Cycling según Strain), `causalidad_cruzada_local` (Nutrición × Analíticas × Biometría) y `correlaciones_diario_30d_6m` para dar explicaciones causales de alto nivel.
         - Cuando \(name) te pida registrar algo ("he comido...", "apunta...", "hoy pesé...", "hice 45 min de pádel...", "marca creatina en el diario...") o modificar/borrar un registro ("cambia la hora del desayuno a las 9:15", "borra la merienda", "pasa la cena a ayer"), EJECUTA LA HERRAMIENTA DIRECTAMENTE SIN PEDIR PERMISO PREVIO (el usuario siempre tiene un botón Deshacer en tu respuesta).
         - Si \(name) adjunta una foto de un plato y dice que se lo comió o pide registrarlo, estima con precisión título, kcal, proteína, carbos, grasas, puntuación 1–100 y factores nutricionales y llama a `log_meal` directamente con la hora indicada (o la hora actual si no indicó otra).
         - Para editar o borrar comidas/entrenamientos usa siempre el `id` exacto que aparece en `nutricion_hoy.comidas_registradas`, `comidas_ayer` o `metricas_hoy.entrenamientos_hoy`.
         - En el Diario (`set_journal_habit`), la hora del evento (`event_time`) es SIEMPRE OPCIONAL: pásala SOLO si el usuario dice una hora concreta (ej. "café a las 16:30"); si no dice hora, omítela.
-        - Cuando el usuario solo hace una consulta o pide consejo, NO llames a ninguna herramienta y responde normalmente.
-        - Puedes hacer repreguntas breves si necesitas contexto adicional para ayudarle mejor, exactamente como haría una persona real.
-        - Escribe en texto natural fluido en español de tú a tú, en 1 a 3 párrafos cortos y claros, o viñetas simples con guion solo si el usuario pide un plan o lista.
+        - Cuando el usuario solo hace una consulta general sin pedir acción ni plan ejecutable, NO llames a ninguna herramienta y responde normalmente.
+        - Escribe en texto natural fluido en español de tú a tú respetando la personalidad y el nivel de detalle configurados.
         - NO respondas en JSON, NO uses llaves {}, NO uses markdown con asteriscos ** ni paréntesis (). Integra las cifras de forma natural en la frase.
         - NO empieces con prefijos robóticos como "Análisis:", "Veredicto:" ni "Opinión IA:".
 
@@ -49,7 +55,7 @@ extension GeminiCoachService {
         - \(dataConnection)
         - \(missingWarning)
         - PROHIBIDO inventar, estimar o rellenar ninguna cifra marcada como "NO_DISPONIBLE". Si pregunta por una métrica ausente, díselo con total naturalidad sin inventar ningún número.
-        - Presta especial atención al bloque `diario_hoy` (hábitos personalizados, `nota_del_dia` y `notas_recientes`) y `nutricion_hoy` (comidas, macros, cafeína, hidratación y alcohol) para explicar variaciones reales en su VFC, sueño, recuperación o energía cuando vengan al caso.
+        - Presta especial atención al bloque `diario_hoy` (hábitos personalizados, `nota_del_dia` y `notas_recientes`), `nutricion_hoy` (comidas, macros, cafeína, hidratación y alcohol), `analiticas_recientes` y `causalidad_cruzada_local` para explicar variaciones reales en su VFC, sueño, recuperación o energía cuando vengan al caso.
 
         DATOS REALES DE \(name.uppercased()):
         \(biometricContextJson)
@@ -337,6 +343,62 @@ extension GeminiCoachService {
                 ],
                 "required": ["note"]
             ]
+        ],
+        [
+            "name": "create_strength_routine",
+            "description": "Crea y guarda una rutina de fuerza personalizada adaptada a la recuperación y músculos frescos del usuario, lista para abrirse y entrenarse al instante en Strength Builder.",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "name": ["type": "STRING", "description": "Nombre de la rutina en español (ej. Empuje Hipertrofia Recuperación Alta)"],
+                    "category": ["type": "STRING", "description": "Fuerza, Cardio o Movilidad"],
+                    "exercises": [
+                        "type": "ARRAY",
+                        "description": "Lista de 3 a 7 ejercicios concretos",
+                        "items": [
+                            "type": "OBJECT",
+                            "properties": [
+                                "name": ["type": "STRING", "description": "Nombre del ejercicio en español"],
+                                "sets": ["type": "INTEGER", "description": "Número de series (2 a 6)"],
+                                "reps": ["type": "INTEGER", "description": "Repeticiones objetivo (4 a 20)"],
+                                "weight_kg": ["type": "NUMBER", "description": "Peso inicial sugerido en kg"],
+                                "primary_muscle": ["type": "STRING", "description": "Músculo principal: Pectorales, Dorsales, Hombros, Cuádriceps, Isquiotibiales, Glúteos, Bíceps, Tríceps o Abdominales"]
+                            ],
+                            "required": ["name", "sets", "reps"]
+                        ]
+                    ]
+                ],
+                "required": ["name", "exercises"]
+            ]
+        ],
+        [
+            "name": "propose_macro_meals",
+            "description": "Propone 2 opciones concretas de comida o cena con cantidades y macros exactos para cuadrar los macros restantes del usuario, mostrándolas en el chat como tarjetas guardables en 1 toque.",
+            "parameters": [
+                "type": "OBJECT",
+                "properties": [
+                    "options": [
+                        "type": "ARRAY",
+                        "description": "Exactamente 2 opciones realistas que cuadren los macros restantes",
+                        "items": [
+                            "type": "OBJECT",
+                            "properties": [
+                                "title": ["type": "STRING", "description": "Nombre apetecible del plato en español"],
+                                "emoji": ["type": "STRING", "description": "1 emoji representativo"],
+                                "description": ["type": "STRING", "description": "Ingredientes concretos con gramos aproximados"],
+                                "kcal": ["type": "INTEGER", "description": "Calorías totales"],
+                                "protein_g": ["type": "INTEGER", "description": "Gramos de proteína"],
+                                "carbs_g": ["type": "INTEGER", "description": "Gramos de carbohidratos"],
+                                "fat_g": ["type": "INTEGER", "description": "Gramos de grasa"],
+                                "fiber_g": ["type": "NUMBER", "description": "Gramos de fibra"],
+                                "quality_score": ["type": "INTEGER", "description": "Calidad nutricional 1-100"]
+                            ],
+                            "required": ["title", "kcal", "protein_g", "carbs_g", "fat_g"]
+                        ]
+                    ]
+                ],
+                "required": ["options"]
+            ]
         ]
     ]
 
@@ -356,6 +418,8 @@ extension GeminiCoachService {
         jpegImageData: Data? = nil,
         allowCloudAI: Bool = true,
         allowKeylessFallback: Bool = false,
+        tone: CoachPersonalityTone = .directo,
+        detailLevel: CoachDetailLevel = .equilibrado,
         actionExecutor: (@Sendable (String, String) async -> (responseJson: String, appliedAction: CoachAppliedAction?))? = nil
     ) async -> GeminiCoachResult {
         let seed = nextSeed()
@@ -366,7 +430,9 @@ extension GeminiCoachService {
             biometricContextJson: biometricContextJson,
             availableHighlights: availableHighlights,
             missingCategories: missingCategories,
-            isFollowUp: isFollowUp
+            isFollowUp: isFollowUp,
+            tone: tone,
+            detailLevel: detailLevel
         )
         let cleanKey = Self.sanitizeApiKey(apiKey)
         let model = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "gemini-2.5-flash" : selectedModel

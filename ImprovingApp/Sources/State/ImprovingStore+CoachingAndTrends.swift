@@ -77,6 +77,9 @@ extension ImprovingStore {
             if z.reduce(0, +) > 0 {
                 facts.append("Minutos por zonas de FC Z1-Z5: \(z.enumerated().map { "Z\($0.offset + 1) \($0.element)m" }.joined(separator: ", "))")
             }
+            if dayOffset == 0, let w = weatherSnapshot {
+                facts.append("Clima local (\(w.cityName)): \(w.effortImpactSummary)")
+            }
             return (facts, av.hasStrainData || av.hasWorkoutData)
 
         case .recuperacion:
@@ -104,6 +107,9 @@ extension ImprovingStore {
             if let t = wristTempAbsoluteC {
                 let dStr = d?.wristTempDeltaC.map { String(format: " (desviación %+.1f °C)", locale: Locale(identifier: "es_ES"), $0) } ?? ""
                 facts.append(String(format: "Temperatura muñeca %.1f °C%@", locale: Locale(identifier: "es_ES"), t, dStr))
+            }
+            if dayOffset == 0, let w = weatherSnapshot {
+                facts.append("Clima y recuperación (\(w.cityName)): \(w.recoveryImpactSummary)")
             }
             return (facts, av.hasRecoveryData || av.hasHrvData || av.hasRestingHrData)
 
@@ -178,6 +184,52 @@ extension ImprovingStore {
                 facts.append("Entrenamientos hoy: \(workoutsToday.map { "\($0.title) \($0.durationMin)m" }.joined(separator: ", "))")
             }
             return (facts, !facts.isEmpty)
+
+        case .diario:
+            let dayMap = journalCheckinsByDate[selectedDateIso] ?? [:]
+            let yesTitles = allCatalogAndCustomEntries.filter { !$0.isAuto && dayMap[$0.id] == .yes }.map(\.title)
+            if !yesTitles.isEmpty {
+                facts.append("Hábitos marcados hoy: \(yesTitles.prefix(6).joined(separator: ", "))")
+            }
+            let note = journalNote(for: selectedDateIso)
+            if !note.isEmpty && !redactPIIFromAI {
+                facts.append("Nota personal del Diario: «\(note)»")
+            }
+            let timing = caffeineAndMealTimingToday
+            if timing.totalCaffeineTodayMg > 0 {
+                facts.append("Cafeína hoy \(Int(timing.totalCaffeineTodayMg)) mg, residual al acostarse \(Int(timing.estimatedCaffeineAtBedtimeMg)) mg")
+            }
+            if let gap = timing.hoursFromLastMealToBedtime {
+                facts.append(String(format: "Ventana cena a sueño: %.1f h", locale: Locale(identifier: "es_ES"), gap))
+            }
+            if totalCaloriesToday > 0 {
+                let goals = effectiveNutritionGoals
+                facts.append("Nutrición hoy: \(totalCaloriesToday)/\(goals.kcal) kcal, proteína \(totalProteinToday)/\(goals.proteinG) g, carbos \(totalCarbsToday)/\(goals.carbsG) g")
+            }
+            let dyn = dynamicStrainNutritionSnapshot
+            if dyn.isEnabled && (dyn.isHighLoad || dyn.isRestDay) {
+                facts.append("Carb Cycling activo: \(dyn.phaseTitle) · \(dyn.summaryText)")
+            }
+            if av.hasRecoveryData || av.hasHrvData {
+                var bio: [String] = []
+                if av.hasRecoveryData { bio.append("Recuperación \(recoveryPercent)%") }
+                if av.hasHrvData { bio.append(String(format: "VFC %.1f ms", locale: Locale(identifier: "es_ES"), hrvMs)) }
+                if av.hasSleepData { bio.append("Sueño \(sleepPercent)%") }
+                facts.append("Biometría actual: \(bio.joined(separator: ", "))")
+            }
+            if !redactPIIFromAI && !latestBiomarkersByName.isEmpty {
+                let flagged = latestBiomarkersByName.filter { $0.status != .normal }.prefix(3)
+                if !flagged.isEmpty {
+                    facts.append("Analíticas fuera de rango: \(flagged.map { "\($0.name) \(String(format: "%.1f", $0.value)) \($0.unit) (\($0.status.rawValue))" }.joined(separator: ", "))")
+                }
+            }
+            if let topCausal = unifiedCausalInsights.first, topCausal.id != "cross_ready_calibration" {
+                facts.append("Hallazgo causal cruzado: \(topCausal.title) (\(topCausal.impactBadge))")
+            }
+            if dayOffset == 0, let w = weatherSnapshot {
+                facts.append("Clima hoy (\(w.cityName)): \(w.effortImpactSummary)")
+            }
+            return (facts, !facts.isEmpty)
         }
     }
 
@@ -198,6 +250,8 @@ extension ImprovingStore {
         let model = selectedGeminiModel
         let allowCloud = cloudAIEnabled
         let allowKeyless = allowKeylessAIFallback
+        let tone = coachPersonalityTone
+        let detail = coachDetailLevel
         let userName = redactPIIFromAI ? "Usuario" : userProfile.userName
         let selIso = selectedDateIso
         let isToday = dayOffset == 0
@@ -220,7 +274,9 @@ extension ImprovingStore {
                 apiKey: apiKey,
                 selectedModel: model,
                 allowCloudAI: allowCloud,
-                allowKeylessFallback: allowKeyless
+                allowKeylessFallback: allowKeyless,
+                tone: tone,
+                detailLevel: detail
             )
             await MainActor.run {
                 guard let self, !Task.isCancelled else { return }
@@ -228,6 +284,7 @@ extension ImprovingStore {
                 self.sectionCoachingTimestamps[key] = Date().timeIntervalSince1970
                 self.lastHeadlineBySection[section] = card.headline
                 self.loadingCoachingSections.remove(section)
+                self.archiveAiInsight(section: section, emoji: card.emoji, headline: card.headline, body: card.body)
                 // Evict oldest entries by real LRU timestamp (never alphabetical, which previously evicted energia/esfuerzo!)
                 if self.sectionCoachingCache.count > 35 {
                     let dropCount = self.sectionCoachingCache.count - 35

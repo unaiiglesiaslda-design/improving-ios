@@ -599,7 +599,13 @@ extension ImprovingStore {
             globalGoalMode: globalGoalMode,
             nutritionRecipes: nutritionRecipes,
             cycleTrackingSettings: cycleTrackingSettings,
-            autoDeloadModeActive: autoDeloadModeActive
+            autoDeloadModeActive: autoDeloadModeActive,
+            weatherCityName: weatherCityName,
+            weatherSnapshot: weatherSnapshot,
+            coachPersonalityTone: coachPersonalityTone,
+            coachDetailLevel: coachDetailLevel,
+            archivedAiInsights: Array(archivedAiInsights.prefix(120)),
+            dynamicStrainNutritionEnabled: dynamicStrainNutritionEnabled
         )
     }
 
@@ -759,6 +765,12 @@ extension ImprovingStore {
         if let nRecs = snap.nutritionRecipes { nutritionRecipes = nRecs }
         if let cSet = snap.cycleTrackingSettings { cycleTrackingSettings = cSet }
         if let dMode = snap.autoDeloadModeActive { autoDeloadModeActive = dMode }
+        if let wCity = snap.weatherCityName { weatherCityName = wCity }
+        if let wSnap = snap.weatherSnapshot { weatherSnapshot = wSnap }
+        if let cTone = snap.coachPersonalityTone { coachPersonalityTone = cTone }
+        if let cDet = snap.coachDetailLevel { coachDetailLevel = cDet }
+        if let arch = snap.archivedAiInsights { archivedAiInsights = arch }
+        if let dynNut = snap.dynamicStrainNutritionEnabled { dynamicStrainNutritionEnabled = dynNut }
 
         // Automatically migrate retired Gemini 2.0 / 2.5-flash-lite defaults to live Auto-Discovery ("auto")
         if snap.selectedGeminiModel == "gemini-2.5-flash-lite" || snap.selectedGeminiModel == "gemini-2.0-flash" || snap.selectedGeminiModel.isEmpty {

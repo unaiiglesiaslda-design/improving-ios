@@ -283,6 +283,11 @@ struct EsfuerzoScreen: View {
 
                     LiveAiCoachingCard(section: .esfuerzo, store: store)
 
+                    // Contexto meteorológico real (Open-Meteo gratis): Tª, humedad, UV, deriva FC y agua extra
+                    if store.dayOffset == 0 {
+                        WeatherPhysiologyCard(store: store, compactForRecovery: false)
+                    }
+
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Cronología del esfuerzo")
                             .font(ImprovingFont.sectionTitle(18))
@@ -424,6 +429,10 @@ struct RecuperacionScreen: View {
                     }
 
                     LiveAiCoachingCard(section: .recuperacion, store: store)
+
+                    if store.dayOffset == 0 && store.weatherSnapshot != nil {
+                        WeatherPhysiologyCard(store: store, compactForRecovery: true)
+                    }
 
                     // Cronología de la recuperación (only when sleep exists)
                     if avail.hasSleepData {

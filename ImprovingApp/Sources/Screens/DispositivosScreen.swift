@@ -581,6 +581,10 @@ struct DispositivosScreen: View {
                 }
                 .padding(.horizontal, 16)
 
+                // Contexto Meteorológico Local (Open-Meteo gratis, sin API Key)
+                WeatherPhysiologyCard(store: store, compactForRecovery: false)
+                    .padding(.horizontal, 16)
+
                 // WHOOP BLE Live Connection
                 BevelCard {
                     VStack(alignment: .leading, spacing: 12) {

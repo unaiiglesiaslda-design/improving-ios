@@ -20,7 +20,9 @@ extension GeminiCoachService {
         apiKey: String,
         selectedModel: String,
         allowCloudAI: Bool = true,
-        allowKeylessFallback: Bool = false
+        allowKeylessFallback: Bool = false,
+        tone: CoachPersonalityTone = .directo,
+        detailLevel: CoachDetailLevel = .equilibrado
     ) async -> SectionCoachingCard {
         let seed = nextSeed()
         let moment = describeLocalMoment(currentDate)
@@ -42,6 +44,8 @@ extension GeminiCoachService {
                 noDataBody = "No hay curva de energía disponible para esta fecha porque faltan lecturas continuas del reloj. Sincroniza Apple Health o navega a un día con datos."
             case .fitness:
                 noDataBody = "Sin sesiones ni carga cardiovascular registrada todavía en esta ventana. Cuando entrenes o importes tu historial verás tu recomendación personalizada de carga."
+            case .diario:
+                noDataBody = "Marca tus hábitos de hoy, añade una nota o registra tus comidas para que cruce tu Diario con tu nutrición, analíticas, clima y biometría."
             case .hoy:
                 noDataBody = "No constan mediciones recopiladas en Apple Health ni en tu reloj para esta fecha. Usa las flechas o el calendario para consultar días con registros, o sincroniza en Ajustes."
             }
@@ -70,6 +74,8 @@ extension GeminiCoachService {
         Eres el entrenador personal y fisiólogo de \(name) en Improving.
         APARTADO ACTUAL: \(section.displayName.uppercased()).
         ENFOQUE EXCLUSIVO DEL APARTADO: \(focusDirective)
+        PERSONALIDAD CONFIGURADA POR EL USUARIO: \(tone.systemDirective)
+        NIVEL DE DETALLE CONFIGURADO: \(detailLevel.systemDirective)
 
         CONSCIENCIA HORARIA:
         - \(dayFrame)
@@ -80,7 +86,7 @@ extension GeminiCoachService {
         3. \(avoidRepeat)
         4. PROHIBIDO usar frases vacías como "escucha a tu cuerpo", "mantén un enfoque equilibrado", "lectura real del día:" ni paréntesis ().
         5. PROHIBIDO inventar o suponer cualquier métrica que aparezca como "NO_DISPONIBLE".
-        6. Habla a \(name) en español natural, directo, cercano y humano.
+        6. Habla a \(name) en español natural respetando estrictamente la personalidad y el nivel de detalle elegidos.
 
         DATOS ESPECÍFICOS REALES DE \(section.displayName.uppercased()):
         - \(sectionFacts.joined(separator: "\n- "))
@@ -327,6 +333,13 @@ extension GeminiCoachService {
             body = isViewingToday
                 ? "\(lead)con \(factsJoined) en tu historial reciente, a las \(moment.hhmm) conviene decidir si toca sesión exigente o estímulo técnico limpio. \(timeAction)"
                 : "\(lead)en torno al \(selectedDateIso) tu bloque de fitness sumaba \(factsJoined). Vigila la progresión semanal para seguir sumando sin sobreentrenar."
+        case .diario:
+            let heads = ["Valoración causal del Diario", "Cruce hábitos, comida y VFC", "Lectura del día en tu Diario"]
+            emoji = "📓"
+            headline = heads[idx]
+            body = isViewingToday
+                ? "\(lead)cruzando tu Diario con tu biometría, nutrición y analíticas reales destaca \(factsJoined). Protege tu ventana de cafeína y cena temprana para impulsar la recuperación de mañana."
+                : "\(lead)el \(selectedDateIso) tu Diario combinó \(factsJoined). Revisa tus correlaciones de 30 días y 6 meses para consolidar qué hábitos te hacen rendir mejor."
         case .hoy:
             let heads = ["Hoja de ruta a las \(moment.hhmm)", "Tu pulso de la \(moment.periodName)", "Prioridad hasta las \(nextUpdateLabel)"]
             emoji = "✨"
@@ -357,6 +370,7 @@ extension GeminiCoachService {
         case .estres: return "🧠"
         case .energia: return "⚡"
         case .fitness: return "🏋️"
+        case .diario: return "📓"
         }
     }
 
@@ -365,9 +379,9 @@ extension GeminiCoachService {
         case .hoy:
             return "Visión integradora del día: conecta recuperación, esfuerzo, sueño y batería de energía para darle la prioridad exacta para las próximas 4 horas."
         case .esfuerzo:
-            return "HABLA PRINCIPALMENTE DE ESFUERZO Y CARGA FÍSICA: porcentaje de esfuerzo frente a su rango objetivo óptimo, entrenamientos realizados, pulso medio, zonas cardíacas, pasos y calorías activas. No divagues sobre otros temas."
+            return "HABLA PRINCIPALMENTE DE ESFUERZO Y CARGA FÍSICA: porcentaje de esfuerzo frente a su rango objetivo óptimo, entrenamientos realizados, pulso medio, zonas cardíacas, pasos, calorías activas y el impacto térmico del clima real si hay calor o humedad."
         case .recuperacion:
-            return "HABLA PRINCIPALMENTE DE RECUPERACIÓN Y SISTEMA NERVIOSO AUTÓNOMO: porcentaje de recuperación, VFC nocturna frente a su línea base personal, FC en reposo durmiendo, frecuencia respiratoria, SpO2 y temperatura de muñeca."
+            return "HABLA PRINCIPALMENTE DE RECUPERACIÓN Y SISTEMA NERVIOSO AUTÓNOMO: porcentaje de recuperación, VFC nocturna frente a su línea base personal, FC en reposo durmiendo, frecuencia respiratoria, SpO2, temperatura de muñeca e hidratación climática si aplica."
         case .sueno:
             return "HABLA PRINCIPALMENTE DE SUEÑO: duración real, hora de acostarse y despertar, eficiencia, sueño profundo y REM, latencia, disminución de la FC nocturna y cómo proteger el descanso de la próxima noche."
         case .estres:
@@ -376,6 +390,8 @@ extension GeminiCoachService {
             return "HABLA PRINCIPALMENTE DE LA BATERÍA DE ENERGÍA CONTINUA: con qué porcentaje arrancó el día desde la noche anterior, cuánto recargó al dormir, cuánto lleva gastado hasta esta hora y cómo dosificar la batería restante."
         case .fitness:
             return "HABLA PRINCIPALMENTE DE FITNESS Y ENTRENAMIENTO: carga cardiovascular y muscular de 7 días, volumen de los últimos 30 días, VO2 máx., recuperación de FC, zonas cardíacas y qué tipo de sesión conviene hoy."
+        case .diario:
+            return "VALORACIÓN CAUSAL INTEGRAL DEL DIARIO: cruza los hábitos marcados hoy, la nota del día, las correlaciones de 30 días y 6 meses, la nutrición real (proteína, hora de cena, cafeína residual y Carb Cycling), las analíticas de sangre guardadas y el clima local para explicar qué está impulsando o frenando su VFC, sueño profundo y recuperación."
         }
     }
 

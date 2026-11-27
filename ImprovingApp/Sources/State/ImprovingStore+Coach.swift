@@ -130,6 +130,13 @@ extension ImprovingStore {
         let yesterdayIsoStr = isoFormatter.string(from: cal.date(byAdding: .day, value: -1, to: Date()) ?? Date())
         let yesterdayMeals = mealsByDate[yesterdayIsoStr] ?? []
         let goalsNow = effectiveNutritionGoals
+        let dynNut = dynamicStrainNutritionSnapshot
+        let macrosRestantes: [String: Any] = [
+            "kcal_restantes": max(goalsNow.kcal - totalCaloriesToday, 0),
+            "proteina_restante_g": max(goalsNow.proteinG - totalProteinToday, 0),
+            "carbos_restantes_g": max(goalsNow.carbsG - totalCarbsToday, 0),
+            "grasas_restantes_g": max(goalsNow.fatG - totalFatToday, 0)
+        ]
 
         let nutricionHoy: [String: Any] = [
             "kcal_ingeridas": totalCaloriesToday,
@@ -142,9 +149,21 @@ extension ImprovingStore {
                 "carbos_g": goalsNow.carbsG,
                 "grasas_g": goalsNow.fatG
             ],
+            "macros_restantes_hoy": macrosRestantes,
+            "nutricion_dinamica_strain": [
+                "activa": dynNut.isEnabled,
+                "fase": dynNut.phaseTitle,
+                "delta_kcal": dynNut.kcalDelta,
+                "delta_carbos_g": dynNut.carbsDeltaG,
+                "delta_proteina_g": dynNut.proteinDeltaG,
+                "extra_hidratacion_ml": dynNut.extraHydrationMl,
+                "resumen": dynNut.summaryText
+            ],
             "calidad_media": foodQualityScore.map { $0 as Any } ?? "SIN_COMIDAS",
             "hidratacion_ml": Int(totalHydrationTodayMl.rounded()),
+            "meta_hidratacion_ml": Int(effectiveHydrationGoalMl.rounded()),
             "cafeina_mg": Int(totalCaffeineTodayMg.rounded()),
+            "cafeina_residual_al_acostarse_mg": Int(caffeineAndMealTimingToday.estimatedCaffeineAtBedtimeMg.rounded()),
             "alcohol_bebidas": totalAlcoholTodayDrinks,
             "comidas_registradas": mealsToday.map { m -> [String: Any] in
                 [
@@ -192,6 +211,19 @@ extension ImprovingStore {
             "impacto_analiticas_anos": bioSnap.eval.bloodLabsDelta
         ]
 
+        let muscleSnaps = muscleGroupSnapshots()
+        let freshMuscles = muscleSnaps.filter { $0.state == .recovered || $0.freshnessPct >= 80 }.map(\.muscle.rawValue)
+        let fatiguedMuscles = muscleSnaps.filter { $0.state == .fatigued || $0.state == .exhausted }.map { "\($0.muscle.rawValue) (\($0.freshnessPct)%)" }
+        let causalRows: [[String: Any]] = unifiedCausalInsights.prefix(6).map { item in
+            [
+                "categoria": item.categoryBadge,
+                "titulo": item.title,
+                "impacto": item.impactBadge,
+                "detalle": item.detail
+            ]
+        }
+        let longTermJournalRows = computeLongTermJournalTrendsSummaryForAI()
+
         let nowFmt = DateFormatter()
         nowFmt.dateFormat = "HH:mm"
         var payload: [String: Any] = [
@@ -204,8 +236,31 @@ extension ImprovingStore {
             "metricas_hoy": metricas,
             "edad_biologica": edadBiologicaDict,
             "diario_hoy": diarioHoy,
-            "nutricion_hoy": nutricionHoy
+            "nutricion_hoy": nutricionHoy,
+            "frescura_muscular": [
+                "musculos_frescos": freshMuscles,
+                "musculos_fatigados": fatiguedMuscles,
+                "auto_deload_activo": autoDeloadModeActive
+            ],
+            "causalidad_cruzada_local": causalRows
         ]
+        if !longTermJournalRows.isEmpty {
+            payload["correlaciones_diario_30d_6m"] = longTermJournalRows
+        }
+        if let w = weatherSnapshot {
+            payload["contexto_meteorologico_hoy"] = [
+                "ciudad": w.cityName,
+                "temperatura_c": w.temperatureC,
+                "sensacion_termica_c": w.apparentTempC,
+                "humedad_pct": w.humidityPct,
+                "indice_uv": w.uvIndex,
+                "condicion": w.conditionLabel,
+                "deriva_fc_estimada_ppm": w.estimatedHrDriftBpm,
+                "agua_extra_ml": w.extraHydrationMl,
+                "ajuste_esfuerzo_pct": -w.strainAdjustmentPct,
+                "resumen": w.effortImpactSummary
+            ]
+        }
         if !redactPIIFromAI && !latestLabsSummary.isEmpty {
             payload["analiticas_recientes"] = latestLabsSummary
         }
@@ -294,6 +349,24 @@ extension ImprovingStore {
             ))
         }
 
+        // Executable Agentic Action Chips (Plan & Execute directly from Chat!)
+        list.append(CoachDynamicSuggestion(
+            id: "plan_strength_today",
+            icon: "dumbbell.fill",
+            title: "Crear rutina para hoy",
+            subtitle: "Según recuperación y frescura",
+            prompt: "Créame la rutina de fuerza de hoy adaptada a mi recuperación actual y mis músculos más frescos, y guárdala lista para Strength Builder."
+        ))
+        let remKcal = max(effectiveNutritionGoals.kcal - totalCaloriesToday, 0)
+        let remProt = max(effectiveNutritionGoals.proteinG - totalProteinToday, 0)
+        list.append(CoachDynamicSuggestion(
+            id: "plan_macro_dinner",
+            icon: "fork.knife.circle.fill",
+            title: "Clavar mis macros hoy",
+            subtitle: "Faltan \(remKcal) kcal · \(remProt) g P",
+            prompt: "Dime 2 opciones exactas para cenar o comer hoy y clavar los macros que me faltan (\(remKcal) kcal y \(remProt) g de proteína) listas para guardar en 1 toque."
+        ))
+
         return list
     }
 
@@ -326,6 +399,8 @@ extension ImprovingStore {
         let model = selectedGeminiModel
         let allowCloud = cloudAIEnabled
         let allowKeyless = allowKeylessAIFallback
+        let tone = coachPersonalityTone
+        let detail = coachDetailLevel
         let userName = redactPIIFromAI ? "Usuario" : userProfile.userName
         let missing = dataAvailability.missingCategoryNames
         let prevId = activeCoachInteractionId
@@ -359,6 +434,8 @@ extension ImprovingStore {
                 jpegImageData: jpegImageData,
                 allowCloudAI: allowCloud,
                 allowKeylessFallback: allowKeyless,
+                tone: tone,
+                detailLevel: detail,
                 actionExecutor: executor
             )
             await MainActor.run {
@@ -392,6 +469,14 @@ extension ImprovingStore {
                         appliedActions: result.appliedActions
                     )
                 )
+                if result.text.count >= 40 {
+                    self.archiveAiInsight(
+                        section: .hoy,
+                        emoji: "✨",
+                        headline: result.verdictTitle.isEmpty ? String(prompt.prefix(44)) : result.verdictTitle,
+                        body: result.text
+                    )
+                }
                 self.syncCurrentChatIntoThreads(updatedAtLabel: replyTs)
             }
         }
@@ -861,6 +946,109 @@ extension ImprovingStore {
             )
             return (encodeToolResponse(["ok": true, "saved_memory": note, "total_memories": coachMemoryNotes.count]), action)
 
+        case "create_strength_routine":
+            guard let name = str("name"), !name.isEmpty,
+                  let rawExercises = args["exercises"] as? [[String: Any]], !rawExercises.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Indica un nombre y al menos un ejercicio para crear la rutina."]), nil)
+            }
+            let cat = str("category") ?? "Fuerza"
+            func resolveMuscle(_ raw: String?) -> MuscleGroupKind {
+                let low = fold(raw ?? "")
+                if low.contains("pecho") || low.contains("pector") { return .pectorales }
+                if low.contains("dorsal") || low.contains("espalda") { return .dorsales }
+                if low.contains("hombro") || low.contains("deltoid") { return .hombros }
+                if low.contains("cuadr") || low.contains("pierna") { return .cuadriceps }
+                if low.contains("isquio") || low.contains("femoral") { return .isquiotibiales }
+                if low.contains("glute") { return .gluteos }
+                if low.contains("bicep") { return .biceps }
+                if low.contains("tricep") { return .triceps }
+                if low.contains("abdom") || low.contains("core") { return .abdominales }
+                if low.contains("gemelo") || low.contains("pantorr") { return .pantorrillas }
+                return .pectorales
+            }
+            let exercises: [WorkoutRoutineExercise] = rawExercises.prefix(8).compactMap { item in
+                guard let exName = (item["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !exName.isEmpty else { return nil }
+                let sets = min(max((item["sets"] as? Int) ?? Int(item["sets"] as? Double ?? 3), 1), 8)
+                let reps = min(max((item["reps"] as? Int) ?? Int(item["reps"] as? Double ?? 10), 1), 30)
+                let wRaw = (item["weight_kg"] as? Double) ?? Double(item["weight_kg"] as? Int ?? 0)
+                let snap = exercisePerformanceSnapshot(for: exName)
+                let weight = wRaw > 0 ? wRaw : (snap.totalHistoricalSets > 0 ? snap.suggestedWeightKg : 20.0)
+                let m = resolveMuscle(item["primary_muscle"] as? String)
+                return WorkoutRoutineExercise(
+                    id: UUID().uuidString,
+                    name: exName,
+                    targetSets: sets,
+                    targetReps: reps,
+                    defaultWeightKg: weight,
+                    primaryMuscles: [m],
+                    secondaryMuscles: []
+                )
+            }
+            guard !exercises.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "No se encontraron ejercicios válidos."]), nil)
+            }
+            let routine = WorkoutRoutineTemplate(
+                id: "ai_rt_\(UUID().uuidString.prefix(8))",
+                name: name,
+                category: cat,
+                iconName: cat == "Movilidad" ? "figure.yoga" : "dumbbell.fill",
+                isPinned: true,
+                exercises: exercises
+            )
+            saveRoutine(routine)
+            let summaryEx = exercises.prefix(4).map { "\($0.name) \($0.targetSets)×\($0.targetReps)" }.joined(separator: " · ")
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "dumbbell.fill",
+                badgeColorHex: 0x34D399,
+                title: "Rutina creada: \(routine.name)",
+                detail: summaryEx,
+                undoPayload: .deleteRoutine(routineId: routine.id),
+                launchedRoutineId: routine.id
+            )
+            return (encodeToolResponse(["ok": true, "routine_id": routine.id, "name": routine.name, "exercises_count": exercises.count]), action)
+
+        case "propose_macro_meals":
+            guard let rawOpts = args["options"] as? [[String: Any]], !rawOpts.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Indica 2 opciones de plato con sus macros."]), nil)
+            }
+            let parsedOptions: [CoachSuggestedMealOption] = rawOpts.prefix(3).compactMap { opt in
+                guard let t = (opt["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+                let em = ((opt["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : String($0.prefix(2)) } ?? "🍽️"
+                let desc = (opt["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let kcal = max((opt["kcal"] as? Int) ?? Int(opt["kcal"] as? Double ?? 0), 50)
+                let p = max((opt["protein_g"] as? Int) ?? Int(opt["protein_g"] as? Double ?? 0), 0)
+                let c = max((opt["carbs_g"] as? Int) ?? Int(opt["carbs_g"] as? Double ?? 0), 0)
+                let f = max((opt["fat_g"] as? Int) ?? Int(opt["fat_g"] as? Double ?? 0), 0)
+                let fib = max((opt["fiber_g"] as? Double) ?? Double(opt["fiber_g"] as? Int ?? 6), 0)
+                let q = min(max((opt["quality_score"] as? Int) ?? Int(opt["quality_score"] as? Double ?? 88), 30), 100)
+                return CoachSuggestedMealOption(
+                    id: UUID().uuidString,
+                    title: t,
+                    emoji: em,
+                    description: desc,
+                    kcal: kcal,
+                    proteinG: p,
+                    carbsG: c,
+                    fatG: f,
+                    fiberG: fib,
+                    qualityScore: q
+                )
+            }
+            guard !parsedOptions.isEmpty else {
+                return (encodeToolResponse(["ok": false, "error": "Opciones de comida vacías."]), nil)
+            }
+            let action = CoachAppliedAction(
+                id: UUID().uuidString,
+                icon: "fork.knife.circle.fill",
+                badgeColorHex: 0x38D9B5,
+                title: "Opciones listas para registrar",
+                detail: "\(parsedOptions.count) propuestas ajustadas a tus macros restantes",
+                undoPayload: nil,
+                suggestedMeals: parsedOptions
+            )
+            return (encodeToolResponse(["ok": true, "proposed_count": parsedOptions.count]), action)
+
         case "log_workout":
             guard let title = str("title"), !title.isEmpty, let dur = intVal("duration_min"), dur > 0 else {
                 return (encodeToolResponse(["ok": false, "error": "Falta nombre o duración del entrenamiento."]), nil)
@@ -1059,6 +1247,9 @@ extension ImprovingStore {
         case .deleteCustomHabit(let habitId):
             deleteCustomJournalHabit(id: habitId)
 
+        case .deleteRoutine(let routineId):
+            deleteRoutine(routineId)
+
         case .deleteWorkout(let workoutId, let dateIso):
             deleteWorkout(id: workoutId, dateIso: dateIso)
 
@@ -1089,6 +1280,36 @@ extension ImprovingStore {
         }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         publishWidgetSnapshot(triggerReload: true, forceReload: true)
+        persistState()
+    }
+
+    func logSuggestedMealFromCoach(messageId: String, actionId: String, optionId: String) {
+        guard let mIdx = coachMessages.firstIndex(where: { $0.id == messageId }),
+              let aIdx = coachMessages[mIdx].appliedActions.firstIndex(where: { $0.id == actionId }),
+              let oIdx = coachMessages[mIdx].appliedActions[aIdx].suggestedMeals.firstIndex(where: { $0.id == optionId }),
+              !coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].isLogged else { return }
+
+        let opt = coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx]
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        let meal = NutritionMealItem(
+            id: UUID().uuidString,
+            title: opt.title,
+            timeLabel: f.string(from: Date()),
+            kcal: opt.kcal,
+            proteinG: opt.proteinG,
+            carbsG: opt.carbsG,
+            fatG: opt.fatG,
+            qualityScore: opt.qualityScore,
+            fiberG: opt.fiberG,
+            emoji: opt.emoji
+        )
+        saveMeal(meal, for: selectedDateIso)
+        coachMessages[mIdx].appliedActions[aIdx].suggestedMeals[oIdx].isLogged = true
+        if let activeId = activeCoachThreadId, let tIdx = coachThreads.firstIndex(where: { $0.id == activeId }) {
+            coachThreads[tIdx].messages = coachMessages
+        }
+        AppHaptics.success()
         persistState()
     }
 

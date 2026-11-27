@@ -282,6 +282,7 @@ enum CoachingSection: String, CaseIterable, Codable, Identifiable {
     case estres
     case energia
     case fitness
+    case diario
 
     var id: String { rawValue }
 
@@ -294,8 +295,95 @@ enum CoachingSection: String, CaseIterable, Codable, Identifiable {
         case .estres: return "Estrés"
         case .energia: return "Energía"
         case .fitness: return "Fitness"
+        case .diario: return "Diario"
         }
     }
+}
+
+enum CoachPersonalityTone: String, Codable, CaseIterable, Identifiable {
+    case directo = "Directo"
+    case cientifico = "Científico"
+    case empatico = "Empático"
+    case entrenador = "Exigente"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .directo: return "bolt.fill"
+        case .cientifico: return "atom"
+        case .empatico: return "heart.circle.fill"
+        case .entrenador: return "flame.fill"
+        }
+    }
+
+    var shortSubtitle: String {
+        switch self {
+        case .directo: return "Claro, al grano y accionable"
+        case .cientifico: return "Fisiología, mecanismos y evidencia"
+        case .empatico: return "Cercano, motivador y sin presión"
+        case .entrenador: return "Estilo alto rendimiento, exigente y disciplinado"
+        }
+    }
+
+    var systemDirective: String {
+        switch self {
+        case .directo:
+            return "Tono directo, claro y práctico: ve al grano desde la primera línea con acciones concretas sin rodeos."
+        case .cientifico:
+            return "Tono científico y analítico: explica el porqué fisiológico (sistema nervioso autónomo, glucógeno, ritmo circadiano, biomarcadores) con precisión y rigor accesible."
+        case .empatico:
+            return "Tono cercano, empático y comprensivo: valida el esfuerzo del usuario, reduce fricción mental y propone pasos realistas y sostenibles."
+        case .entrenador:
+            return "Tono de entrenador de alto rendimiento exigente: reta al usuario con disciplina constructiva, foco en excelencia y cero excusas vacías, respetando siempre su seguridad fisiológica."
+        }
+    }
+}
+
+enum CoachDetailLevel: String, Codable, CaseIterable, Identifiable {
+    case breve = "Breve"
+    case equilibrado = "Equilibrado"
+    case detallado = "Detallado"
+
+    var id: String { rawValue }
+
+    var systemDirective: String {
+        switch self {
+        case .breve:
+            return "Extensión BREVE: máximo 2 a 3 frases directas o 3 viñetas muy cortas. Cero paja."
+        case .equilibrado:
+            return "Extensión EQUILIBRADA: 1 a 2 párrafos claros y escaneables con cifras clave y recomendación práctica."
+        case .detallado:
+            return "Extensión DETALLADA: profundiza en el porqué de cada métrica, conecta causas (nutrición, hábitos, sueño, analíticas, clima) y da un plan paso a paso completo."
+        }
+    }
+}
+
+struct ArchivedAiInsight: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    let dateIso: String
+    let sectionRaw: String
+    let sectionTitle: String
+    let emoji: String
+    let headline: String
+    let body: String
+    let createdAtEpoch: Double
+}
+
+struct DynamicStrainNutritionSnapshot: Equatable {
+    let isEnabled: Bool
+    let isManualOverrideBlocking: Bool
+    let phaseTitle: String
+    let phaseIcon: String
+    let strain21: Double
+    let kcalDelta: Int
+    let carbsDeltaG: Int
+    let proteinDeltaG: Int
+    let extraHydrationMl: Int
+    let electrolyteNote: String?
+    let summaryText: String
+    let isHighLoad: Bool
+    let isRestDay: Bool
 }
 
 struct SectionCoachingCard: Codable, Equatable {
@@ -567,7 +655,38 @@ enum JournalCheckState: String, Codable {
 enum JournalImpactTarget: String, CaseIterable, Identifiable {
     case recovery = "Recuperación"
     case sleep = "Sueño"
+    case hrv = "VFC"
+    case stress = "Estrés"
+
     var id: String { rawValue }
+
+    var unitSuffix: String {
+        switch self {
+        case .recovery, .sleep: return "%"
+        case .hrv: return " ms"
+        case .stress: return " pts"
+        }
+    }
+
+    var higherIsBetter: Bool {
+        self != .stress
+    }
+}
+
+enum JournalTrendWindow: Int, CaseIterable, Identifiable {
+    case days30 = 30
+    case months6 = 180
+    case all = 3650
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .days30: return "30 días"
+        case .months6: return "6 meses"
+        case .all: return "Todo"
+        }
+    }
 }
 
 enum JournalReliabilityTier: String, Codable {
@@ -585,9 +704,20 @@ struct JournalHabitImpactItem: Identifiable, Equatable {
     let daysSpanCount: Int
     let reliability: JournalReliabilityTier
     let isAutomatic: Bool
+    var unitSuffix: String = "%"
+    var higherIsBetter: Bool = true
 
     var daysRemainingFor30d: Int {
         max(30 - max(loggedDaysCount, daysSpanCount), 0)
+    }
+
+    var isBeneficialImpact: Bool {
+        higherIsBetter ? impactPct >= 0 : impactPct <= 0
+    }
+
+    var formattedImpactText: String {
+        let sign = impactPct > 0 ? "+" : ""
+        return "\(sign)\(impactPct)\(unitSuffix)"
     }
 }
 
@@ -1074,6 +1204,21 @@ enum CoachUndoPayload: Codable, Equatable, Hashable {
     case deleteWorkout(workoutId: String, dateIso: String)
     case restoreWorkout(workout: EffortEventItem, dateIso: String)
     case restoreBodyMeasurement(dateIso: String, prevWeight: Double?, prevFat: Double?, prevLean: Double?, prevSys: Int?, prevDia: Int?)
+    case deleteRoutine(routineId: String)
+}
+
+struct CoachSuggestedMealOption: Identifiable, Codable, Equatable, Hashable {
+    let id: String
+    let title: String
+    let emoji: String
+    let description: String
+    let kcal: Int
+    let proteinG: Int
+    let carbsG: Int
+    let fatG: Int
+    let fiberG: Double
+    let qualityScore: Int
+    var isLogged: Bool = false
 }
 
 struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
@@ -1084,6 +1229,47 @@ struct CoachAppliedAction: Identifiable, Codable, Equatable, Hashable {
     let detail: String
     var isUndone: Bool = false
     var undoPayload: CoachUndoPayload? = nil
+    var launchedRoutineId: String? = nil
+    var suggestedMeals: [CoachSuggestedMealOption] = []
+
+    enum CodingKeys: String, CodingKey {
+        case id, icon, badgeColorHex, title, detail, isUndone, undoPayload, launchedRoutineId, suggestedMeals
+    }
+
+    init(
+        id: String,
+        icon: String,
+        badgeColorHex: UInt64,
+        title: String,
+        detail: String,
+        isUndone: Bool = false,
+        undoPayload: CoachUndoPayload? = nil,
+        launchedRoutineId: String? = nil,
+        suggestedMeals: [CoachSuggestedMealOption] = []
+    ) {
+        self.id = id
+        self.icon = icon
+        self.badgeColorHex = badgeColorHex
+        self.title = title
+        self.detail = detail
+        self.isUndone = isUndone
+        self.undoPayload = undoPayload
+        self.launchedRoutineId = launchedRoutineId
+        self.suggestedMeals = suggestedMeals
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        icon = try c.decode(String.self, forKey: .icon)
+        badgeColorHex = try c.decode(UInt64.self, forKey: .badgeColorHex)
+        title = try c.decode(String.self, forKey: .title)
+        detail = try c.decode(String.self, forKey: .detail)
+        isUndone = try c.decodeIfPresent(Bool.self, forKey: .isUndone) ?? false
+        undoPayload = try c.decodeIfPresent(CoachUndoPayload.self, forKey: .undoPayload)
+        launchedRoutineId = try c.decodeIfPresent(String.self, forKey: .launchedRoutineId)
+        suggestedMeals = try c.decodeIfPresent([CoachSuggestedMealOption].self, forKey: .suggestedMeals) ?? []
+    }
 }
 
 struct CoachChatMessage: Identifiable, Codable, Hashable {

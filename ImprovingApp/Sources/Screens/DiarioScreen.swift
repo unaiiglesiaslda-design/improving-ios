@@ -292,6 +292,9 @@ struct DiarioScreen: View {
                     }
                     .padding(.top, 12)
 
+                    // Valoración IA del Diario con contexto total (Diario + Nutrición + Analíticas + Biometría + Clima)
+                    LiveAiCoachingCard(section: .diario, store: store)
+
                     // Nota del día (Leída por tu Coach IA para explicar VFC, sueño y recuperación!)
                     BevelCard(cornerRadius: 18) {
                         VStack(alignment: .leading, spacing: 9) {
@@ -727,12 +730,33 @@ struct JournalInsightsScreen: View {
     let onBack: () -> Void
 
     @State private var target: JournalImpactTarget = .sleep
+    @State private var trendWindow: JournalTrendWindow = .days30
 
     var body: some View {
-        let allItems = store.computeJournalImpacts(for: target)
+        let allItems = store.computeJournalImpacts(for: target, windowDays: trendWindow.rawValue)
         let highItems = allItems.filter { $0.reliability == .high }
         let lowItems = allItems.filter { $0.reliability == .low }
         let lockedItems = allItems.filter { $0.reliability == .locked }
+        let headerTitle: String = {
+            switch target {
+            case .sleep: return "Puntuación del Sueño"
+            case .recovery: return "Puntuación de Recuperación"
+            case .hrv: return "VFC Basal Nocturna"
+            case .stress: return "Estrés Fisiológico"
+            }
+        }()
+        let headerSubtitle: String = {
+            switch target {
+            case .sleep:
+                return "Cómo tus hábitos impactan tu sueño en la ventana de \(trendWindow.label.lowercased()) (efecto causal D → D+1)."
+            case .recovery:
+                return "Cómo tus hábitos mueven tu recuperación en la ventana de \(trendWindow.label.lowercased()) (efecto causal D → D+1)."
+            case .hrv:
+                return "Cómo tus hábitos elevan o reducen tu VFC basal en milisegundos durante \(trendWindow.label.lowercased())."
+            case .stress:
+                return "Qué hábitos disparan o calman tu estrés medio diario en la ventana de \(trendWindow.label.lowercased())."
+            }
+        }()
 
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -799,19 +823,17 @@ struct JournalInsightsScreen: View {
                                 .foregroundColor(.white.opacity(0.92))
                         }
 
-                        Text(target == .sleep ? "Puntuación del Sueño" : "Puntuación de Recuperación")
+                        Text(headerTitle)
                             .font(ImprovingFont.displayLarge(27))
                             .foregroundColor(.white)
 
-                        Text(target == .sleep
-                             ? "Analiza cómo tus hábitos de cada día impactan tu sueño de esa noche y la mañana siguiente (efecto causal D → D+1)."
-                             : "Analiza cómo tus hábitos de cada día impactan tu recuperación de la mañana siguiente (efecto causal D → D+1).")
+                        Text(headerSubtitle)
                             .font(ImprovingFont.body(14))
                             .foregroundColor(.white.opacity(0.84))
                             .fixedSize(horizontal: false, vertical: true)
 
-                        // Dual Pill Selector: [ Recuperación ] [ Sueño ]
-                        HStack(spacing: 10) {
+                        // 4-Metric Pill Selector: [ Recuperación ] [ Sueño ] [ VFC ] [ Estrés ]
+                        HStack(spacing: 6) {
                             ForEach(JournalImpactTarget.allCases) { tab in
                                 let active = target == tab
                                 Button {
@@ -821,15 +843,41 @@ struct JournalInsightsScreen: View {
                                     }
                                 } label: {
                                     Text(tab.rawValue)
-                                        .font(ImprovingFont.cardTitle(14.5))
+                                        .font(ImprovingFont.caption(12.5))
+                                        .fontWeight(.bold)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.82)
                                         .foregroundColor(active ? .white : Color.white.opacity(0.74))
                                         .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 12)
+                                        .padding(.vertical, 10)
                                         .background(Capsule().fill(active ? Color.white.opacity(0.24) : Color.black.opacity(0.24)))
                                 }
                             }
                         }
                         .padding(.top, 8)
+
+                        // Long-Term Window Selector: [ 30 días ] [ 6 meses ] [ Todo ]
+                        HStack(spacing: 6) {
+                            ForEach(JournalTrendWindow.allCases) { win in
+                                let sel = trendWindow == win
+                                Button {
+                                    UISelectionFeedbackGenerator().selectionChanged()
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        trendWindow = win
+                                    }
+                                } label: {
+                                    Text(win.label)
+                                        .font(ImprovingFont.caption(11.5))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(sel ? .white : Color.white.opacity(0.70))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Capsule().fill(sel ? BevelColors.indigoEnd.opacity(0.85) : Color.black.opacity(0.22)))
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.top, 2)
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 18)
@@ -996,8 +1044,8 @@ struct JournalInsightsScreen: View {
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x3F261F)))
             Spacer()
-            Text("Impacto %")
-                .font(ImprovingFont.caption(12.5))
+            Text("Impacto (\(target.unitSuffix.trimmingCharacters(in: .whitespaces))) · \(trendWindow.label)")
+                .font(ImprovingFont.caption(12))
                 .foregroundColor(BevelColors.textSecondary)
             Spacer()
             Text("Positivo")
@@ -1013,8 +1061,8 @@ struct JournalInsightsScreen: View {
 
     private func impactBarCard(item: JournalHabitImpactItem, isHighReliability: Bool) -> some View {
         let pct = item.impactPct
-        let isPositive = pct > 0
-        let signText = pct > 0 ? "+\(pct)%" : (pct == 0 ? "-0%" : "\(pct)%")
+        let isPositive = item.isBeneficialImpact && pct != 0
+        let signText = pct == 0 ? "0\(item.unitSuffix)" : item.formattedImpactText
         let barColor: Color = {
             if !isHighReliability { return Color(hex: 0x6B7080) }
             return isPositive ? Color(hex: 0x6095FF) : Color(hex: 0xE67E5A)
@@ -1023,7 +1071,7 @@ struct JournalInsightsScreen: View {
             if !isHighReliability { return BevelColors.textMuted }
             return isPositive ? Color(hex: 0x6095FF) : Color(hex: 0xE67E5A)
         }()
-        // Scale: ±15% fills full half-bar
+        // Scale: ±15 units fills full half-bar
         let frac = min(max(Double(abs(pct)) / 15.0, pct == 0 ? 0.0 : 0.08), 1.0)
 
         return BevelCard(cornerRadius: 18) {

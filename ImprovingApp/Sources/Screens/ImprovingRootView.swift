@@ -332,6 +332,9 @@ struct ImprovingRootView: View {
         .sheet(isPresented: $showQuickScaleSheet) {
             ManualScaleLoggerSheet(store: store, onClose: { showQuickScaleSheet = false })
         }
+        .sheet(item: $store.pendingLaunchRoutine) { routine in
+            StrengthSessionLoggerSheet(store: store, routine: routine, onClose: { store.pendingLaunchRoutine = nil })
+        }
         .sheet(isPresented: $showQuickWorkoutSheet) {
             StrengthSessionLoggerSheet(store: store, routine: nil, onClose: { showQuickWorkoutSheet = false })
         }

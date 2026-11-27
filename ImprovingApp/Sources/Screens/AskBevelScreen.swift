@@ -17,6 +17,8 @@ struct AskBevelScreen: View {
     @State private var pendingJpegData: Data? = nil
     @State private var showHistorySheet: Bool = false
     @State private var showMemorySheet: Bool = false
+    @State private var showPersonalityArchiveSheet: Bool = false
+    @State private var personalitySheetInitialTab: Int = 0
     @State private var copiedMessageId: String? = nil
     @StateObject private var speechRecognizer = SpeechDictationController()
 
@@ -98,26 +100,43 @@ struct AskBevelScreen: View {
                     }
                     .accessibilityLabel("Memoria a largo plazo del Coach")
 
-                    Spacer()
+                    Spacer(minLength: 4)
 
-                    Button(action: onOpenSettings) {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(hasKey ? BevelColors.greenPrimary : BevelColors.skyBlue)
-                                .frame(width: 7, height: 7)
-                            Text(hasKey ? (store.selectedGeminiModel == "auto" ? "Gemini Auto" : store.selectedGeminiModel) : "Improving IA Live")
-                                .font(ImprovingFont.caption(12))
+                    Button {
+                        personalitySheetInitialTab = 0
+                        showPersonalityArchiveSheet = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: store.coachPersonalityTone.icon)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(hasKey ? BevelColors.greenPrimary : BevelColors.skyBlue)
+                            Text("\(store.coachPersonalityTone.rawValue) · \(store.coachDetailLevel.rawValue)")
+                                .font(ImprovingFont.caption(11.5))
                                 .fontWeight(.semibold)
                                 .foregroundColor(BevelColors.textPrimary)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.82)
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 10)
                         .frame(height: 34)
                         .background(Capsule().fill(BevelColors.glassChromeFill))
                         .overlay(Capsule().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
                     }
 
-                    Spacer()
+                    Button {
+                        personalitySheetInitialTab = 1
+                        showPersonalityArchiveSheet = true
+                    } label: {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(BevelColors.textPrimary)
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(BevelColors.glassChromeFill))
+                            .overlay(Circle().strokeBorder(BevelColors.glassChromeBorder, lineWidth: 0.8))
+                    }
+                    .accessibilityLabel("Archivo de insights del Coach")
+
+                    Spacer(minLength: 4)
 
                     Button(action: onClose) {
                         Image(systemName: "xmark")
@@ -439,6 +458,17 @@ struct AskBevelScreen: View {
         .sheet(isPresented: $showMemorySheet) {
             CoachLongTermMemorySheet(store: store, onClose: { showMemorySheet = false })
         }
+        .sheet(isPresented: $showPersonalityArchiveSheet) {
+            CoachPersonalityAndArchiveSheet(
+                store: store,
+                initialTab: personalitySheetInitialTab,
+                onOpenSettings: {
+                    showPersonalityArchiveSheet = false
+                    onOpenSettings()
+                },
+                onClose: { showPersonalityArchiveSheet = false }
+            )
+        }
         .onDisappear {
             if speechRecognizer.isRecording {
                 speechRecognizer.stopRecording()
@@ -545,52 +575,116 @@ struct AskBevelScreen: View {
 
     private func appliedActionRow(_ act: CoachAppliedAction, messageId: String) -> some View {
         let tint: Color = act.isUndone ? BevelColors.textMuted : Color(hex: act.badgeColorHex)
-        return HStack(spacing: 10) {
-            Image(systemName: act.isUndone ? "arrow.uturn.backward.circle" : act.icon)
-                .font(.system(size: 13.5, weight: .semibold))
-                .foregroundColor(tint)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(tint.opacity(0.16)))
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: act.isUndone ? "arrow.uturn.backward.circle" : act.icon)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundColor(tint)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(tint.opacity(0.16)))
 
-            VStack(alignment: .leading, spacing: 1.5) {
-                Text(act.isUndone ? "\(act.title) · Deshecho" : act.title)
-                    .font(ImprovingFont.caption(12))
-                    .fontWeight(.bold)
-                    .foregroundColor(act.isUndone ? BevelColors.textMuted : BevelColors.textPrimary)
-                Text(act.detail)
-                    .font(ImprovingFont.caption(11.5))
-                    .foregroundColor(BevelColors.textSecondary)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 1.5) {
+                    Text(act.isUndone ? "\(act.title) · Deshecho" : act.title)
+                        .font(ImprovingFont.caption(12))
+                        .fontWeight(.bold)
+                        .foregroundColor(act.isUndone ? BevelColors.textMuted : BevelColors.textPrimary)
+                    Text(act.detail)
+                        .font(ImprovingFont.caption(11.5))
+                        .foregroundColor(BevelColors.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 4)
+
+                if act.undoPayload != nil {
+                    if act.isUndone {
+                        Text("Deshecho")
+                            .font(ImprovingFont.caption(10.5))
+                            .fontWeight(.semibold)
+                            .foregroundColor(BevelColors.textMuted)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.05)))
+                    } else {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                store.undoCoachAction(messageId: messageId, actionId: act.id)
+                            }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.system(size: 10, weight: .bold))
+                                Text("Deshacer")
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(.bold)
+                            }
+                            .foregroundColor(BevelColors.textPrimary)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.white.opacity(0.10)))
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
+                        }
+                    }
+                }
             }
-            Spacer(minLength: 4)
 
-            if act.undoPayload != nil {
-                if act.isUndone {
-                    Text("Deshecho")
-                        .font(ImprovingFont.caption(10.5))
-                        .fontWeight(.semibold)
-                        .foregroundColor(BevelColors.textMuted)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.white.opacity(0.05)))
-                } else {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            store.undoCoachAction(messageId: messageId, actionId: act.id)
+            if let routineId = act.launchedRoutineId, !act.isUndone {
+                Button {
+                    AppHaptics.selection()
+                    store.launchStrengthRoutineById(routineId)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 11, weight: .bold))
+                        Text("Abrir en Strength Builder")
+                            .font(ImprovingFont.caption(12))
+                            .fontWeight(.bold)
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(BevelColors.emeraldEnd))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !act.suggestedMeals.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(act.suggestedMeals) { opt in
+                        HStack(alignment: .center, spacing: 8) {
+                            Text(opt.emoji).font(.system(size: 18))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(opt.title)
+                                    .font(ImprovingFont.caption(12.5))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(BevelColors.textPrimary)
+                                if !opt.description.isEmpty {
+                                    Text(opt.description)
+                                        .font(ImprovingFont.caption(11))
+                                        .foregroundColor(BevelColors.textSecondary)
+                                        .lineLimit(2)
+                                }
+                                Text("\(opt.kcal) kcal · \(opt.proteinG)g P · \(opt.carbsG)g C · \(opt.fatG)g G")
+                                    .font(ImprovingFont.caption(11))
+                                    .monospacedDigit()
+                                    .foregroundColor(BevelColors.skyBlue)
+                            }
+                            Spacer(minLength: 4)
+                            Button {
+                                store.logSuggestedMealFromCoach(messageId: messageId, actionId: act.id, optionId: opt.id)
+                            } label: {
+                                Text(opt.isLogged ? "✓ Guardada" : "+ Registrar")
+                                    .font(ImprovingFont.caption(11))
+                                    .fontWeight(.bold)
+                                    .foregroundColor(opt.isLogged ? BevelColors.greenPrimary : .white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(opt.isLogged ? BevelColors.greenSoftBg : BevelColors.indigoEnd))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(opt.isLogged)
                         }
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.uturn.backward")
-                                .font(.system(size: 10, weight: .bold))
-                            Text("Deshacer")
-                                .font(ImprovingFont.caption(11))
-                                .fontWeight(.bold)
-                        }
-                        .foregroundColor(BevelColors.textPrimary)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.white.opacity(0.10)))
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 0.7))
+                        .padding(9)
+                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(BevelColors.card))
                     }
                 }
             }

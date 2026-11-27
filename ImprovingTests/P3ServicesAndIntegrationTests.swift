@@ -727,4 +727,164 @@ final class P3ServicesAndIntegrationTests: XCTestCase {
         XCTAssertFalse(store.hasCustomNutritionGoalOverrides)
         XCTAssertEqual(store.effectiveNutritionGoals.kcal, volKcal)
     }
+
+    @MainActor
+    func testWeatherCarbCyclingLongTermJournalAgenticPlanningAndCrossCausality() throws {
+        let storeUrl = FileManager.default.temporaryDirectory
+            .appendingPathComponent("improving_supremacy_v2_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: storeUrl) }
+        let store = ImprovingStore(persistenceURL: storeUrl)
+        store.hasImportedOrPairedRealData = true
+        let todayIso = store.selectedDateIso
+
+        // 1. Open-Meteo Weather Physiology Parsing + Hydration & Effort Target Adjustment
+        let openMeteoJson = """
+        {
+          "current": {
+            "temperature_2m": 31.5,
+            "relative_humidity_2m": 74,
+            "apparent_temperature": 35.2,
+            "uv_index": 8.4,
+            "wind_speed_10m": 9.5,
+            "weather_code": 0
+          }
+        }
+        """
+        let baseHydration = store.effectiveHydrationGoalMl
+        let baseEffortHigh = store.optimalEffortRange.upperBound
+        let wSnap = try XCTUnwrap(
+            WeatherContextService.parseOpenMeteoResponse(
+                data: try XCTUnwrap(openMeteoJson.data(using: .utf8)),
+                cityName: "Valencia",
+                latitude: 39.4699,
+                longitude: -0.3763
+            )
+        )
+        XCTAssertEqual(wSnap.heatStressLevel, 2)
+        XCTAssertGreaterThanOrEqual(wSnap.estimatedHrDriftBpm, 6)
+        XCTAssertGreaterThanOrEqual(wSnap.extraHydrationMl, 600)
+        XCTAssertGreaterThanOrEqual(wSnap.strainAdjustmentPct, 7)
+        store.weatherCityName = "Valencia"
+        store.weatherSnapshot = wSnap
+        store.dataRevision += 1
+        XCTAssertGreaterThanOrEqual(store.effectiveHydrationGoalMl, baseHydration + 600.0)
+        XCTAssertLessThan(store.optimalEffortRange.upperBound, baseEffortHigh)
+
+        // 2. Dynamic Strain-Based Carb Cycling (High Load >= 14 vs Rest Day < 7)
+        store.setDynamicStrainNutrition(enabled: true)
+        store.realHistory[todayIso] = RealBiometricDaySummary(dateIso: todayIso, strain21: 16.5, strainPct: 79, recoveryPct: 78)
+        store.dataRevision += 1
+        let highSnap = store.dynamicStrainNutritionSnapshot
+        XCTAssertTrue(highSnap.isHighLoad)
+        XCTAssertGreaterThan(highSnap.kcalDelta, 200)
+        XCTAssertGreaterThan(highSnap.carbsDeltaG, 45)
+        XCTAssertGreaterThanOrEqual(highSnap.extraHydrationMl, 500)
+        let highGoals = store.effectiveNutritionGoals
+
+        store.realHistory[todayIso] = RealBiometricDaySummary(dateIso: todayIso, strain21: 4.5, strainPct: 21, recoveryPct: 78)
+        store.dataRevision += 1
+        let restSnap = store.dynamicStrainNutritionSnapshot
+        XCTAssertTrue(restSnap.isRestDay)
+        XCTAssertLessThan(restSnap.kcalDelta, 0)
+        XCTAssertLessThan(restSnap.carbsDeltaG, 0)
+        XCTAssertGreaterThan(restSnap.proteinDeltaG, 0)
+        let restGoals = store.effectiveNutritionGoals
+        XCTAssertGreaterThan(highGoals.carbsG, restGoals.carbsG + 60)
+
+        // 3. 30-day & 6-month Journal Trends (Recovery, Sleep, HRV, Stress) + Coach Personality & Archive
+        let cal = Calendar.current
+        for back in 1...40 {
+            let d = cal.date(byAdding: .day, value: -back, to: store.selectedDate)!
+            let iso = store.isoFormatter.string(from: d)
+            let isYes = (back % 2 == 0)
+            store.journalCheckinsByDate[iso] = ["magnesium": isYes ? .yes : .no]
+            store.realHistory[iso] = RealBiometricDaySummary(
+                dateIso: iso,
+                restingHrBpm: isYes ? 50.0 : 55.0,
+                hrvMs: isYes ? 78.0 : 62.0,
+                deepMinutes: isYes ? 98 : 68,
+                sleepPct: isYes ? 88 : 74,
+                recoveryPct: isYes ? 82 : 64,
+                stressScore: isYes ? 28 : 44
+            )
+            // Cross-domain meals: high protein & early dinner vs low protein & late dinner + late caffeine
+            store.mealsByDate[iso] = [
+                NutritionMealItem(
+                    id: "cm_\(back)",
+                    title: isYes ? "Salmón con quinoa" : "Pizza rápida",
+                    timeLabel: isYes ? "19:30" : "22:00",
+                    kcal: 700,
+                    proteinG: isYes ? 150 : 60,
+                    carbsG: 65,
+                    fatG: 20,
+                    qualityScore: isYes ? 90 : 52,
+                    caffeineMg: isYes ? 65 : 220
+                )
+            ]
+        }
+        store.dataRevision += 1
+        let hrvImpacts30 = store.computeJournalImpacts(for: .hrv, windowDays: 30)
+        let magHrv = try XCTUnwrap(hrvImpacts30.first(where: { $0.id == "magnesium" }))
+        XCTAssertEqual(magHrv.reliability, .high)
+        XCTAssertEqual(magHrv.unitSuffix, " ms")
+        XCTAssertNotEqual(magHrv.impactPct, 0)
+
+        let stressImpacts6m = store.computeJournalImpacts(for: .stress, windowDays: 180)
+        let magStress = try XCTUnwrap(stressImpacts6m.first(where: { $0.id == "magnesium" }))
+        XCTAssertEqual(magStress.unitSuffix, " pts")
+        XCTAssertTrue(magStress.isBeneficialImpact) // lowering stress is beneficial!
+
+        // Cross-domain causality & Diario AI context
+        let causal = store.unifiedCausalInsights
+        XCTAssertTrue(causal.contains(where: { $0.id == "cross_protein_recovery" || $0.id == "cross_meal_timing_deep" || $0.id == "cross_caffeine_hrv" }))
+        XCTAssertTrue(causal.contains(where: { $0.id == "cross_weather_thermal" }))
+        let diarioFacts = store.buildSectionFacts(for: .diario)
+        XCTAssertTrue(diarioFacts.hasData)
+        let coachCtx = store.buildBiometricContextJson()
+        XCTAssertTrue(coachCtx.json.contains("contexto_meteorologico_hoy"))
+        XCTAssertTrue(coachCtx.json.contains("causalidad_cruzada_local"))
+        XCTAssertTrue(coachCtx.json.contains("correlaciones_diario_30d_6m"))
+        XCTAssertTrue(coachCtx.json.contains("nutricion_dinamica_strain"))
+
+        // 4. Agentic Tools #13 (create_strength_routine) & #14 (propose_macro_meals) + 1-Tap Undo + 1-Tap Meal Log
+        let rtRes = store.executeCoachToolCall(
+            name: "create_strength_routine",
+            argsJson: #"{"name":"Empuje Recuperación Alta","category":"Fuerza","exercises":[{"name":"Press banca con barra","sets":4,"reps":8,"weight_kg":75,"primary_muscle":"Pectorales"},{"name":"Press militar","sets":3,"reps":10,"weight_kg":40,"primary_muscle":"Hombros"}]}"#
+        )
+        let rtAction = try XCTUnwrap(rtRes.appliedAction)
+        let rtId = try XCTUnwrap(rtAction.launchedRoutineId)
+        XCTAssertTrue(store.workoutRoutines.contains(where: { $0.id == rtId && $0.exercises.count == 2 }))
+        store.launchStrengthRoutineById(rtId)
+        XCTAssertEqual(store.pendingLaunchRoutine?.id, rtId)
+
+        let mealPropRes = store.executeCoachToolCall(
+            name: "propose_macro_meals",
+            argsJson: #"{"options":[{"title":"Bowl de salmón y arroz","emoji":"🍣","description":"180g salmón, 200g arroz, aguacate","kcal":680,"protein_g":46,"carbs_g":64,"fat_g":22,"fiber_g":7,"quality_score":92},{"title":"Tortilla de claras y boniato","emoji":"🍳","description":"5 claras, 2 huevos, 250g boniato","kcal":540,"protein_g":42,"carbs_g":58,"fat_g":14,"fiber_g":8,"quality_score":90}]}"#
+        )
+        let mealAction = try XCTUnwrap(mealPropRes.appliedAction)
+        XCTAssertEqual(mealAction.suggestedMeals.count, 2)
+        let msg = CoachChatMessage(id: "msg_test_1", isUser: false, text: "Aquí tienes 2 opciones", timestampLabel: "21:00", isSuggestionChip: false, appliedActions: [mealAction, rtAction])
+        store.coachMessages = [msg]
+        let firstOptId = try XCTUnwrap(mealAction.suggestedMeals.first?.id)
+        store.logSuggestedMealFromCoach(messageId: msg.id, actionId: mealAction.id, optionId: firstOptId)
+        XCTAssertTrue(store.mealsToday.contains(where: { $0.title == "Bowl de salmón y arroz" }))
+        XCTAssertTrue(store.coachMessages[0].appliedActions[0].suggestedMeals[0].isLogged)
+
+        // Undo created routine
+        store.undoCoachAction(messageId: msg.id, actionId: rtAction.id)
+        XCTAssertFalse(store.workoutRoutines.contains(where: { $0.id == rtId }))
+
+        // 5. Coach Personality + Detail + Insights Archive persistence round-trip
+        store.setCoachPersonality(tone: .cientifico, detail: .detallado)
+        store.archiveAiInsight(section: .diario, emoji: "📓", headline: "Tu VFC responde al magnesio", body: "En 30 días tu VFC subió con magnesio y cena temprana.")
+        store.flushPersistenceNow()
+
+        let reloaded = ImprovingStore(persistenceURL: storeUrl)
+        XCTAssertEqual(reloaded.weatherCityName, "Valencia")
+        XCTAssertEqual(reloaded.weatherSnapshot?.temperatureC, 31.5)
+        XCTAssertEqual(reloaded.coachPersonalityTone, .cientifico)
+        XCTAssertEqual(reloaded.coachDetailLevel, .detallado)
+        XCTAssertEqual(reloaded.archivedAiInsights.count, 1)
+        XCTAssertTrue(reloaded.dynamicStrainNutritionEnabled)
+    }
 }

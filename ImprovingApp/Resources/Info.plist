@@ -94,5 +94,7 @@
 	<string>Improving utiliza el micrófono cuando decides dictar por voz tus comidas o hablar con el Coach IA.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Improving utiliza el reconocimiento de voz de iOS para transcribir tus mensajes al Coach IA y registrar comidas dictadas.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Improving usa tu ubicación aproximada solo cuando activas el clima local para calcular el estrés térmico, el índice UV y tu ajuste de hidratación y esfuerzo.</string>
 </dict>
 </plist>

@@ -1813,7 +1813,7 @@ final class AppleHealthExportImporterTests: XCTestCase {
 
     @MainActor
     func testAgenticCoachToolCallsAndOneTapUndoRoundTrip() throws {
-        XCTAssertEqual(GeminiCoachService.coachToolDeclarations.count, 12)
+        XCTAssertEqual(GeminiCoachService.coachToolDeclarations.count, 14)
 
         let store = makeIsolatedStore()
         let todayIso = store.selectedDateIso

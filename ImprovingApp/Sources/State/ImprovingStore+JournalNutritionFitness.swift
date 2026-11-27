@@ -166,19 +166,21 @@ extension ImprovingStore {
     /// Strict 30-day real tracking engine for Diario ✨ Información:
     /// - If the user has NOT filled out the Diario form (0 manual entries logged), ZERO metrics are computed or unlocked!
     /// - Each habit requires at least 30 days of elapsed tracking (daysSpanCount >= 30 || loggedDaysCount >= 30) AND both ✓ and ✕ occurrences before computing impact %.
-    func computeJournalImpacts(for target: JournalImpactTarget) -> [JournalHabitImpactItem] {
+    func computeJournalImpacts(for target: JournalImpactTarget, windowDays: Int = 90) -> [JournalHabitImpactItem] {
         ensureDerivedCacheFresh()
-        if let hit = cachedJournalImpacts[target] {
+        let cacheKey = "\(target.rawValue)#\(windowDays)"
+        if let hit = cachedJournalImpacts[cacheKey] {
             return hit
         }
         let hasUserFilledForm = totalManualDiarioDaysLogged > 0
         let cal = Calendar.current
         let anchor = cal.startOfDay(for: selectedDate)
-        var last90Isos: [String] = []
-        last90Isos.reserveCapacity(90)
-        for back in (0..<90).reversed() {
+        let effectiveWindow = min(max(windowDays, 14), 730)
+        var windowIsos: [String] = []
+        windowIsos.reserveCapacity(effectiveWindow)
+        for back in (0..<effectiveWindow).reversed() {
             if let d = cal.date(byAdding: .day, value: -back, to: anchor) {
-                last90Isos.append(isoFormatter.string(from: d))
+                windowIsos.append(isoFormatter.string(from: d))
             }
         }
 
@@ -189,8 +191,8 @@ extension ImprovingStore {
             var firstLoggedIso: String? = nil
             var totalExplicitDays = 0
 
-            for idx in 0..<last90Isos.count {
-                let iso = last90Isos[idx]
+            for idx in 0..<windowIsos.count {
+                let iso = windowIsos[idx]
                 let state: JournalCheckState
                 if entry.isAuto {
                     guard hasUserFilledForm, let day = activeHistory[iso] else { continue }
@@ -203,15 +205,28 @@ extension ImprovingStore {
                 if firstLoggedIso == nil { firstLoggedIso = iso }
                 totalExplicitDays += 1
 
-                // WHOOP causal Next-Day Lag (D -> D+1): habits logged on day D impact tonight's sleep & tomorrow morning's recovery!
-                guard idx + 1 < last90Isos.count else { continue }
-                let nextIso = last90Isos[idx + 1]
-                guard let nextDay = activeHistory[nextIso] else { continue }
-                let outcomeOpt: Int? = (target == .recovery) ? nextDay.recoveryPct : nextDay.sleepPct
+                // WHOOP causal Next-Day Lag (D -> D+1) for Recovery, Sleep & HRV; same-day or D+1 for Stress
+                let outcomeOpt: Double? = {
+                    switch target {
+                    case .recovery:
+                        guard idx + 1 < windowIsos.count, let nextDay = activeHistory[windowIsos[idx + 1]], let v = nextDay.recoveryPct else { return nil }
+                        return Double(v)
+                    case .sleep:
+                        guard idx + 1 < windowIsos.count, let nextDay = activeHistory[windowIsos[idx + 1]], let v = nextDay.sleepPct else { return nil }
+                        return Double(v)
+                    case .hrv:
+                        guard idx + 1 < windowIsos.count, let nextDay = activeHistory[windowIsos[idx + 1]], let v = nextDay.hrvMs, v > 2 else { return nil }
+                        return v
+                    case .stress:
+                        let nextStress = (idx + 1 < windowIsos.count) ? activeHistory[windowIsos[idx + 1]]?.stressScore : nil
+                        guard let v = activeHistory[iso]?.stressScore ?? nextStress else { return nil }
+                        return Double(v)
+                    }
+                }()
                 guard let outcome = outcomeOpt else { continue }
 
-                if state == .yes { yesVals.append(Double(outcome)) }
-                else if state == .no { noVals.append(Double(outcome)) }
+                if state == .yes { yesVals.append(outcome) }
+                else if state == .no { noVals.append(outcome) }
             }
 
             let spanDays: Int = {
@@ -222,16 +237,17 @@ extension ImprovingStore {
 
             let yCount = yesVals.count
             let nCount = noVals.count
-            let reached30Days = hasUserFilledForm && (spanDays >= Self.diarioRequiredTrackingDays || totalExplicitDays >= Self.diarioRequiredTrackingDays)
+            // In 30-day & 6-month trend views, unlock insights cleanly once user has 30d history OR >= 4 yes & >= 4 no paired observations!
+            let reachedThreshold = hasUserFilledForm && (spanDays >= Self.diarioRequiredTrackingDays || totalExplicitDays >= Self.diarioRequiredTrackingDays || (yCount >= 4 && nCount >= 4))
 
             let tier: JournalReliabilityTier
             let impact: Int
-            if reached30Days && yCount >= 5 && nCount >= 5 {
+            if reachedThreshold && yCount >= 5 && nCount >= 5 {
                 tier = .high
                 let meanY = yesVals.reduce(0, +) / Double(yCount)
                 let meanN = noVals.reduce(0, +) / Double(nCount)
                 impact = Int((meanY - meanN).rounded())
-            } else if reached30Days && yCount >= 1 && nCount >= 1 {
+            } else if reachedThreshold && yCount >= 1 && nCount >= 1 {
                 tier = .low
                 let meanY = yesVals.reduce(0, +) / Double(yCount)
                 let meanN = noVals.reduce(0, +) / Double(nCount)
@@ -251,7 +267,9 @@ extension ImprovingStore {
                 loggedDaysCount: totalExplicitDays,
                 daysSpanCount: spanDays,
                 reliability: tier,
-                isAutomatic: entry.isAuto
+                isAutomatic: entry.isAuto,
+                unitSuffix: target.unitSuffix,
+                higherIsBetter: target.higherIsBetter
             ))
         }
 
@@ -268,8 +286,31 @@ extension ImprovingStore {
             }
             return (a.yesCount + a.noCount) > (b.yesCount + b.noCount)
         }
-        cachedJournalImpacts[target] = sortedItems
+        cachedJournalImpacts[cacheKey] = sortedItems
         return sortedItems
+    }
+
+    /// Compact summary of 30-day and 6-month (180d) Journal habit correlations across Recovery, HRV, Sleep & Stress for AI context.
+    func computeLongTermJournalTrendsSummaryForAI() -> [[String: Any]] {
+        var rows: [[String: Any]] = []
+        for (winLabel, winDays) in [("30d", 30), ("6m", 180)] {
+            for tgt in [JournalImpactTarget.recovery, .hrv, .sleep, .stress] {
+                let top = computeJournalImpacts(for: tgt, windowDays: winDays)
+                    .filter { $0.reliability != .locked && abs($0.impactPct) >= 2 }
+                    .prefix(3)
+                for item in top {
+                    rows.append([
+                        "ventana": winLabel,
+                        "habito": item.title,
+                        "metrica": tgt.rawValue,
+                        "impacto": item.formattedImpactText,
+                        "dias_si": item.yesCount,
+                        "dias_no": item.noCount
+                    ])
+                }
+            }
+        }
+        return rows
     }
 
     // MARK: - User Actions & Date Selection
@@ -1396,7 +1437,8 @@ extension ImprovingStore {
             mealsByDate: mealsByDate,
             strengthLogs: strengthLogs,
             labReports: labReports,
-            profile: userProfile
+            profile: userProfile,
+            weather: dayOffset == 0 ? weatherSnapshot : nil
         )
     }
 

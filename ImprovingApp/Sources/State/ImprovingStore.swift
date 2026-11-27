@@ -75,6 +75,12 @@ final class ImprovingStore: ObservableObject {
         var nutritionRecipes: [NutritionRecipeTemplate]?
         var cycleTrackingSettings: CycleTrackingSettings?
         var autoDeloadModeActive: Bool?
+        var weatherCityName: String?
+        var weatherSnapshot: WeatherPhysiologySnapshot?
+        var coachPersonalityTone: CoachPersonalityTone?
+        var coachDetailLevel: CoachDetailLevel?
+        var archivedAiInsights: [ArchivedAiInsight]?
+        var dynamicStrainNutritionEnabled: Bool?
     }
 
     static weak var activeSharedStore: ImprovingStore?
@@ -126,6 +132,14 @@ final class ImprovingStore: ObservableObject {
     @Published var nutritionRecipes: [NutritionRecipeTemplate] = []
     @Published var cycleTrackingSettings: CycleTrackingSettings = CycleTrackingSettings()
     @Published var autoDeloadModeActive: Bool = false
+    @Published var weatherCityName: String = ""
+    @Published var weatherSnapshot: WeatherPhysiologySnapshot? = nil
+    @Published var isRefreshingWeather: Bool = false
+    @Published var coachPersonalityTone: CoachPersonalityTone = .directo
+    @Published var coachDetailLevel: CoachDetailLevel = .equilibrado
+    @Published var archivedAiInsights: [ArchivedAiInsight] = []
+    @Published var dynamicStrainNutritionEnabled: Bool = true
+    @Published var pendingLaunchRoutine: WorkoutRoutineTemplate? = nil
     @Published var visibleTabs: Set<MainTab> = Set(MainTab.allCases)
 
     @Published var whoopConnected: Bool = false
@@ -166,11 +180,12 @@ final class ImprovingStore: ObservableObject {
         vo2Val: Double?
     )? = nil
     var cachedWeeklyReviews: [String: WeeklyReviewReport] = [:]
-    var cachedJournalImpacts: [JournalImpactTarget: [JournalHabitImpactItem]] = [:]
+    var cachedJournalImpacts: [String: [JournalHabitImpactItem]] = [:]
     var cachedVitalBands: [HealthMetricKind: (low: Double, high: Double, isPersonal: Bool)] = [:]
 
     func ensureDerivedCacheFresh() {
-        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)#\(napMinutesByDate.count)#\(sleepGoalPct)#\(globalGoalMode.rawValue)#\(autoDeloadModeActive)#\(cycleTrackingSettings.isEnabled)"
+        let weatherKey = weatherSnapshot.map { "\($0.strainAdjustmentPct)#\($0.extraHydrationMl)" } ?? "none"
+        let fp = "\(dataRevision)#\(selectedDateIso)#\(hasImportedOrPairedRealData)#\(realHistory.count)#\(strengthLogs.count)#\(labReports.count)#\(journalCheckinsByDate.count)#\(mealsByDate.count)#\(napMinutesByDate.count)#\(sleepGoalPct)#\(globalGoalMode.rawValue)#\(autoDeloadModeActive)#\(cycleTrackingSettings.isEnabled)#\(dynamicStrainNutritionEnabled)#\(weatherKey)"
         if derivedCacheFingerprint != fp {
             derivedCacheFingerprint = fp
             cachedTrainingLoad.removeAll(keepingCapacity: true)
@@ -733,19 +748,226 @@ final class ImprovingStore: ObservableObject {
         nutritionScore(for: selectedDateIso)
     }
 
+    /// Dynamic Strain-Based Carb Cycling snapshot (High Strain >= 14 -> +Carbs & Electrolytes; Rest < 7 -> mild carb trim while protecting protein).
+    var dynamicStrainNutritionSnapshot: DynamicStrainNutritionSnapshot {
+        let s21 = dataAvailability.hasStrainData ? strain21 : 0.0
+        let manualBlocking = hasCustomNutritionGoalOverrides
+        guard dynamicStrainNutritionEnabled else {
+            return DynamicStrainNutritionSnapshot(
+                isEnabled: false,
+                isManualOverrideBlocking: manualBlocking,
+                phaseTitle: "Desactivado",
+                phaseIcon: "slider.horizontal.3",
+                strain21: s21,
+                kcalDelta: 0,
+                carbsDeltaG: 0,
+                proteinDeltaG: 0,
+                extraHydrationMl: 0,
+                electrolyteNote: nil,
+                summaryText: "Metas estáticas según tu modo \(globalGoalMode.rawValue).",
+                isHighLoad: false,
+                isRestDay: false
+            )
+        }
+        guard dataAvailability.hasStrainData else {
+            return DynamicStrainNutritionSnapshot(
+                isEnabled: true,
+                isManualOverrideBlocking: manualBlocking,
+                phaseTitle: "Esperando Strain",
+                phaseIcon: "flame",
+                strain21: 0,
+                kcalDelta: 0,
+                carbsDeltaG: 0,
+                proteinDeltaG: 0,
+                extraHydrationMl: 0,
+                electrolyteNote: nil,
+                summaryText: "Cuando registres actividad hoy, tus carbohidratos e hidratación se ajustarán automáticamente.",
+                isHighLoad: false,
+                isRestDay: false
+            )
+        }
+
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let baseKcal = Double(norms.maintenanceCaloriesKcal) * globalGoalMode.kcalMultiplier
+        let w = latestBodyWeightKg ?? userProfile.weightKg
+        let baseProt = w * globalGoalMode.proteinGramsPerKg
+
+        if s21 >= 14.0 {
+            // High Strain day: +12% to +18% kcal focused on glycogen carbs + electrolytes
+            let intensityFrac = min(max((s21 - 14.0) / 7.0, 0.0), 1.0)
+            let kcalAdd = Int((baseKcal * (0.12 + 0.06 * intensityFrac)).rounded())
+            let protAdd = min(Int((baseProt * 0.05).rounded()), 12)
+            let carbsAdd = max((kcalAdd - protAdd * 4) / 4, 45)
+            let extraWater = s21 >= 17.0 ? 750 : 500
+            return DynamicStrainNutritionSnapshot(
+                isEnabled: true,
+                isManualOverrideBlocking: manualBlocking,
+                phaseTitle: "Día de Carga Alta",
+                phaseIcon: "flame.fill",
+                strain21: s21,
+                kcalDelta: kcalAdd,
+                carbsDeltaG: carbsAdd,
+                proteinDeltaG: protAdd,
+                extraHydrationMl: extraWater,
+                electrolyteNote: "Añade +\(extraWater) ml con sodio y potasio para reponer glucógeno y sales.",
+                summaryText: String(format: "Strain %.1f/21: +%d kcal (+%d g carbos) y +%d ml con electrolitos.", locale: Locale(identifier: "es_ES"), s21, kcalAdd, carbsAdd, extraWater),
+                isHighLoad: true,
+                isRestDay: false
+            )
+        } else if s21 < 7.0 {
+            // Rest / Low Strain day: -7% mild carb trim while protecting/slightly boosting protein
+            let kcalCut = -Int((baseKcal * 0.07).rounded())
+            let protBoost = min(Int((baseProt * 0.05).rounded()), 10)
+            let carbsCut = min((kcalCut - protBoost * 4) / 4, -20)
+            return DynamicStrainNutritionSnapshot(
+                isEnabled: true,
+                isManualOverrideBlocking: manualBlocking,
+                phaseTitle: "Día de Descanso",
+                phaseIcon: "leaf.fill",
+                strain21: s21,
+                kcalDelta: kcalCut,
+                carbsDeltaG: carbsCut,
+                proteinDeltaG: protBoost,
+                extraHydrationMl: 0,
+                electrolyteNote: nil,
+                summaryText: String(format: "Strain %.1f/21: %d kcal (%d g carbos) con proteína protegida (+%d g) y foco en fibra.", locale: Locale(identifier: "es_ES"), s21, kcalCut, carbsCut, protBoost),
+                isHighLoad: false,
+                isRestDay: true
+            )
+        } else {
+            return DynamicStrainNutritionSnapshot(
+                isEnabled: true,
+                isManualOverrideBlocking: manualBlocking,
+                phaseTitle: "Carga Moderada",
+                phaseIcon: "equal.circle.fill",
+                strain21: s21,
+                kcalDelta: 0,
+                carbsDeltaG: 0,
+                proteinDeltaG: 0,
+                extraHydrationMl: s21 >= 11.0 ? 250 : 0,
+                electrolyteNote: s21 >= 11.0 ? "Añade +250 ml extra de agua por tu actividad moderada." : nil,
+                summaryText: String(format: "Strain %.1f/21: equilibrio base del modo %@.", locale: Locale(identifier: "es_ES"), s21, globalGoalMode.rawValue),
+                isHighLoad: false,
+                isRestDay: false
+            )
+        }
+    }
+
     var effectiveNutritionGoals: (kcal: Int, fatG: Int, carbsG: Int, proteinG: Int) {
         let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
         let w = latestBodyWeightKg ?? userProfile.weightKg
-        let modeKcal = Int((Double(norms.maintenanceCaloriesKcal) * globalGoalMode.kcalMultiplier).rounded())
-        let modeProt = Int((w * globalGoalMode.proteinGramsPerKg).rounded())
-        let modeFat = max(Int((Double(modeKcal) * 0.27 / 9.0).rounded()), 45)
-        let modeCarbs = max((modeKcal - modeProt * 4 - modeFat * 9) / 4, 80)
+        let dyn = dynamicStrainNutritionSnapshot
+        let applyDyn = dyn.isEnabled && !hasCustomNutritionGoalOverrides
+        let modeKcal = max(Int((Double(norms.maintenanceCaloriesKcal) * globalGoalMode.kcalMultiplier).rounded()) + (applyDyn ? dyn.kcalDelta : 0), 1200)
+        let modeProt = max(Int((w * globalGoalMode.proteinGramsPerKg).rounded()) + (applyDyn ? dyn.proteinDeltaG : 0), 60)
+        let modeFat = max(Int((Double(norms.maintenanceCaloriesKcal) * globalGoalMode.kcalMultiplier * 0.27 / 9.0).rounded()), 45)
+        let modeCarbs = max((modeKcal - modeProt * 4 - modeFat * 9) / 4, 70)
         return (
             kcal: customNutritionGoals.caloriesKcal ?? modeKcal,
             fatG: customNutritionGoals.fatG ?? modeFat,
             carbsG: customNutritionGoals.carbsG ?? modeCarbs,
             proteinG: customNutritionGoals.proteinG ?? modeProt
         )
+    }
+
+    /// Dynamic daily hydration goal combining personalized baseline + high-Strain losses + Open-Meteo heat/UV load!
+    var effectiveHydrationGoalMl: Double {
+        let norms = WhoopPhysiologyEngine.computePersonalizedNorms(profile: userProfile)
+        let baseMl = max(norms.hydrationGoalLiters * 1000.0, 1800.0)
+        let strainExtra = Double(dynamicStrainNutritionSnapshot.extraHydrationMl)
+        let weatherExtra = (dayOffset == 0) ? Double(weatherSnapshot?.extraHydrationMl ?? 0) : 0.0
+        return baseMl + strainExtra + weatherExtra
+    }
+
+    func setDynamicStrainNutrition(enabled: Bool) {
+        dynamicStrainNutritionEnabled = enabled
+        invalidateSectionCoachingCache(sections: [.hoy, .energia, .diario])
+        dataRevision += 1
+        persistState()
+    }
+
+    func setCoachPersonality(tone: CoachPersonalityTone, detail: CoachDetailLevel) {
+        coachPersonalityTone = tone
+        coachDetailLevel = detail
+        invalidateSectionCoachingCache(sections: CoachingSection.allCases)
+        dataRevision += 1
+        persistState()
+    }
+
+    func archiveAiInsight(section: CoachingSection, emoji: String, headline: String, body: String) {
+        let cleanHeadline = headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanHeadline.isEmpty, !cleanBody.isEmpty, !cleanHeadline.hasPrefix("Sin lecturas") else { return }
+        if let first = archivedAiInsights.first,
+           first.sectionRaw == section.rawValue,
+           first.dateIso == selectedDateIso,
+           first.headline == cleanHeadline {
+            return
+        }
+        let entry = ArchivedAiInsight(
+            id: UUID().uuidString,
+            dateIso: selectedDateIso,
+            sectionRaw: section.rawValue,
+            sectionTitle: section.displayName,
+            emoji: emoji,
+            headline: cleanHeadline,
+            body: cleanBody,
+            createdAtEpoch: Date().timeIntervalSince1970
+        )
+        archivedAiInsights.insert(entry, at: 0)
+        if archivedAiInsights.count > 120 {
+            archivedAiInsights = Array(archivedAiInsights.prefix(120))
+        }
+    }
+
+    func deleteArchivedInsight(id: String) {
+        archivedAiInsights.removeAll { $0.id == id }
+        persistState()
+    }
+
+    func refreshWeatherContext(force: Bool = false, requestGPS: Bool = false) {
+        guard !isRefreshingWeather else { return }
+        if !force, let cur = weatherSnapshot, !cur.isStale { return }
+        let city = weatherCityName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !city.isEmpty || requestGPS else { return }
+        isRefreshingWeather = true
+        Task { [weak self] in
+            let snap = await WeatherContextService.shared.fetchWeatherForCityOrLocation(
+                preferredCity: city.isEmpty ? nil : city,
+                requestGPSIfNeeded: requestGPS
+            )
+            await MainActor.run {
+                guard let self else { return }
+                self.isRefreshingWeather = false
+                if let snap {
+                    self.weatherSnapshot = snap
+                    if self.weatherCityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.weatherCityName = snap.cityName
+                    }
+                    self.dataRevision += 1
+                    self.persistState()
+                }
+            }
+        }
+    }
+
+    func updateWeatherCity(_ city: String) {
+        let cleaned = city.trimmingCharacters(in: .whitespacesAndNewlines)
+        weatherCityName = cleaned
+        if cleaned.isEmpty {
+            weatherSnapshot = nil
+            dataRevision += 1
+            persistState()
+        } else {
+            persistState()
+            refreshWeatherContext(force: true, requestGPS: false)
+        }
+    }
+
+    func launchStrengthRoutineById(_ routineId: String) {
+        if let found = workoutRoutines.first(where: { $0.id == routineId }) {
+            pendingLaunchRoutine = found
+        }
     }
 
     var hasCustomNutritionGoalOverrides: Bool {
@@ -1070,9 +1292,14 @@ final class ImprovingStore: ObservableObject {
             unhealthyVitalsCount: vitalAlert.count
         )
         let deloadMult = autoDeloadModeActive ? 0.85 : 1.0
+        let weatherCapMult: Double = {
+            guard targetIso == isoFormatter.string(from: Date()),
+                  let w = weatherSnapshot, w.strainAdjustmentPct > 0 else { return 1.0 }
+            return max(0.82, 1.0 - Double(w.strainAdjustmentPct) / 100.0)
+        }()
         let modeDelta = globalGoalMode.strainAdjustmentDelta
-        let adjLow = min(max((baseRange.lowerBound + modeDelta * 0.6) * deloadMult, 0.10), 0.78)
-        let adjHigh = min(max((baseRange.upperBound + modeDelta) * deloadMult, adjLow + 0.12), 0.96)
+        let adjLow = min(max((baseRange.lowerBound + modeDelta * 0.6) * deloadMult * weatherCapMult, 0.10), 0.78)
+        let adjHigh = min(max((baseRange.upperBound + modeDelta) * deloadMult * weatherCapMult, adjLow + 0.12), 0.96)
         let range = adjLow...adjHigh
         let res = (range, baseMean, prior28Strains.count, cardioState, debtMin, recBasis)
         cachedEffortTargets[cacheKey] = res
@@ -1181,6 +1408,9 @@ final class ImprovingStore: ObservableObject {
         }
         if alert.isCritical {
             parts.append("protección -\(alert.strainReductionPct)% (\(alert.count) constantes)")
+        }
+        if dayOffset == 0, let w = weatherSnapshot, w.strainAdjustmentPct > 0 {
+            parts.append("calor -\(w.strainAdjustmentPct)% (+\(w.estimatedHrDriftBpm) ppm)")
         }
         if let base = info.baselineStrainPct, info.sampleCount >= 3 {
             parts.append("media 28 d \(Int(base.rounded()))%")

@@ -2627,7 +2627,8 @@ enum WhoopPhysiologyEngine {
         mealsByDate: [String: [NutritionMealItem]],
         strengthLogs: [StrengthLoggedSet],
         labReports: [LabReportRecord],
-        profile: UserPhysiologyProfile
+        profile: UserPhysiologyProfile,
+        weather: WeatherPhysiologySnapshot? = nil
     ) -> [UnifiedCausalInsight] {
         let sortedIsos = history.keys.sorted()
         let cal = Calendar.current
@@ -2640,25 +2641,67 @@ enum WhoopPhysiologyEngine {
             return history[nextIso]
         }
 
-        // 1. Protein adequacy (D) -> Next-Day Recovery & HRV (D+1)
-        let targetProt = Int((profile.weightKg * 1.7).rounded())
+        // 1. Protein adequacy (D) -> Next-Day Recovery & HRV (D+1), Dinner timing -> Deep Sleep & RHR, Caffeine -> Deep Sleep & HRV, Nutrition Quality -> Stress
+        let targetProt = Int((profile.weightKg * 1.65).rounded())
         var highProtRec: [Double] = []
         var lowProtRec: [Double] = []
+        var highProtHrv: [Double] = []
+        var lowProtHrv: [Double] = []
         var earlyMealDeep: [Double] = []
         var lateMealDeep: [Double] = []
+        var earlyMealRhr: [Double] = []
+        var lateMealRhr: [Double] = []
+        var cleanCaffHrv: [Double] = []
+        var lateCaffHrv: [Double] = []
+        var cleanCaffRec: [Double] = []
+        var lateCaffRec: [Double] = []
+        var highQualStress: [Double] = []
+        var lowQualStress: [Double] = []
 
-        for (iso, meals) in mealsByDate where !meals.isEmpty {
+        for (iso, rawMeals) in mealsByDate where !rawMeals.isEmpty {
+            let foodMeals = rawMeals.filter { !($0.kcal == 0 && $0.proteinG == 0 && $0.carbsG == 0 && $0.fatG == 0 && ($0.caffeineMg ?? 0) > 0) }
             guard let nextDay = nextDaySummary(after: iso) else { continue }
-            let totalProt = meals.reduce(0) { $0 + $1.proteinG }
-            if let rec = nextDay.recoveryPct {
-                if totalProt >= targetProt { highProtRec.append(Double(rec)) }
-                else { lowProtRec.append(Double(rec)) }
+            let totalProt = foodMeals.reduce(0) { $0 + $1.proteinG }
+            if !foodMeals.isEmpty {
+                if let rec = nextDay.recoveryPct {
+                    if totalProt >= targetProt { highProtRec.append(Double(rec)) }
+                    else { lowProtRec.append(Double(rec)) }
+                }
+                if let hrv = nextDay.hrvMs, hrv > 2 {
+                    if totalProt >= targetProt { highProtHrv.append(hrv) }
+                    else { lowProtHrv.append(hrv) }
+                }
+                let totalKcal = max(foodMeals.reduce(0) { $0 + max($1.kcal, 50) }, 1)
+                let avgScore = foodMeals.reduce(0.0) { $0 + Double($1.qualityScore) * Double(max($1.kcal, 50)) } / Double(totalKcal)
+                if let st = history[iso]?.stressScore ?? nextDay.stressScore {
+                    if avgScore >= 75.0 { highQualStress.append(Double(st)) }
+                    else if avgScore < 65.0 { lowQualStress.append(Double(st)) }
+                }
             }
-            let timing = computeCaffeineAndMealTiming(meals: meals)
-            if let gap = timing.hoursFromLastMealToBedtime, let deepSec = nextDay.sleepSession?.deepSeconds {
-                let deepMin = Double(deepSec) / 60.0
-                if gap >= 2.8 { earlyMealDeep.append(deepMin) }
-                else { lateMealDeep.append(deepMin) }
+
+            let timing = computeCaffeineAndMealTiming(meals: rawMeals)
+            if let gap = timing.hoursFromLastMealToBedtime {
+                if let deepSec = nextDay.sleepSession?.deepSeconds ?? nextDay.deepMinutes.map({ $0 * 60 }) {
+                    let deepMin = Double(deepSec) / 60.0
+                    if gap >= 2.8 { earlyMealDeep.append(deepMin) }
+                    else { lateMealDeep.append(deepMin) }
+                }
+                if let rhr = nextDay.restingHrBpm, rhr > 25 {
+                    if gap >= 2.8 { earlyMealRhr.append(rhr) }
+                    else { lateMealRhr.append(rhr) }
+                }
+            }
+
+            if timing.totalCaffeineTodayMg > 0 {
+                let isClean = timing.estimatedCaffeineAtBedtimeMg <= 25.0
+                if let hrv = nextDay.hrvMs, hrv > 2 {
+                    if isClean { cleanCaffHrv.append(hrv) }
+                    else { lateCaffHrv.append(hrv) }
+                }
+                if let rec = nextDay.recoveryPct {
+                    if isClean { cleanCaffRec.append(Double(rec)) }
+                    else { lateCaffRec.append(Double(rec)) }
+                }
             }
         }
 
@@ -2667,6 +2710,13 @@ enum WhoopPhysiologyEngine {
             let avgL = lowProtRec.reduce(0, +) / Double(lowProtRec.count)
             let diff = Int((avgH - avgL).rounded())
             if abs(diff) >= 2 {
+                var extraHrv = ""
+                if highProtHrv.count >= 2 && lowProtHrv.count >= 2 {
+                    let hDiff = AppleHealthExportImporter.round1((highProtHrv.reduce(0, +) / Double(highProtHrv.count)) - (lowProtHrv.reduce(0, +) / Double(lowProtHrv.count)))
+                    if abs(hDiff) >= 1.0 {
+                        extraHrv = String(format: " y tu VFC varía %+.1f ms", locale: Locale(identifier: "es_ES"), hDiff)
+                    }
+                }
                 insights.append(UnifiedCausalInsight(
                     id: "cross_protein_recovery",
                     categoryBadge: "NUTRICIÓN → RECUPERACIÓN (D+1)",
@@ -2674,7 +2724,7 @@ enum WhoopPhysiologyEngine {
                     title: "Proteína ≥ \(targetProt) g y Recuperación al día siguiente",
                     impactBadge: String(format: "%+d%% Rec.", diff),
                     isPositive: diff >= 0,
-                    detail: "En tus días alcanzando ≥\(targetProt) g de proteína, tu Recuperación del día siguiente promedia \(Int(avgH.rounded()))% frente a \(Int(avgL.rounded()))% cuando quedas por debajo.",
+                    detail: "En tus días alcanzando ≥\(targetProt) g de proteína, tu Recuperación del día siguiente promedia \(Int(avgH.rounded()))% frente a \(Int(avgL.rounded()))%\(extraHrv).",
                     sampleDays: highProtRec.count + lowProtRec.count
                 ))
             }
@@ -2685,6 +2735,13 @@ enum WhoopPhysiologyEngine {
             let avgL = lateMealDeep.reduce(0, +) / Double(lateMealDeep.count)
             let diff = Int((avgE - avgL).rounded())
             if abs(diff) >= 3 {
+                var extraRhr = ""
+                if earlyMealRhr.count >= 2 && lateMealRhr.count >= 2 {
+                    let rDiff = AppleHealthExportImporter.round1((earlyMealRhr.reduce(0, +) / Double(earlyMealRhr.count)) - (lateMealRhr.reduce(0, +) / Double(lateMealRhr.count)))
+                    if abs(rDiff) >= 0.8 {
+                        extraRhr = String(format: " (FCR nocturna %+.1f ppm)", locale: Locale(identifier: "es_ES"), rDiff)
+                    }
+                }
                 insights.append(UnifiedCausalInsight(
                     id: "cross_meal_timing_deep",
                     categoryBadge: "CENA → SUEÑO PROFUNDO (D+1)",
@@ -2692,8 +2749,49 @@ enum WhoopPhysiologyEngine {
                     title: "Cenar ≥ 3 h antes de dormir vs Sueño Profundo",
                     impactBadge: String(format: "%+d min", diff),
                     isPositive: diff >= 0,
-                    detail: "Dejar al menos 2,8–3 h de digestión antes de acostarte se asocia con \(Int(avgE.rounded())) min de sueño profundo frente a \(Int(avgL.rounded())) min en cenas tardías.",
+                    detail: "Dejar al menos 2,8–3 h de digestión antes de acostarte se asocia con \(Int(avgE.rounded())) min de sueño profundo frente a \(Int(avgL.rounded())) min en cenas tardías\(extraRhr).",
                     sampleDays: earlyMealDeep.count + lateMealDeep.count
+                ))
+            }
+        }
+
+        if cleanCaffHrv.count >= 2 && lateCaffHrv.count >= 2 {
+            let avgC = cleanCaffHrv.reduce(0, +) / Double(cleanCaffHrv.count)
+            let avgL = lateCaffHrv.reduce(0, +) / Double(lateCaffHrv.count)
+            let diff = AppleHealthExportImporter.round1(avgC - avgL)
+            if abs(diff) >= 1.5 {
+                let recBit: String = {
+                    guard cleanCaffRec.count >= 2 && lateCaffRec.count >= 2 else { return "" }
+                    let rDiff = Int(((cleanCaffRec.reduce(0, +) / Double(cleanCaffRec.count)) - (lateCaffRec.reduce(0, +) / Double(lateCaffRec.count))).rounded())
+                    return abs(rDiff) >= 2 ? String(format: " (%+d%% Recuperación)", rDiff) : ""
+                }()
+                insights.append(UnifiedCausalInsight(
+                    id: "cross_caffeine_hrv",
+                    categoryBadge: "CAFEÍNA → VFC NOCTURNA (D+1)",
+                    icon: "cup.and.saucer.fill",
+                    title: "Acostarte con <25 mg de cafeína residual",
+                    impactBadge: String(format: "%+.1f ms VFC", locale: Locale(identifier: "es_ES"), diff),
+                    isPositive: diff >= 0,
+                    detail: "Cuando llegas a dormir con cafeína residual baja, tu VFC nocturna promedia \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgC)) ms frente a \(String(format: "%.1f", locale: Locale(identifier: "es_ES"), avgL)) ms con cafeína tardía\(recBit).",
+                    sampleDays: cleanCaffHrv.count + lateCaffHrv.count
+                ))
+            }
+        }
+
+        if highQualStress.count >= 2 && lowQualStress.count >= 2 {
+            let avgH = highQualStress.reduce(0, +) / Double(highQualStress.count)
+            let avgL = lowQualStress.reduce(0, +) / Double(lowQualStress.count)
+            let diff = Int((avgH - avgL).rounded())
+            if abs(diff) >= 3 {
+                insights.append(UnifiedCausalInsight(
+                    id: "cross_quality_stress",
+                    categoryBadge: "CALIDAD NUTRICIONAL → ESTRÉS",
+                    icon: "leaf.fill",
+                    title: "Comida real (calidad ≥75) y Estrés diario",
+                    impactBadge: String(format: "%+d pts Estrés", diff),
+                    isPositive: diff <= 0,
+                    detail: "Los días con puntuación nutricional ≥75 tu estrés medio es \(Int(avgH.rounded()))/100 frente a \(Int(avgL.rounded()))/100 cuando bajas de 65.",
+                    sampleDays: highQualStress.count + lowQualStress.count
                 ))
             }
         }
@@ -2726,21 +2824,44 @@ enum WhoopPhysiologyEngine {
             }
         }
 
-        // 3. Strength Volume + Blood Biomarkers cross-insight
+        // 3. Blood Biomarkers × Biometrics & Nutrition cross-insight (multi-marker clinical correlation)
         if let latestLab = labReports.sorted(by: { $0.dateIso > $1.dateIso }).first, !latestLab.biomarkers.isEmpty {
+            let recent14 = sortedIsos.suffix(14).compactMap { history[$0] }
+            let avgHrv14 = recent14.compactMap(\.hrvMs).isEmpty ? nil : (recent14.compactMap(\.hrvMs).reduce(0, +) / Double(recent14.compactMap(\.hrvMs).count))
+            let avgRhr14 = recent14.compactMap(\.restingHrBpm).isEmpty ? nil : (recent14.compactMap(\.restingHrBpm).reduce(0, +) / Double(recent14.compactMap(\.restingHrBpm).count))
             let outOfRange = latestLab.biomarkers.filter { $0.status != .normal }
-            if let firstFlag = outOfRange.first {
+            for flag in outOfRange.prefix(2) {
+                let bioContext: String = {
+                    var bits: [String] = []
+                    if let h = avgHrv14 { bits.append(String(format: "VFC 14d %.0f ms", h)) }
+                    if let r = avgRhr14 { bits.append(String(format: "FCR 14d %.0f ppm", r)) }
+                    return bits.isEmpty ? "" : " Cruzado con tu \(bits.joined(separator: " y ")):"
+                }()
                 insights.append(UnifiedCausalInsight(
-                    id: "cross_blood_wearable",
-                    categoryBadge: "SANGRE × BIOMETRÍA",
+                    id: "cross_blood_\(flag.id)",
+                    categoryBadge: "SANGRE × BIOMETRÍA × NUTRICIÓN",
                     icon: "cross.case.fill",
-                    title: "Sinergia analítica: \(firstFlag.name) (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), firstFlag.value)) \(firstFlag.unit))",
-                    impactBadge: firstFlag.status.rawValue,
+                    title: "Analítica: \(flag.name) (\(String(format: "%.1f", locale: Locale(identifier: "es_ES"), flag.value)) \(flag.unit))",
+                    impactBadge: flag.status.rawValue,
                     isPositive: false,
-                    detail: "Tu biomarcador «\(firstFlag.name)» está fuera del rango óptimo en tu analítica (\(latestLab.dateIso)): optimizarlo junto con sueño ≥85% y Zona 2 reducirá directamente tu Edad Biológica.",
-                    sampleDays: max(sortedIsos.count, 1)
+                    detail: "Fuera de rango en tu analítica (\(latestLab.dateIso)).\(bioContext) priorizar micronutrientes clave, sueño ≥85% y carga controlada acelerará su normalización y mejorará tu Edad Biológica.",
+                    sampleDays: max(recent14.count, 1)
                 ))
             }
+        }
+
+        // 4. Real-Time Weather × Cardiovascular Drift insight
+        if let w = weather, w.heatStressLevel >= 1 {
+            insights.append(UnifiedCausalInsight(
+                id: "cross_weather_thermal",
+                categoryBadge: "CLIMA × PULSO Y RECUPERACIÓN",
+                icon: w.sfSymbol,
+                title: "\(w.cityName): \(Int(w.temperatureC.rounded())) °C · \(w.humidityPct)% hum. · UV \(Int(w.uvIndex.rounded()))",
+                impactBadge: w.estimatedHrDriftBpm > 0 ? "+\(w.estimatedHrDriftBpm) ppm FC" : "Clima",
+                isPositive: false,
+                detail: w.effortImpactSummary,
+                sampleDays: 1
+            ))
         }
 
         if insights.isEmpty {
@@ -2748,10 +2869,10 @@ enum WhoopPhysiologyEngine {
                 id: "cross_ready_calibration",
                 categoryBadge: "MOTOR CAUSAL UNIFICADO",
                 icon: "sparkles",
-                title: "Cruce Nutrición × Fuerza × Sangre × Sueño activo",
-                impactBadge: "D → D+1",
+                title: "Cruce Nutrición × Analíticas × Biometría activo",
+                impactBadge: "100 % Local",
                 isPositive: true,
-                detail: "A medida que registres comidas, series de fuerza y sueño en días consecutivos, verás aquí cómo tus gramos de proteína, hora de cena y volumen muscular modifican tu VFC y sueño profundo del día siguiente.",
+                detail: "A medida que registres comidas, cafeína, hábitos y sueño en días consecutivos, verás aquí cómo tu proteína, hora de cena, cafeína residual y analíticas modifican tu VFC, FCR y sueño profundo.",
                 sampleDays: sortedIsos.count
             ))
         }

@@ -356,6 +356,9 @@ struct NutricionScreen: View {
                         .padding(14)
                     }
 
+                    // 3b. Nutrición Dinámica / Carb Cycling Automático según el Strain del Día
+                    DynamicCarbCyclingCard(store: store)
+
                     // 4. "Detalles de nutrición" Dot-Matrix Card with [g | %] Toggle (Exact Screenshot 3!)
                     BevelCard(cornerRadius: 22) {
                         VStack(alignment: .leading, spacing: 16) {

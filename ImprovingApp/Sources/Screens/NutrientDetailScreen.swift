@@ -313,7 +313,7 @@ struct NutrientDetailScreen: View {
                 mealExtractor: { Double($0.fatG) }, formatValue: intFmt
             )
         } else if lowKey.contains("hidra") || lowKey.contains("agua") {
-            let goalMl = max(norms.hydrationGoalLiters * 1000.0, 1800.0)
+            let goalMl = store.effectiveHydrationGoalMl
             return NutrientSpec(
                 displayTitle: "Hidratación", emoji: "💧", unit: "ml", goal: goalMl,
                 quickIncrement: 250, quickButtonLabel: "+ Añadir 250 ml",
